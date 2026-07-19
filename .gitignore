@@ -1,0 +1,28 @@
+# Output di compilazione e pubblicazione
+[Bb]in/
+[Oo]bj/
+[Dd]ist/
+[Tt]est[Rr]esults/
+
+# IDE e impostazioni personali
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Pacchetti e binari generati
+*.exe
+*.dll
+*.pdb
+*.zip
+*.nupkg
+*.snupkg
+
+# Log e file temporanei
+*.log
+*.tmp
+*.temp
+~$*

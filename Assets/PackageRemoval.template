@@ -1,0 +1,98 @@
+@echo off
+rem Disinstallatore distribuito esclusivamente come dist\UNINSTALLA.bat.
+setlocal EnableExtensions DisableDelayedExpansion
+title Disinstalla Update Center
+
+if not defined LOCALAPPDATA (
+    echo Impossibile determinare la cartella dati locale dell'utente.
+    pause
+    exit /b 1
+)
+if not defined APPDATA (
+    echo Impossibile determinare la cartella del menu Start dell'utente.
+    pause
+    exit /b 1
+)
+if not defined TEMP (
+    echo Impossibile determinare la cartella temporanea dell'utente.
+    pause
+    exit /b 1
+)
+
+for %%I in ("%~dp0.") do set "SCRIPT_DIR=%%~fI"
+for %%I in ("%LOCALAPPDATA%\Programs\UpdateCenter") do set "INSTALL_DIR=%%~fI"
+set "DATA_DIR=%LOCALAPPDATA%\UpdateCenter"
+set "RUNTIME_TEMP=%TEMP%\.net\UpdateCenter"
+set "SHORTCUT=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Update Center.lnk"
+set "PACKAGE_DIR="
+
+rem Riconosce la cartella sorgente senza rischiare di eliminare una cartella generica
+rem nella quale i file potrebbero essere stati copiati per errore.
+for %%I in ("%SCRIPT_DIR%") do set "SCRIPT_NAME=%%~nxI"
+if /I "%SCRIPT_NAME:~0,12%"=="UpdateCenter" if exist "%SCRIPT_DIR%\UpdateCenter.csproj" if exist "%SCRIPT_DIR%\App.xaml" if exist "%SCRIPT_DIR%\INSTALLA.bat" if exist "%SCRIPT_DIR%\CREA-EXE.bat" set "PACKAGE_DIR=%SCRIPT_DIR%"
+if /I "%SCRIPT_NAME:~0,12%"=="UpdateCentre" if exist "%SCRIPT_DIR%\UpdateCenter.csproj" if exist "%SCRIPT_DIR%\App.xaml" if exist "%SCRIPT_DIR%\INSTALLA.bat" if exist "%SCRIPT_DIR%\CREA-EXE.bat" set "PACKAGE_DIR=%SCRIPT_DIR%"
+
+rem Se UNINSTALLA.bat e' avviato da dist, elimina l'intero progetto padre.
+if defined PACKAGE_DIR goto CARTELLA_RILEVATA
+for %%I in ("%SCRIPT_DIR%\..") do set "PARENT_DIR=%%~fI"
+for %%I in ("%SCRIPT_DIR%\..") do set "PARENT_NAME=%%~nxI"
+if /I "%PARENT_NAME:~0,12%"=="UpdateCenter" if exist "%PARENT_DIR%\UpdateCenter.csproj" if exist "%PARENT_DIR%\App.xaml" if exist "%PARENT_DIR%\INSTALLA.bat" if exist "%PARENT_DIR%\CREA-EXE.bat" set "PACKAGE_DIR=%PARENT_DIR%"
+if /I "%PARENT_NAME:~0,12%"=="UpdateCentre" if exist "%PARENT_DIR%\UpdateCenter.csproj" if exist "%PARENT_DIR%\App.xaml" if exist "%PARENT_DIR%\INSTALLA.bat" if exist "%PARENT_DIR%\CREA-EXE.bat" set "PACKAGE_DIR=%PARENT_DIR%"
+
+rem Riconosce anche il pacchetto binario della Release: INSTALLA.bat nella
+rem radice e tutti i file distribuiti esclusivamente nella sottocartella dist.
+if defined PACKAGE_DIR goto CARTELLA_RILEVATA
+if /I not "%SCRIPT_DIR%"=="%PARENT_DIR%\dist" goto CARTELLA_RILEVATA
+if /I "%PARENT_NAME:~0,12%"=="UpdateCenter" if exist "%PARENT_DIR%\INSTALLA.bat" if exist "%PARENT_DIR%\dist\UpdateCenter.exe" if exist "%PARENT_DIR%\dist\LEGGIMI.txt" if exist "%PARENT_DIR%\dist\UNINSTALLA.bat" set "PACKAGE_DIR=%PARENT_DIR%"
+if /I "%PARENT_NAME:~0,12%"=="UpdateCentre" if exist "%PARENT_DIR%\INSTALLA.bat" if exist "%PARENT_DIR%\dist\UpdateCenter.exe" if exist "%PARENT_DIR%\dist\LEGGIMI.txt" if exist "%PARENT_DIR%\dist\UNINSTALLA.bat" set "PACKAGE_DIR=%PARENT_DIR%"
+
+:CARTELLA_RILEVATA
+
+echo.
+echo DISINSTALLAZIONE COMPLETA DI UPDATE CENTER
+echo.
+echo Verranno rimossi:
+echo   - "%INSTALL_DIR%"
+echo   - "%DATA_DIR%" ^(impostazioni, cronologia, log e file temporanei^)
+echo   - "%RUNTIME_TEMP%" ^(componenti temporanei dell'eseguibile^)
+echo   - "%SHORTCUT%"
+if not defined PACKAGE_DIR goto CARTELLA_NON_RILEVATA
+echo   - "%PACKAGE_DIR%" ^(intera cartella di Update Center e tutti i file contenuti^)
+goto ELENCO_COMPLETATO
+
+:CARTELLA_NON_RILEVATA
+echo.
+echo NOTA: la cartella che contiene questo file non presenta la struttura
+echo completa del progetto e non verra' eliminata per sicurezza.
+
+:ELENCO_COMPLETATO
+echo.
+echo I punti di ripristino gestiti da Windows non verranno eliminati.
+echo Questa operazione non puo' essere annullata.
+echo.
+choice /C SN /N /M "Continuare con la disinstallazione? [S/N] "
+if errorlevel 2 (
+    echo Disinstallazione annullata.
+    exit /b 0
+)
+
+taskkill /IM UpdateCenter.exe /T /F >nul 2>nul
+
+rem La rimozione viene eseguita da un processo esterno dopo la chiusura di
+rem questo file, cosi' possono essere cancellati anche UNINSTALLA.bat e la sua cartella.
+set "UC_INSTALL_DIR=%INSTALL_DIR%"
+set "UC_DATA_DIR=%DATA_DIR%"
+set "UC_RUNTIME_TEMP=%RUNTIME_TEMP%"
+set "UC_SHORTCUT=%SHORTCUT%"
+set "UC_PACKAGE_DIR=%PACKAGE_DIR%"
+
+echo.
+echo Disinstallazione avviata.
+if defined PACKAGE_DIR echo La cartella completa di Update Center verra' eliminata tra pochi secondi.
+echo Questa finestra si chiudera' automaticamente.
+
+cd /d "%TEMP%"
+start "" /min powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ^
+  "$ErrorActionPreference='SilentlyContinue'; function Remove-Target([string]$Path) { if ([string]::IsNullOrWhiteSpace($Path)) { return }; for ($i=0; $i -lt 5; $i++) { if (-not (Test-Path -LiteralPath $Path)) { return }; Remove-Item -LiteralPath $Path -Recurse -Force; Start-Sleep -Milliseconds 700 } }; Start-Sleep -Seconds 2; Remove-Target $env:UC_SHORTCUT; Remove-Target $env:UC_DATA_DIR; Remove-Target $env:UC_RUNTIME_TEMP; Remove-Target $env:UC_INSTALL_DIR; Remove-Target $env:UC_PACKAGE_DIR"
+
+exit /b 0
