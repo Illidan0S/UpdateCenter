@@ -1,0 +1,172 @@
+name: Build and release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve and validate version
+        id: version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw
+          $node = $project.SelectSingleNode('/Project/PropertyGroup/Version')
+          if ($null -eq $node -or $node.InnerText -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'UpdateCenter.csproj deve contenere Version nel formato MAJOR.MINOR.PATCH.'
+          }
+          $version = $node.InnerText.Trim()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Tag stabile non valido: $env:GITHUB_REF_NAME"
+            }
+            if ($env:GITHUB_REF_NAME.Substring(1) -ne $version) {
+              throw "Il tag $env:GITHUB_REF_NAME non coincide con la versione $version del progetto."
+            }
+          }
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          dotnet restore .\UpdateCenter.csproj --runtime win-x64
+          dotnet restore .\Tests\UpdateCenter.SmokeTests\UpdateCenter.SmokeTests.csproj --runtime win-x64
+
+      - name: Build Release
+        shell: pwsh
+        run: dotnet build .\UpdateCenter.csproj --configuration Release --runtime win-x64 --no-restore
+
+      - name: Run updater smoke tests
+        shell: pwsh
+        run: dotnet run --project .\Tests\UpdateCenter.SmokeTests\UpdateCenter.SmokeTests.csproj --configuration Release --runtime win-x64 --no-restore
+
+      - name: Publish self-contained single-file
+        shell: pwsh
+        run: .\build.ps1 -NoRestore
+
+      - name: Create and verify release package
+        id: package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $releaseRoot = Join-Path $env:RUNNER_TEMP 'update-center-release'
+          $packageRoot = Join-Path $releaseRoot 'package'
+          $packageDist = Join-Path $packageRoot 'dist'
+          $artifacts = Join-Path $releaseRoot 'artifacts'
+          if (Test-Path -LiteralPath $releaseRoot) {
+            Remove-Item -LiteralPath $releaseRoot -Recurse -Force
+          }
+          New-Item -Path $packageDist -ItemType Directory -Force | Out-Null
+          New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
+
+          Copy-Item -LiteralPath '.\INSTALLA.bat' -Destination (Join-Path $packageRoot 'INSTALLA.bat')
+          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination (Join-Path $packageDist 'UpdateCenter.exe')
+          Copy-Item -LiteralPath '.\dist\UNINSTALLA.bat' -Destination (Join-Path $packageDist 'UNINSTALLA.bat')
+          Copy-Item -LiteralPath '.\dist\LEGGIMI.txt' -Destination (Join-Path $packageDist 'LEGGIMI.txt')
+
+          $zipName = "UpdateCenter-Windows10-11-v$env:RELEASE_VERSION.zip"
+          $exeName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
+          $zipPath = Join-Path $artifacts $zipName
+          $exePath = Join-Path $artifacts $exeName
+          Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
+          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $exePath
+
+          foreach ($assetPath in @($zipPath, $exePath)) {
+            $hash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash
+            $checksumPath = "$assetPath.sha256"
+            $assetName = Split-Path -Leaf $assetPath
+            Set-Content -LiteralPath $checksumPath -Value "$hash  $assetName" -Encoding ascii
+            $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), '[0-9A-Fa-f]{64}')).Value
+            if ($publishedHash -ne $hash) {
+              throw "Verifica SHA-256 non riuscita per $assetName."
+            }
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          try {
+            $actual = @($archive.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName.Replace('\', '/') } | Sort-Object)
+          } finally {
+            $archive.Dispose()
+          }
+          $expected = @('INSTALLA.bat', 'dist/LEGGIMI.txt', 'dist/UNINSTALLA.bat', 'dist/UpdateCenter.exe') | Sort-Object
+          $differences = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
+          if ($differences.Count -ne 0) {
+            throw "Contenuto ZIP inatteso: $($actual -join ', ')"
+          }
+          if (@($actual | Where-Object { $_ -match '(^|/)UNINSTALLA\.bat$' }).Count -ne 1 -or
+              -not ($actual -contains 'dist/UNINSTALLA.bat')) {
+            throw 'Lo ZIP deve contenere un solo UNINSTALLA.bat, esclusivamente in dist.'
+          }
+          if (@($actual | Where-Object { $_ -match '(^|/)(bin|obj)(/|$)|\.(cs|xaml|csproj)$' }).Count -ne 0) {
+            throw 'Lo ZIP contiene sorgenti oppure cartelle di compilazione.'
+          }
+
+          $versionInfo = (Get-Item -LiteralPath $exePath).VersionInfo
+          if ($versionInfo.ProductVersion -ne $env:RELEASE_VERSION) {
+            throw "Versione EXE inattesa: $($versionInfo.ProductVersion)"
+          }
+          "directory=$artifacts" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: UpdateCenter-v${{ steps.version.outputs.value }}
+          path: ${{ steps.package.outputs.directory }}\*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: UpdateCenter-v${{ needs.build.outputs.version }}
+          path: artifacts
+
+      - name: Create stable GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          ASSET_DIRECTORY: artifacts
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
+          if ($assets.Count -ne 4) {
+            throw "Sono attesi quattro asset di Release, trovati: $($assets.Count)."
+          }
+          gh release create $env:GITHUB_REF_NAME @assets `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --title "Update Center v$env:RELEASE_VERSION" `
+            --generate-notes `
+            --verify-tag

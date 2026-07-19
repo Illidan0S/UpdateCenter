@@ -8,6 +8,7 @@ public static class AppPaths
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UpdateCenter");
 
     public static string LogsDirectory { get; } = Path.Combine(DataDirectory, "Logs");
+    public static string UpdatesDirectory { get; } = Path.Combine(DataDirectory, "Updates");
     public static string SettingsFile { get; } = Path.Combine(DataDirectory, "settings.json");
     public static string HistoryFile { get; } = Path.Combine(DataDirectory, "history.json");
 
@@ -15,6 +16,7 @@ public static class AppPaths
     {
         Directory.CreateDirectory(DataDirectory);
         Directory.CreateDirectory(LogsDirectory);
+        Directory.CreateDirectory(UpdatesDirectory);
         if (Interlocked.Exchange(ref _cleanupCompleted, 1) == 0)
             CleanupOldFiles();
     }
@@ -43,6 +45,16 @@ public static class AppPaths
                 try
                 {
                     if (File.GetLastWriteTimeUtc(path) < logLimit)
+                        File.Delete(path);
+                }
+                catch { }
+            }
+
+            foreach (var path in Directory.EnumerateFiles(UpdatesDirectory, "*", SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < staleTemporaryLimit)
                         File.Delete(path);
                 }
                 catch { }

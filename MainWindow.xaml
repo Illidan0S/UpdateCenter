@@ -781,6 +781,33 @@
                             </Border>
                             <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                                 <StackPanel>
+                                    <TextBlock Text="Aggiornamenti di Update Center" FontSize="{DynamicResource FontSize17}"
+                                               FontWeight="SemiBold" Margin="0,0,0,16" />
+                                    <CheckBox IsChecked="{Binding Settings.CheckAppUpdatesAutomatically}"
+                                              Content="Controlla automaticamente gli aggiornamenti" />
+                                    <TextBlock Text="Il controllo usa esclusivamente le Release stabili ufficiali su GitHub e viene eseguito al massimo una volta ogni 24 ore."
+                                               Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}"
+                                               Margin="24,5,0,0" TextWrapping="Wrap" />
+                                    <Grid Margin="0,16,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <TextBlock Text="ULTIMO CONTROLLO" Foreground="{DynamicResource MutedTextBrush}"
+                                                       FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding LastAppUpdateCheckLabel}" FontWeight="SemiBold" Margin="0,4,0,0" />
+                                            <TextBlock Text="{Binding AppUpdateStatus}" Foreground="{DynamicResource MutedTextBrush}"
+                                                       FontSize="{DynamicResource FontSize11}" Margin="0,3,18,0" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="Controlla ora" Style="{StaticResource SecondaryButton}"
+                                                IsEnabled="{Binding CanCheckAppUpdates}" VerticalAlignment="Center"
+                                                Click="CheckForAppUpdates_Click" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                                <StackPanel>
                                     <TextBlock Text="Aspetto" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" />
                                     <TextBlock Text="Scegli il tema oppure segui automaticamente quello delle app di Windows."
                                                Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}" Margin="0,5,0,14" />

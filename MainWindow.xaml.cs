@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _historyHoverTimer;
     private HistoryEntry? _pendingHistoryEntry;
     private FrameworkElement? _pendingHistoryElement;
+    private bool _appUpdateDialogOpen;
 
     public MainWindow()
     {
@@ -51,6 +52,7 @@ public partial class MainWindow : Window
         UpdateThemeChoices();
         UpdateFontSizeChoices();
         ApplyResponsiveLayout();
+        _ = CheckForAppUpdatesAsync(false);
         if (_viewModel.Settings.ScanAtStartup)
             await _viewModel.ScanAsync();
     }
@@ -84,6 +86,29 @@ public partial class MainWindow : Window
     private void HardwareNav_Click(object sender, RoutedEventArgs e) => ShowPage(HardwarePage, "Driver e chipset");
     private void HistoryNav_Click(object sender, RoutedEventArgs e) => ShowPage(HistoryPage, "Cronologia");
     private void SettingsNav_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage, "Impostazioni");
+
+    private async void CheckForAppUpdates_Click(object sender, RoutedEventArgs e) =>
+        await CheckForAppUpdatesAsync(true);
+
+    private async Task CheckForAppUpdatesAsync(bool manual)
+    {
+        if (_appUpdateDialogOpen) return;
+        var update = await _viewModel.CheckForAppUpdateAsync(manual);
+        if (update is null || !IsVisible) return;
+
+        _appUpdateDialogOpen = true;
+        try
+        {
+            var window = new AppUpdateWindow(update, _viewModel.AppUpdateService) { Owner = this };
+            window.ShowDialog();
+            if (window.IgnoreRequested)
+                _viewModel.IgnoreAppUpdate(update.AvailableVersion);
+        }
+        finally
+        {
+            _appUpdateDialogOpen = false;
+        }
+    }
 
     private void ShowPage(UIElement page, string title)
     {

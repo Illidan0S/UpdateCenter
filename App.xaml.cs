@@ -7,6 +7,16 @@ public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Length == 4 &&
+            e.Args[0].Equals("--apply-update", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(e.Args[2], out var parentProcessId))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            var exitCode = AppUpdateService.ApplyUpdate(e.Args[1], parentProcessId, e.Args[3]);
+            Shutdown(exitCode);
+            return;
+        }
+
         if (e.Args.Length == 2 && e.Args[0].Equals("--elevated-update", StringComparison.OrdinalIgnoreCase))
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
@@ -37,6 +47,8 @@ public partial class App : Application
             var mainWindow = new MainWindow();
             MainWindow = mainWindow;
             mainWindow.Show();
+            if (e.Args.Length == 4 && e.Args[0].Equals("--update-complete", StringComparison.OrdinalIgnoreCase))
+                AppUpdateService.ScheduleSuccessfulUpdateCleanup(e.Args[1], e.Args[2], e.Args[3]);
         }
         catch (Exception ex)
         {

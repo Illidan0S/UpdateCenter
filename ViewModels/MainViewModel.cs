@@ -14,6 +14,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly HardwareInventoryService _hardwareInventory = new();
     private readonly SystemHardwareService _systemHardware = new();
     private readonly UpdateCoordinator _coordinator = new();
+    private readonly AppUpdateService _appUpdateService = new();
     private CancellationTokenSource? _scanCancellation;
     private bool _isBusy;
     private double _progress;
@@ -29,11 +30,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _hardwareOverviewLoaded;
     private bool _hardwareOverviewLoading;
     private bool _hardwareMetricsLoading;
+    private bool _isAppUpdateCheckBusy;
+    private string _appUpdateStatus = "Controllo aggiornamenti dell'app non ancora eseguito.";
 
     public MainViewModel()
     {
         AppPaths.EnsureCreated();
         Settings = JsonStorage.LoadSettings();
+        if (Settings.LastAppUpdateCheckUtc is DateTime lastUpdateCheck)
+            _appUpdateStatus = $"Ultimo controllo: {lastUpdateCheck.ToLocalTime():dd/MM/yyyy HH:mm}.";
         foreach (var entry in JsonStorage.LoadHistory()) History.Add(entry);
         UpdatesView = CollectionViewSource.GetDefaultView(Updates);
         UpdatesView.Filter = FilterUpdate;
@@ -46,6 +51,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public SystemHardwareInfo HardwareInfo { get; } = new();
     public ICollectionView UpdatesView { get; }
     public AppSettings Settings { get; }
+    public AppUpdateService AppUpdateService => _appUpdateService;
 
     public bool IsBusy
     {
@@ -96,6 +102,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ? "Nessun aggiornamento disponibile al momento."
             : $"{SoftwareUpdateCount} software e {DriverUpdateCount} driver da controllare.";
     public IReadOnlyList<UpdateItem> SelectedItems => Updates.Where(x => x.IsSelected).ToList();
+    public bool IsAppUpdateCheckBusy
+    {
+        get => _isAppUpdateCheckBusy;
+        private set
+        {
+            _isAppUpdateCheckBusy = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanCheckAppUpdates));
+        }
+    }
+    public bool CanCheckAppUpdates => !IsAppUpdateCheckBusy;
+    public string AppUpdateStatus
+    {
+        get => _appUpdateStatus;
+        private set { _appUpdateStatus = value; OnPropertyChanged(); }
+    }
+    public string LastAppUpdateCheckLabel => Settings.LastAppUpdateCheckUtc is DateTime timestamp
+        ? timestamp.ToLocalTime().ToString("dd/MM/yyyy 'alle' HH:mm")
+        : "Mai eseguito";
 
     public string CpuName
     {
@@ -224,6 +249,65 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public void CancelScan() => _scanCancellation?.Cancel();
+
+    public async Task<AppUpdateInfo?> CheckForAppUpdateAsync(bool manual)
+    {
+        if (IsAppUpdateCheckBusy) return null;
+        if (!manual && !Settings.CheckAppUpdatesAutomatically) return null;
+        if (!manual && Settings.LastAppUpdateCheckUtc is DateTime previous &&
+            DateTime.UtcNow - previous < TimeSpan.FromHours(24))
+            return null;
+
+        IsAppUpdateCheckBusy = true;
+        AppUpdateStatus = "Controllo della Release stabile più recente…";
+        var checkAttempted = false;
+        try
+        {
+            if (!manual)
+                await Task.Delay(1200);
+            checkAttempted = true;
+            var update = await _appUpdateService.CheckForUpdateAsync(CancellationToken.None);
+            if (update is null)
+            {
+                AppUpdateStatus = "Update Center è aggiornato.";
+                return null;
+            }
+
+            if (Settings.IgnoredAppVersion.Equals(update.AvailableVersion.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                AppUpdateStatus = $"La versione v{update.AvailableVersion} è stata ignorata.";
+                return null;
+            }
+
+            AppUpdateStatus = $"Disponibile Update Center v{update.AvailableVersion}.";
+            return update;
+        }
+        catch (Exception ex)
+        {
+            LogService.Write("Controllo aggiornamenti dell'app non riuscito.", ex);
+            AppUpdateStatus = manual
+                ? "Controllo non riuscito. Verifica la connessione e riprova."
+                : "Controllo automatico non disponibile; l'app continuerà normalmente.";
+            return null;
+        }
+        finally
+        {
+            if (checkAttempted)
+            {
+                Settings.LastAppUpdateCheckUtc = DateTime.UtcNow;
+                JsonStorage.SaveSettings(Settings);
+                OnPropertyChanged(nameof(LastAppUpdateCheckLabel));
+            }
+            IsAppUpdateCheckBusy = false;
+        }
+    }
+
+    public void IgnoreAppUpdate(SemanticVersion version)
+    {
+        Settings.IgnoredAppVersion = version.ToString();
+        JsonStorage.SaveSettings(Settings);
+        AppUpdateStatus = $"La versione v{version} non verrà più proposta.";
+    }
 
     public async Task LoadHardwareOverviewAsync(bool force = false)
     {

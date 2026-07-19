@@ -109,7 +109,24 @@ Windows 10 standard ha terminato il supporto Microsoft il 14 ottobre 2025. L'app
 - `build.ps1`: restore e publish self-contained/single-file in `dist`.
 - `CREA-EXE.bat`: controllo/installazione dell'SDK .NET 8 e avvio della compilazione.
 - `INSTALLA.bat`: installazione per utente dalla cartella `dist` in `%LOCALAPPDATA%\Programs\UpdateCenter`.
+- `Tests/UpdateCenter.SmokeTests`: controlli senza dipendenze esterne per versioni semantiche e impostazioni predefinite dell'updater.
 
 ## Aggiornamento automatico dell'app
 
-Nella prima pubblicazione del solo sorgente il controllo delle nuove versioni dell'app non è ancora attivo. È previsto tramite GitHub Releases stabili del repository `Illidan0S/UpdateCenter`, con verifica SHA-256 e aggiornamento della stessa installazione. La funzione verrà dichiarata disponibile soltanto dopo la verifica completa di compilazione, rollback e pacchetto Release.
+Il controllo automatico è attivo per impostazione predefinita e interroga, senza token, la Release stabile più recente del repository pubblico `Illidan0S/UpdateCenter`. Draft e prerelease vengono ignorate. Il controllo in background non blocca l'interfaccia e viene effettuato al massimo una volta ogni 24 ore; nelle Impostazioni può essere disattivato o avviato manualmente con **Controlla ora**.
+
+Quando è disponibile una versione più recente, una finestra coerente con l'app mostra versione installata, nuova versione, note e dimensione. È possibile scegliere **Aggiorna ora**, **Più tardi** oppure **Ignora questa versione**.
+
+L'eseguibile viene scaricato in `%LOCALAPPDATA%\UpdateCenter\Updates` e installato soltanto dopo la verifica SHA-256. Il nuovo eseguibile attende la chiusura del processo precedente, conserva una sola copia temporanea di sicurezza, sostituisce `UpdateCenter.exe` nella stessa cartella e riavvia l'app. Se la sostituzione o il riavvio falliscono, ripristina automaticamente il vecchio eseguibile. Download, backup e file intermedi vengono rimossi dopo l'avvio riuscito; l'esito resta nei log. L'installazione in `%LOCALAPPDATA%\Programs\UpdateCenter` non richiede privilegi amministrativi.
+
+## GitHub Actions e pubblicazione delle versioni
+
+Il workflow `.github/workflows/release.yml` compila su Windows con .NET 8, pubblica `win-x64` self-contained e single-file, verifica versione e contenuto del pacchetto, genera SHA-256 e carica gli artefatti. Con un tag stabile `vMAJOR.MINOR.PATCH` crea la Release soltanto dopo il superamento di tutti i controlli.
+
+Per una versione futura:
+
+1. aggiorna `Version`, `AssemblyVersion`, `FileVersion` e `InformationalVersion` in `UpdateCenter.csproj` e il fallback visibile nell'interfaccia;
+2. esegui `build.ps1` e verifica localmente l'app;
+3. pubblica le modifiche su `main` e attendi il completamento positivo del workflow;
+4. crea e pubblica il tag corrispondente, per esempio `v1.0.1`;
+5. verifica che la Release contenga ZIP, EXE versionato e i rispettivi file `.sha256`.
