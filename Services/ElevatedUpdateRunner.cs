@@ -52,7 +52,9 @@ public static class ElevatedUpdateRunner
                 ItemRunResult result;
                 if (item.Kind.Equals(nameof(UpdateKind.Driver), StringComparison.OrdinalIgnoreCase))
                 {
-                    result = WindowsUpdateService.InstallDriver(item);
+                    result = item.DriverInstallMode.Equals(DriverInstallModes.OfficialInfPackage, StringComparison.Ordinal)
+                        ? OfficialDriverPackageService.Install(item)
+                        : WindowsUpdateService.InstallDriver(item);
                 }
                 else
                 {
@@ -209,7 +211,17 @@ public sealed class UpdateCoordinator
                 InstalledVersion = x.InstalledVersion,
                 AvailableVersion = x.AvailableVersion,
                 WindowsUpdateId = x.WindowsUpdateId,
-                WindowsUpdateRevision = x.WindowsUpdateRevision
+                WindowsUpdateRevision = x.WindowsUpdateRevision,
+                WindowsUpdateServerSelection = x.WindowsUpdateServerSelection,
+                WindowsUpdateServiceId = x.WindowsUpdateServiceId,
+                DriverInstallMode = x.DriverInstallMode,
+                Vendor = x.Publisher,
+                OfficialReleasePageUrl = x.OfficialReleasePageUrl,
+                OfficialDownloadUrl = x.OfficialDownloadUrl,
+                ExpectedSha256 = x.ExpectedSha256,
+                ExpectedSignerSubjects = x.ExpectedSignerSubjects,
+                DriverPackageType = x.DriverPackageType,
+                CompatibleHardwareIds = x.CompatibleHardwareIds
             }).ToList()
         };
 

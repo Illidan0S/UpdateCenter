@@ -79,8 +79,11 @@ COMPATIBILITA
 3. Seleziona gli aggiornamenti desiderati.
 4. Premi "Aggiorna elementi selezionati" e conferma la richiesta UAC.
 
-Fonti utilizzate: WinGet e Windows Update.
-I driver non vengono scaricati da cataloghi di terze parti.
+Fonti utilizzate: WinGet, Windows/Microsoft Update e metadati verificati dei produttori.
+Update Center non installa utility come Intel DSA, MSI Center, NVIDIA App o strumenti simili.
+I pacchetti produttore automatici sono ammessi solo se contengono driver INF e superano
+il controllo di dominio ufficiale, ID hardware, Windows/architettura, SHA-256 e firma.
+BIOS e firmware restano esclusi dall'installazione automatica.
 "@
 Set-Content -Path (Join-Path $output 'LEGGIMI.txt') -Value $readme -Encoding UTF8
 Copy-Item -LiteralPath $uninstallerTemplate -Destination (Join-Path $output 'UNINSTALLA.bat') -Force

@@ -2,11 +2,11 @@
 
 Versione pubblica iniziale: **1.0.0** (`v1.0.0`).
 
-Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e aggiornamenti driver tramite **Windows Update Agent**. L'utente sceglie singolarmente cosa installare.
+Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e driver tramite **Windows Update Agent** più un catalogo incorporato e trasparente di metadati verificati dei produttori. L'utente sceglie singolarmente cosa installare.
 
-La sezione **Driver e chipset** crea inoltre un inventario locale dei driver PnP installati, associa quando possibile la versione installata a quella proposta da Windows Update e riconosce i componenti CPU/chipset. Per i controlli che richiedono il catalogo del produttore espone collegamenti esclusivamente agli strumenti ufficiali AMD, Intel, NVIDIA e agli aggiornamenti facoltativi di Windows.
+La sezione **Driver e chipset** crea inoltre un inventario locale dei driver PnP installati, inclusi ID hardware e ID compatibili, associa quando possibile la versione installata a quella proposta e riconosce i componenti CPU/chipset. Le schede dei produttori sono generate soltanto dall'hardware realmente rilevato: un modello preciso riceve la sua pagina precisa; se l'abbinamento non è certo viene mostrato il portale generico ufficiale.
 
-Il controllo Windows Update è automatico: i componenti CPU/chipset mostrano direttamente se è disponibile un aggiornamento oppure se Windows Update non ne ha rilevato alcuno. Le voci duplicate con stesso dispositivo, produttore e versione vengono raggruppate per rendere l'inventario più leggibile.
+Il controllo Windows Update è automatico. Il catalogo Update Center può proporre un pacchetto esterno soltanto quando contiene URL ufficiale, ID hardware esatto, versione, compatibilità Windows/architettura, SHA-256 e firmatari attesi. Le fonti che non offrono metadati ufficiali interrogabili in sicurezza restano indicate come **controllo manuale ufficiale**, senza inventare un aggiornamento. Le voci duplicate con stesso dispositivo, produttore e versione vengono raggruppate per rendere l'inventario più leggibile.
 
 ## Quale file usare
 
@@ -66,21 +66,25 @@ La pagina **Cronologia** usa descrizioni semplici per indicare esito, versioni, 
 ## Fonti e comportamento
 
 - Software: comando ufficiale `winget upgrade`, un pacchetto alla volta.
-- Driver: aggiornamenti firmati e compatibili offerti da Windows Update al PC specifico.
+- Driver Microsoft: aggiornamenti firmati e compatibili offerti da Windows Update al PC specifico.
+- Driver produttore: soltanto pacchetti ZIP/CAB composti da driver INF e autorizzati dal catalogo incorporato. Prima dell'installazione vengono ricontrollati dominio ufficiale, ID hardware, Windows/architettura, SHA-256 e firma Authenticode del catalogo `.cat`.
 - CPU/chipset: inventario delle componenti di sistema e accesso al controllo ufficiale AMD o Intel rilevato sul PC.
+- BIOS, UEFI e firmware: esclusi dall'installazione automatica.
 - Versioni preview: non vengono richieste dall'app.
 - Ripristino: se l'opzione è attiva, l'app richiede un solo punto di ripristino per l'intero gruppo soltanto quando sono presenti driver o aggiornamenti importanti. I gruppi composti unicamente da software WinGet non creano punti. Windows può rifiutare la richiesta se Protezione sistema è disattivata o per le proprie regole. Dalle Impostazioni è possibile aprire direttamente il pannello Windows che mostra e limita lo spazio utilizzato.
 - Log e cronologia: `%LOCALAPPDATA%\UpdateCenter`.
 - Pulizia: i file temporanei di installazione vengono eliminati al termine; eventuali residui più vecchi di un giorno e i log più vecchi di 30 giorni vengono rimossi all'avvio. Ogni log giornaliero è limitato a 2 MB.
 - Controlli preliminari: prima dell'installazione la finestra di riepilogo verifica alimentazione e spazio libero. Driver e aggiornamenti importanti vengono bloccati con batteria al 25% o inferiore; l'operazione viene inoltre bloccata quando lo spazio è inferiore alla stima minima necessaria.
 
-Non è tecnicamente possibile garantire che *ogni* programma installato sia aggiornabile: WinGet può gestire soltanto i programmi che riesce ad associare a un pacchetto disponibile. Analogamente, l'app mostra solo i driver che Windows Update ritiene applicabili al computer.
+Non è tecnicamente possibile garantire che *ogni* programma installato sia aggiornabile: WinGet può gestire soltanto i programmi che riesce ad associare a un pacchetto disponibile. Per i driver, il controllo automatico è possibile soltanto quando Windows Update o il produttore espongono metadati verificabili; negli altri casi viene offerta la pagina ufficiale corretta per il controllo manuale.
 
 Update Center non usa il catalogo proprietario di Driver Easy e non presenta come aggiornamento un pacchetto che Windows o il produttore non hanno confermato per il PC. L'inventario può quindi mostrare gli stessi dispositivi, mentre il numero degli aggiornamenti disponibili può essere inferiore.
 
 ## Sicurezza
 
-- Nessun catalogo driver di terze parti.
+- Nessun catalogo driver commerciale o mirror di terze parti; il catalogo incorporato contiene solo metadati e URL ufficiali, mai i file dei driver.
+- Nessuna utility del produttore viene installata o eseguita: i pacchetti con `.exe`, `.msi` o script vengono rifiutati.
+- I pacchetti driver esterni devono contenere INF compatibili e cataloghi `.cat` con firma Authenticode valida.
 - Argomenti dei processi separati, senza concatenare input in una shell.
 - Una sola elevazione UAC per la fase di installazione.
 - Piano di aggiornamento limitato alla cartella dati dell'app.
@@ -102,9 +106,12 @@ Windows 10 standard ha terminato il supporto Microsoft il 14 ottobre 2025. L'app
 - `ViewModels/MainViewModel.cs`: stato, scansione, filtri e cronologia.
 - `Services/WinGetService.cs`: scansione e aggiornamento software.
 - `Services/WindowsUpdateService.cs`: ricerca e installazione driver.
+- `Services/OfficialDriverCatalogService.cs`: confronto esatto con il catalogo trasparente dei produttori.
+- `Services/OfficialDriverPackageService.cs`: download e installazione protetta dei soli pacchetti INF verificati.
 - `Services/ElevatedUpdateRunner.cs`: elevazione UAC, punto di ripristino e avanzamento.
 - `Models`: modelli dati e piano di aggiornamento.
 - `Assets/PackageRemoval.template`: modello interno dal quale `build.ps1` genera l'unica copia del disinstallatore, `dist\UNINSTALLA.bat`.
+- `Assets/driver-catalog.json`: metadati incorporati dei driver produttore; non ospita binari né mirror.
 - `App.xaml` e `MainWindow.xaml`: risorse grafiche, stili e pagine dell'interfaccia WPF.
 - `build.ps1`: restore e publish self-contained/single-file in `dist`.
 - `CREA-EXE.bat`: controllo/installazione dell'SDK .NET 8 e avvio della compilazione.

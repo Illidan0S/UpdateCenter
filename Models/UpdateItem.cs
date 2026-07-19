@@ -9,6 +9,12 @@ public enum UpdateKind
     Driver
 }
 
+public static class DriverInstallModes
+{
+    public const string WindowsUpdate = "WindowsUpdate";
+    public const string OfficialInfPackage = "OfficialInfPackage";
+}
+
 public sealed class UpdateItem : INotifyPropertyChanged
 {
     private bool _isSelected = true;
@@ -36,6 +42,20 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public bool IsOptional { get; init; }
     public string? WindowsUpdateId { get; init; }
     public int WindowsUpdateRevision { get; init; }
+    public int WindowsUpdateServerSelection { get; init; }
+    public string WindowsUpdateServiceId { get; init; } = "";
+    public string DriverInstallMode { get; init; } = "";
+    public string OfficialReleasePageUrl { get; init; } = "";
+    public string OfficialDownloadUrl { get; init; } = "";
+    public string ExpectedSha256 { get; init; } = "";
+    public List<string> ExpectedSignerSubjects { get; init; } = [];
+    public string DriverPackageType { get; init; } = "";
+    public List<string> CompatibleHardwareIds { get; init; } = [];
+    public string SourceConfidence { get; init; } = "";
+    public string CompatibilityDetail { get; init; } = "";
+    public string SourceSummary => string.IsNullOrWhiteSpace(SourceConfidence)
+        ? Source
+        : $"{Source} · {SourceConfidence}";
     public string PriorityLabel => IsImportant
         ? "Importante"
         : IsOptional ? "Facoltativo" : "Standard";

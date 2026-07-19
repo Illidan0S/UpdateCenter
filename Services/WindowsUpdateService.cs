@@ -6,17 +6,80 @@ namespace UpdateCenter.Services;
 
 public sealed class WindowsUpdateService
 {
-    public Task<IReadOnlyList<UpdateItem>> ScanDriversAsync(
+    private const string DriverSearchCriteria = "IsInstalled=0 and IsHidden=0 and Type='Driver'";
+    private const int DefaultServer = 0;
+    private const int WindowsUpdateServer = 2;
+    private const int OtherServer = 3;
+    private const string MicrosoftUpdateServiceId = "7971f918-a847-4430-9279-4a52d1efe18d";
+
+    public Task<DriverScanResult> ScanDriversAsync(
         CancellationToken cancellationToken,
         IReadOnlyList<DriverInventoryItem>? installedDrivers = null) =>
-        Task.Run<IReadOnlyList<UpdateItem>>(
+        Task.Run(
             () => ScanDrivers(cancellationToken, installedDrivers ?? []), cancellationToken);
 
-    private static List<UpdateItem> ScanDrivers(
+    private static DriverScanResult ScanDrivers(
         CancellationToken cancellationToken,
         IReadOnlyList<DriverInventoryItem> installedDrivers)
     {
         EnsureWindows();
+        var sources = BuildSearchSources();
+        var updates = new Dictionary<string, UpdateItem>(StringComparer.OrdinalIgnoreCase);
+        var checkedSources = new List<string>();
+        var sourceWarnings = new List<string>();
+        var defaultSearchCompleted = false;
+        var defaultFoundUpdates = false;
+
+        foreach (var source in sources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (source.IsWindowsUpdateFallback && defaultSearchCompleted && defaultFoundUpdates)
+                continue;
+
+            try
+            {
+                var found = SearchSource(source, cancellationToken, installedDrivers);
+                checkedSources.Add(source.Label);
+                if (source.ServerSelection == DefaultServer)
+                {
+                    defaultSearchCompleted = true;
+                    defaultFoundUpdates = found.Count > 0;
+                }
+
+                foreach (var item in found)
+                    updates.TryAdd($"{item.WindowsUpdateId}:{item.WindowsUpdateRevision}", item);
+            }
+            catch (Exception ex) when (ex is COMException or InvalidOperationException)
+            {
+                sourceWarnings.Add($"{source.Label}: {ex.Message}");
+                LogService.Write($"Ricerca driver non riuscita tramite {source.Label}.", ex);
+            }
+        }
+
+        if (checkedSources.Count == 0)
+            throw new InvalidOperationException("Nessuna sorgente Microsoft ha completato la ricerca dei driver.");
+
+        var orderedUpdates = updates.Values
+            .OrderByDescending(x => x.IsImportant)
+            .ThenBy(x => x.IsOptional)
+            .ThenBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+        LogService.Write(
+            $"Ricerca driver completata: {orderedUpdates.Count} aggiornamenti univoci da {string.Join(", ", checkedSources)}.");
+
+        return new DriverScanResult
+        {
+            Updates = orderedUpdates,
+            SourcesChecked = checkedSources,
+            SourceWarnings = sourceWarnings
+        };
+    }
+
+    private static List<UpdateItem> SearchSource(
+        UpdateSource source,
+        CancellationToken cancellationToken,
+        IReadOnlyList<DriverInventoryItem> installedDrivers)
+    {
         object? sessionObject = null;
         object? searcherObject = null;
         object? resultObject = null;
@@ -31,7 +94,9 @@ public sealed class WindowsUpdateService
             session.ClientApplicationID = "Update Center";
             searcherObject = session.CreateUpdateSearcher();
             dynamic searcher = searcherObject;
-            resultObject = searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Driver'");
+            ConfigureSearcher(searcher, source);
+            cancellationToken.ThrowIfCancellationRequested();
+            resultObject = searcher.Search(DriverSearchCriteria);
             dynamic result = resultObject;
 
             var updates = new List<UpdateItem>();
@@ -54,6 +119,7 @@ public sealed class WindowsUpdateService
                 string severity = SafeString(() => Convert.ToString(update.MsrcSeverity)) ?? "";
                 bool mandatory = SafeBool(() => Convert.ToBoolean(update.IsMandatory));
                 bool? autoSelected = SafeNullableBool(() => Convert.ToBoolean(update.AutoSelectOnWebSites));
+                bool browseOnly = SafeBool(() => Convert.ToBoolean(update.BrowseOnly));
                 bool hasSecurityBulletin = SafeLong(() => Convert.ToInt64(update.SecurityBulletinIDs.Count)) > 0;
                 bool isImportant = mandatory || hasSecurityBulletin ||
                                    severity.Equals("Critical", StringComparison.OrdinalIgnoreCase) ||
@@ -78,22 +144,30 @@ public sealed class WindowsUpdateService
                     Kind = UpdateKind.Driver,
                     InstalledVersion = installed?.InstalledVersion ?? "Versione installata rilevata da Windows",
                     AvailableVersion = availableVersion,
-                    Source = $"Windows Update · {className}",
+                    Source = $"{source.Label} · {className}",
                     Size = FormatBytes(size),
                     RequiresRestart = reboot,
                     IsImportant = isImportant,
-                    IsOptional = !isImportant && autoSelected == false,
+                    IsOptional = !isImportant && (browseOnly || autoSelected == false),
                     WindowsUpdateId = updateId,
-                    WindowsUpdateRevision = revision
+                    WindowsUpdateRevision = revision,
+                    WindowsUpdateServerSelection = source.ServerSelection,
+                    WindowsUpdateServiceId = source.ServiceId,
+                    DriverInstallMode = DriverInstallModes.WindowsUpdate,
+                    SourceConfidence = "Alta · applicabilità calcolata da Windows Update",
+                    CompatibilityDetail = string.IsNullOrWhiteSpace(hardwareId)
+                        ? "Compatibilità determinata da Windows Update Agent"
+                        : $"ID hardware proposto: {hardwareId}"
                 });
             }
 
-            LogService.Write($"Windows Update ha trovato {updates.Count} aggiornamenti driver.");
+            LogService.Write($"{source.Label} ha trovato {updates.Count} aggiornamenti driver applicabili.");
             return updates;
         }
         catch (COMException ex)
         {
-            throw new InvalidOperationException($"Windows Update non ha completato la ricerca (0x{ex.HResult:X8}).", ex);
+            throw new InvalidOperationException(
+                $"ricerca non completata (0x{ex.HResult:X8})", ex);
         }
         finally
         {
@@ -101,6 +175,70 @@ public sealed class WindowsUpdateService
             ReleaseCom(searcherObject);
             ReleaseCom(sessionObject);
         }
+    }
+
+    private static List<UpdateSource> BuildSearchSources()
+    {
+        var sources = new List<UpdateSource>
+        {
+            new(DefaultServer, "", "Windows Update configurato"),
+            new(WindowsUpdateServer, "", "Windows Update online", IsWindowsUpdateFallback: true)
+        };
+
+        object? managerObject = null;
+        object? servicesObject = null;
+        try
+        {
+            var managerType = Type.GetTypeFromProgID("Microsoft.Update.ServiceManager");
+            if (managerType is null) return sources;
+            managerObject = Activator.CreateInstance(managerType);
+            if (managerObject is null) return sources;
+            dynamic manager = managerObject;
+            servicesObject = manager.Services;
+            dynamic services = servicesObject;
+            int count = services.Count;
+            for (var index = 0; index < count; index++)
+            {
+                object? serviceObject = null;
+                try
+                {
+                    serviceObject = services.Item(index);
+                    dynamic service = serviceObject;
+                    var serviceId = Convert.ToString(service.ServiceID) ?? "";
+                    if (!serviceId.Equals(MicrosoftUpdateServiceId, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    sources.Add(new UpdateSource(OtherServer, serviceId, "Microsoft Update"));
+                    break;
+                }
+                finally
+                {
+                    ReleaseCom(serviceObject);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogService.Write("Enumerazione delle sorgenti Microsoft Update non riuscita.", ex);
+        }
+        finally
+        {
+            ReleaseCom(servicesObject);
+            ReleaseCom(managerObject);
+        }
+
+        return sources;
+    }
+
+    private static void ConfigureSearcher(dynamic searcher, UpdateSource source)
+    {
+        searcher.Online = true;
+        searcher.IncludePotentiallySupersededUpdates = false;
+        if (source.ServerSelection == DefaultServer) return;
+
+        searcher.ServerSelection = source.ServerSelection;
+        if (source.ServerSelection == OtherServer)
+            searcher.ServiceID = source.ServiceId;
     }
 
     public static ItemRunResult InstallDriver(PlanItem planItem)
@@ -120,7 +258,11 @@ public sealed class WindowsUpdateService
             session.ClientApplicationID = "Update Center";
             searcherObject = session.CreateUpdateSearcher();
             dynamic searcher = searcherObject;
-            searchResultObject = searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Driver'");
+            ConfigureSearcher(searcher, new UpdateSource(
+                planItem.WindowsUpdateServerSelection,
+                planItem.WindowsUpdateServiceId,
+                "sorgente Microsoft selezionata"));
+            searchResultObject = searcher.Search(DriverSearchCriteria);
             dynamic searchResult = searchResultObject;
 
             dynamic? selectedUpdate = null;
@@ -282,4 +424,10 @@ public sealed class WindowsUpdateService
 
     private static string Normalize(string value) =>
         Regex.Replace(value.ToLowerInvariant(), @"[^a-z0-9]+", " ").Trim();
+
+    private sealed record UpdateSource(
+        int ServerSelection,
+        string ServiceId,
+        string Label,
+        bool IsWindowsUpdateFallback = false);
 }
