@@ -14,7 +14,10 @@ public static class JsonStorage
     public static AppSettings LoadSettings()
     {
         AppPaths.EnsureCreated();
-        return Read<AppSettings>(AppPaths.SettingsFile) ?? new AppSettings();
+        var settings = Read<AppSettings>(AppPaths.SettingsFile) ?? new AppSettings();
+        if (settings.ApplyMigrations())
+            SaveSettings(settings);
+        return settings;
     }
 
     public static void SaveSettings(AppSettings settings) => WriteAtomic(AppPaths.SettingsFile, settings);

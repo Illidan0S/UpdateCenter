@@ -3,15 +3,12 @@ setlocal
 cd /d "%~dp0"
 
 if not exist "%~dp0dist\UpdateCenter.exe" (
-    if not exist "%~dp0CREA-EXE.bat" (
-        echo Il pacchetto non contiene dist\UpdateCenter.exe.
-        echo Scarica nuovamente il pacchetto completo dalla Release ufficiale.
-        pause
-        exit /b 1
-    )
-    echo L'eseguibile non e' ancora stato creato. Avvio la compilazione...
-    call "%~dp0CREA-EXE.bat"
-    if errorlevel 1 exit /b 1
+    echo Il pacchetto non contiene dist\UpdateCenter.exe.
+    echo Probabilmente hai scaricato il codice sorgente con "Download ZIP".
+    echo Per installare l'app scarica il pacchetto completo dalla sezione Releases.
+    echo Se invece vuoi compilare il sorgente, avvia manualmente CREA-EXE.bat.
+    pause
+    exit /b 1
 )
 
 set "DEST=%LOCALAPPDATA%\Programs\UpdateCenter"

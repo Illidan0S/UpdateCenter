@@ -1,4 +1,5 @@
 using System.Windows;
+using UpdateCenter.Models;
 
 namespace UpdateCenter.Services;
 
@@ -9,12 +10,7 @@ public static class TypographyService
     public static void Apply(string? mode)
     {
         if (Application.Current is null) return;
-        var scale = Normalize(mode) switch
-        {
-            "Media" => 1.10,
-            "Grande" => 1.20,
-            _ => 1.00
-        };
+        var scale = TypographyOptions.ScaleFor(mode);
 
         foreach (var size in BaseSizes)
             Application.Current.Resources[$"FontSize{size}"] = Math.Round(size * scale, 1);
@@ -22,5 +18,5 @@ public static class TypographyService
         Application.Current.Resources["DataGridRowHeight"] = Math.Round(52 * scale, 1);
     }
 
-    public static string Normalize(string? mode) => mode is "Media" or "Grande" ? mode : "Piccola";
+    public static string Normalize(string? mode) => TypographyOptions.Normalize(mode);
 }

@@ -18,6 +18,16 @@ public sealed class PlanItem
     public string AvailableVersion { get; set; } = "";
     public string? WindowsUpdateId { get; set; }
     public int WindowsUpdateRevision { get; set; }
+    public int WindowsUpdateServerSelection { get; set; }
+    public string WindowsUpdateServiceId { get; set; } = "";
+    public string DriverInstallMode { get; set; } = "";
+    public string Vendor { get; set; } = "";
+    public string OfficialReleasePageUrl { get; set; } = "";
+    public string OfficialDownloadUrl { get; set; } = "";
+    public string ExpectedSha256 { get; set; } = "";
+    public List<string> ExpectedSignerSubjects { get; set; } = [];
+    public string DriverPackageType { get; set; } = "";
+    public List<string> CompatibleHardwareIds { get; set; } = [];
 }
 
 public sealed class UpdateRunStatus

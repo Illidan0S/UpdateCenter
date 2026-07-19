@@ -24,7 +24,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.0"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.1"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -238,22 +238,24 @@ public partial class MainWindow : Window
     private void ApplyResponsiveLayout()
     {
         if (!IsInitialized) return;
-        var iconOnly = ActualWidth < 820;
-        var compact = ActualWidth < 1080;
-        var narrow = ActualWidth < 920;
-        var sidebarWidth = iconOnly ? 76d : narrow ? 180d : compact ? 200d : 230d;
+        var iconOnly = ActualWidth < 900;
+        var compact = ActualWidth < 1120;
+        var narrow = ActualWidth < 1000;
+        var sidebarWidth = iconOnly ? 76d : narrow ? 205d : compact ? 230d : 260d;
         SidebarColumn.Width = new GridLength(sidebarWidth);
         TitleSidebarColumn.Width = new GridLength(sidebarWidth);
         ContentHost.Margin = iconOnly ? new Thickness(8, 0, 8, 8) :
             narrow ? new Thickness(10, 0, 10, 10) : new Thickness(18, 0, 18, 18);
         HomeStatusColumn.Width = new GridLength(iconOnly ? 210d : narrow ? 220d : compact ? 255d : 300d);
         UpdateFilterColumn.Width = new GridLength(iconOnly ? 135d : narrow ? 145d : 170d);
+        DriverFilterColumn.Width = new GridLength(iconOnly ? 145d : narrow ? 160d : 190d);
 
         SidebarHeading.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         SidebarSourceCard.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         AppNameText.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         VersionBadge.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         HistoryHintBadge.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        DriverSummaryPanel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         BrandPanel.HorizontalAlignment = iconOnly ? HorizontalAlignment.Center : HorizontalAlignment.Left;
         BrandPanel.Margin = iconOnly ? new Thickness(0) : new Thickness(20, 0, 0, 0);
 
