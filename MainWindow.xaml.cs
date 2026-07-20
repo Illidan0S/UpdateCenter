@@ -28,7 +28,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.2"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.3"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -103,7 +103,6 @@ public partial class MainWindow : Window
     private void HardwareNav_Click(object sender, RoutedEventArgs e) => ShowPage(HardwarePage, "Driver e chipset");
     private void HistoryNav_Click(object sender, RoutedEventArgs e) => ShowPage(HistoryPage, "Cronologia");
     private void SettingsNav_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage, "Impostazioni");
-    private void AboutNav_Click(object sender, RoutedEventArgs e) => ShowPage(AboutPage, "Informazioni");
 
     private async void CheckForAppUpdates_Click(object sender, RoutedEventArgs e) =>
         await CheckForAppUpdatesAsync(true);
@@ -136,7 +135,6 @@ public partial class MainWindow : Window
         HardwarePage.Visibility = Visibility.Collapsed;
         HistoryPage.Visibility = Visibility.Collapsed;
         SettingsPage.Visibility = Visibility.Collapsed;
-        AboutPage.Visibility = Visibility.Collapsed;
         page.Visibility = Visibility.Visible;
         PageTitle.Text = LocalizationService.Translate(title);
         if (ReferenceEquals(page, SystemInfoPage))
@@ -332,7 +330,6 @@ public partial class MainWindow : Window
         SetNavigationAppearance(HardwareNav, iconOnly ? "▣" : $"▣   {LocalizationService.Translate("Driver e chipset")}", iconOnly);
         SetNavigationAppearance(HistoryNav, iconOnly ? "◷" : $"◷   {LocalizationService.Translate("Cronologia")}", iconOnly);
         SetNavigationAppearance(SettingsNav, iconOnly ? "⚙" : $"⚙   {LocalizationService.Translate("Impostazioni")}", iconOnly);
-        SetNavigationAppearance(AboutNav, iconOnly ? "ⓘ" : $"ⓘ   {LocalizationService.Translate("Informazioni")}", iconOnly);
     }
 
     private static void SetNavigationAppearance(System.Windows.Controls.Button button, string content, bool centered)

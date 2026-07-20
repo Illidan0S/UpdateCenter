@@ -12,14 +12,15 @@
     <RootNamespace>UpdateCenter</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\UpdateCenter.ico</ApplicationIcon>
-    <Version>1.0.2</Version>
-    <AssemblyVersion>1.0.2.0</AssemblyVersion>
-    <FileVersion>1.0.2.0</FileVersion>
-    <InformationalVersion>1.0.2</InformationalVersion>
+    <Version>1.0.3</Version>
+    <AssemblyVersion>1.0.3.0</AssemblyVersion>
+    <FileVersion>1.0.3.0</FileVersion>
+    <InformationalVersion>1.0.3</InformationalVersion>
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Authors>Illidan0S</Authors>
     <Copyright>Copyright © 2026 Illidan0S</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Description>Aggiornamenti controllati di software e driver per Windows 10 e Windows 11.</Description>
   </PropertyGroup>
 

@@ -63,7 +63,7 @@
                     <Border x:Name="VersionBadge" Margin="8,0,0,0" Padding="7,3" VerticalAlignment="Center"
                             Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
                             BorderThickness="1" CornerRadius="7">
-                        <TextBlock x:Name="VersionText" Text="v1.0.2" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock x:Name="VersionText" Text="v1.0.3" Foreground="{DynamicResource AccentBrush}"
                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
                     </Border>
                 </StackPanel>
@@ -99,7 +99,6 @@
                             <Button x:Name="HardwareNav" Style="{StaticResource NavButton}" Content="▣   Driver e chipset" ToolTip="Driver e chipset" Click="HardwareNav_Click" />
                             <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="◷   Cronologia" ToolTip="Cronologia" Click="HistoryNav_Click" />
                             <Button x:Name="SettingsNav" Style="{StaticResource NavButton}" Content="⚙   Impostazioni" ToolTip="Impostazioni" Click="SettingsNav_Click" />
-                            <Button x:Name="AboutNav" Style="{StaticResource NavButton}" Content="ⓘ   Informazioni" ToolTip="Informazioni" Click="AboutNav_Click" />
                         </StackPanel>
                         <Border x:Name="SidebarSourceCard" Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,10,0,0">
                             <StackPanel>
@@ -1045,7 +1044,7 @@
                                                Margin="24,5,0,0" TextWrapping="Wrap" />
                                 </StackPanel>
                             </Border>
-                            <Border Style="{StaticResource Card}">
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                                 <StackPanel>
                                     <TextBlock Text="Lingua" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" Margin="0,0,0,14" />
                                     <StackPanel Orientation="Horizontal">
@@ -1056,46 +1055,40 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Border>
-                            <Button Content="Salva impostazioni" Style="{StaticResource RoundedButton}" HorizontalAlignment="Left"
-                                    Margin="0,18,0,0" Click="SaveSettings_Click" />
-                        </StackPanel>
-                    </ScrollViewer>
-
-                    <!-- INFORMAZIONI -->
-                    <ScrollViewer x:Name="AboutPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                        <StackPanel>
-                            <TextBlock Text="Informazioni sul progetto" FontSize="{DynamicResource FontSize24}" FontWeight="SemiBold" />
-                            <TextBlock Text="Update Center per Windows 10 e Windows 11" Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,20" />
-                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                            <Border Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="Ideato e sviluppato da" Foreground="{DynamicResource MutedTextBrush}" />
-                                    <TextBlock Text="Illidan0S" FontSize="{DynamicResource FontSize23}" FontWeight="SemiBold" Margin="0,6,0,16" />
+                                    <TextBlock Text="Informazioni sul progetto" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" />
+                                    <TextBlock Text="Update Center per Windows 10 e Windows 11"
+                                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,16" />
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel>
-                                            <TextBlock Text="Versione installata" Foreground="{DynamicResource MutedTextBrush}" />
-                                            <TextBlock x:Name="AboutVersionText" FontWeight="SemiBold" Margin="0,5,0,0" />
+                                            <TextBlock Text="Ideato e sviluppato da" Foreground="{DynamicResource MutedTextBrush}" />
+                                            <TextBlock Text="Illidan0S" FontWeight="SemiBold" Margin="0,5,12,0" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1">
-                                            <TextBlock Text="Repository del progetto" Foreground="{DynamicResource MutedTextBrush}" />
-                                            <Button Content="Apri GitHub" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
-                                                    Margin="0,7,0,0" Tag="https://github.com/Illidan0S/UpdateCenter" Click="OpenVendorSupport_Click" />
+                                            <TextBlock Text="Versione installata" Foreground="{DynamicResource MutedTextBrush}" />
+                                            <TextBlock x:Name="AboutVersionText" FontWeight="SemiBold" Margin="0,5,12,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="Licenza" Foreground="{DynamicResource MutedTextBrush}" />
+                                            <TextBlock Text="MIT" FontWeight="SemiBold" Margin="0,5,0,0" />
                                         </StackPanel>
                                     </Grid>
-                                </StackPanel>
-                            </Border>
-                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
-                                <StackPanel>
-                                    <TextBlock Text="Privacy" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" />
                                     <TextBlock Text="Update Center non raccoglie dati personali e non include telemetria."
-                                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,7,0,0" TextWrapping="Wrap" />
+                                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,16,0,0" TextWrapping="Wrap" />
                                     <TextBlock Text="Scansioni, impostazioni, cronologia e log restano memorizzati localmente sul computer."
                                                Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,0" TextWrapping="Wrap" />
+                                    <Button Content="Apri GitHub" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
+                                            Margin="0,14,0,0" Tag="https://github.com/Illidan0S/UpdateCenter" Click="OpenVendorSupport_Click" />
                                 </StackPanel>
                             </Border>
+                            <Button Content="Salva impostazioni" Style="{StaticResource RoundedButton}" HorizontalAlignment="Left"
+                                    Margin="0,18,0,0" Click="SaveSettings_Click" />
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>
