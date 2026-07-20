@@ -14,6 +14,7 @@ public partial class UpdateConfirmationWindow : Window
         bool restorePointWillBeCreated)
     {
         InitializeComponent();
+        Loaded += (_, _) => LocalizationService.ApplyTo(this);
         ItemsGrid.ItemsSource = items;
 
         SummaryText.Text = items.Count == 1

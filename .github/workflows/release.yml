@@ -66,35 +66,35 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -NoRestore
 
-      - name: Create and verify release package
+      - name: Install Inno Setup Compiler
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Build graphical EXE installer
+        shell: pwsh
+        run: .\build-installer.ps1 -NoAppBuild
+
+      - name: Create and verify release artifacts
         id: package
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           $releaseRoot = Join-Path $env:RUNNER_TEMP 'update-center-release'
-          $packageRoot = Join-Path $releaseRoot 'package'
-          $packageDist = Join-Path $packageRoot 'dist'
           $artifacts = Join-Path $releaseRoot 'artifacts'
           if (Test-Path -LiteralPath $releaseRoot) {
             Remove-Item -LiteralPath $releaseRoot -Recurse -Force
           }
-          New-Item -Path $packageDist -ItemType Directory -Force | Out-Null
           New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
 
-          Copy-Item -LiteralPath '.\INSTALLA.bat' -Destination (Join-Path $packageRoot 'INSTALLA.bat')
-          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination (Join-Path $packageDist 'UpdateCenter.exe')
-          Copy-Item -LiteralPath '.\dist\UNINSTALLA.bat' -Destination (Join-Path $packageDist 'UNINSTALLA.bat')
-          Copy-Item -LiteralPath '.\dist\LEGGIMI.txt' -Destination (Join-Path $packageDist 'LEGGIMI.txt')
+          $portableName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
+          $setupName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
+          $portablePath = Join-Path $artifacts $portableName
+          $setupPath = Join-Path $artifacts $setupName
+          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $portablePath
+          Copy-Item -LiteralPath ".\installer-dist\$setupName" -Destination $setupPath
 
-          $zipName = "UpdateCenter-Windows10-11-v$env:RELEASE_VERSION.zip"
-          $exeName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
-          $zipPath = Join-Path $artifacts $zipName
-          $exePath = Join-Path $artifacts $exeName
-          Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $zipPath -CompressionLevel Optimal
-          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $exePath
-
-          foreach ($assetPath in @($zipPath, $exePath)) {
+          foreach ($assetPath in @($portablePath, $setupPath)) {
             $hash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash
             $checksumPath = "$assetPath.sha256"
             $assetName = Split-Path -Leaf $assetPath
@@ -105,29 +105,16 @@ jobs:
             }
           }
 
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-          try {
-            $actual = @($archive.Entries | Where-Object { $_.Name } | ForEach-Object { $_.FullName.Replace('\', '/') } | Sort-Object)
-          } finally {
-            $archive.Dispose()
+          $portableVersion = (Get-Item -LiteralPath $portablePath).VersionInfo.ProductVersion
+          $setupVersion = (Get-Item -LiteralPath $setupPath).VersionInfo.ProductVersion.Trim()
+          if ($portableVersion -ne $env:RELEASE_VERSION) {
+            throw "Versione EXE portatile inattesa: $portableVersion"
           }
-          $expected = @('INSTALLA.bat', 'dist/LEGGIMI.txt', 'dist/UNINSTALLA.bat', 'dist/UpdateCenter.exe') | Sort-Object
-          $differences = @(Compare-Object -ReferenceObject $expected -DifferenceObject $actual)
-          if ($differences.Count -ne 0) {
-            throw "Contenuto ZIP inatteso: $($actual -join ', ')"
+          if ($setupVersion -ne $env:RELEASE_VERSION) {
+            throw "Versione Setup EXE inattesa: $setupVersion"
           }
-          if (@($actual | Where-Object { $_ -match '(^|/)UNINSTALLA\.bat$' }).Count -ne 1 -or
-              -not ($actual -contains 'dist/UNINSTALLA.bat')) {
-            throw 'Lo ZIP deve contenere un solo UNINSTALLA.bat, esclusivamente in dist.'
-          }
-          if (@($actual | Where-Object { $_ -match '(^|/)(bin|obj)(/|$)|\.(cs|xaml|csproj)$' }).Count -ne 0) {
-            throw 'Lo ZIP contiene sorgenti oppure cartelle di compilazione.'
-          }
-
-          $versionInfo = (Get-Item -LiteralPath $exePath).VersionInfo
-          if ($versionInfo.ProductVersion -ne $env:RELEASE_VERSION) {
-            throw "Versione EXE inattesa: $($versionInfo.ProductVersion)"
+          if (@(Get-ChildItem -LiteralPath $artifacts -File -Filter '*.bat').Count -ne 0) {
+            throw 'Gli artefatti pubblicabili non devono contenere installer o disinstaller BAT.'
           }
           "directory=$artifacts" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 

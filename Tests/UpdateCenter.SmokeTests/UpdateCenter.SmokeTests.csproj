@@ -6,13 +6,11 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\Models\AppUpdateInfo.cs" Link="Models\AppUpdateInfo.cs" />
-    <Compile Include="..\..\Models\AppSettings.cs" Link="Models\AppSettings.cs" />
-    <Compile Include="..\..\Models\TypographyOptions.cs" Link="Models\TypographyOptions.cs" />
-    <Compile Include="..\..\Models\DriverVersionComparer.cs" Link="Models\DriverVersionComparer.cs" />
-    <EmbeddedResource Include="..\..\Assets\driver-catalog.json" Link="Assets\driver-catalog.json" />
+    <ProjectReference Include="..\..\UpdateCenter.csproj" />
   </ItemGroup>
 </Project>

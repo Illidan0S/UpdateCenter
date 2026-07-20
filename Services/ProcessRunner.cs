@@ -3,7 +3,7 @@ using System.Text;
 
 namespace UpdateCenter.Services;
 
-public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError)
+public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError, string CommandLine = "")
 {
     public bool Success => ExitCode == 0;
 }
@@ -65,11 +65,23 @@ public static class ProcessRunner
                 throw;
             }
 
-            return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
+            return new ProcessResult(
+                process.ExitCode,
+                stdout.ToString(),
+                stderr.ToString(),
+                BuildDisplayCommand(fileName, arguments));
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
             throw new InvalidOperationException($"{fileName} non è disponibile sul computer.", ex);
         }
     }
+
+    private static string BuildDisplayCommand(string fileName, IEnumerable<string> arguments) =>
+        string.Join(" ", new[] { fileName }.Concat(arguments.Select(QuoteForDisplay)));
+
+    private static string QuoteForDisplay(string value) =>
+        value.Any(char.IsWhiteSpace) || value.Contains('"', StringComparison.Ordinal)
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
 }

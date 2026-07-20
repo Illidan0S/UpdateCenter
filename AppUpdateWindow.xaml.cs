@@ -17,6 +17,7 @@ public partial class AppUpdateWindow : Window
         _update = update;
         _service = service;
         DataContext = update;
+        Loaded += (_, _) => LocalizationService.ApplyTo(this);
     }
 
     public bool IgnoreRequested { get; private set; }

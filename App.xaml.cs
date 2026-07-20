@@ -3,7 +3,7 @@ using UpdateCenter.Services;
 
 namespace UpdateCenter;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -17,10 +17,13 @@ public partial class App : Application
             return;
         }
 
-        if (e.Args.Length == 2 && e.Args[0].Equals("--elevated-update", StringComparison.OrdinalIgnoreCase))
+        if (e.Args.Length == 2 &&
+            (e.Args[0].Equals("--update-runner-admin", StringComparison.OrdinalIgnoreCase) ||
+             e.Args[0].Equals("--update-runner-user", StringComparison.OrdinalIgnoreCase)))
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            var exitCode = ElevatedUpdateRunner.Run(e.Args[1]);
+            var requireAdministrator = e.Args[0].Equals("--update-runner-admin", StringComparison.OrdinalIgnoreCase);
+            var exitCode = ElevatedUpdateRunner.Run(e.Args[1], requireAdministrator);
             Shutdown(exitCode);
             return;
         }
@@ -42,6 +45,7 @@ public partial class App : Application
         try
         {
             var settings = JsonStorage.LoadSettings();
+            LocalizationService.Initialize(settings.LanguageMode);
             ThemeService.Apply(settings.ThemeMode);
             TypographyService.Apply(settings.FontSizeMode);
             var mainWindow = new MainWindow();

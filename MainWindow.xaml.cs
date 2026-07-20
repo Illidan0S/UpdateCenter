@@ -17,20 +17,26 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel;
     private readonly DispatcherTimer _hardwareTimer;
     private readonly DispatcherTimer _historyHoverTimer;
+    private readonly DispatcherTimer _scheduledScanTimer;
+    private System.Windows.Forms.NotifyIcon? _notifyIcon;
     private HistoryEntry? _pendingHistoryEntry;
     private FrameworkElement? _pendingHistoryElement;
     private bool _appUpdateDialogOpen;
+    private bool _scheduledScanRunning;
+    private bool? _shortDriverLayout;
 
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.1"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.2"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _hardwareTimer.Tick += async (_, _) => await _viewModel.RefreshHardwareMetricsAsync();
         _historyHoverTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _historyHoverTimer.Tick += HistoryHoverTimer_Tick;
+        _scheduledScanTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        _scheduledScanTimer.Tick += ScheduledScanTimer_Tick;
         HistoryDetailPopup.CustomPopupPlacementCallback = PlaceHistoryDetailPopup;
         StateChanged += (_, _) => WindowBorder.CornerRadius = WindowState == WindowState.Maximized
             ? new CornerRadius(0)
@@ -41,6 +47,12 @@ public partial class MainWindow : Window
         {
             _hardwareTimer.Stop();
             _historyHoverTimer.Stop();
+            _scheduledScanTimer.Stop();
+            if (_notifyIcon is not null)
+            {
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
+            }
         };
         SourceInitialized += (_, _) =>
             HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WindowMessageHook);
@@ -49,12 +61,17 @@ public partial class MainWindow : Window
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         ShowPage(HomePage, "Home");
+        AboutVersionText.Text = VersionText.Text;
         UpdateThemeChoices();
         UpdateFontSizeChoices();
+        UpdateLanguageChoices();
         ApplyResponsiveLayout();
+        LocalizationService.ApplyTo(this);
+        InitializeNotificationIcon();
+        _scheduledScanTimer.Start();
         _ = CheckForAppUpdatesAsync(false);
-        if (_viewModel.Settings.ScanAtStartup)
-            await _viewModel.ScanAsync();
+        if (_viewModel.Settings.ScanAtStartup || _viewModel.IsScheduledScanDue)
+            await RunScanAsync(navigateToResults: false);
     }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -86,6 +103,7 @@ public partial class MainWindow : Window
     private void HardwareNav_Click(object sender, RoutedEventArgs e) => ShowPage(HardwarePage, "Driver e chipset");
     private void HistoryNav_Click(object sender, RoutedEventArgs e) => ShowPage(HistoryPage, "Cronologia");
     private void SettingsNav_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage, "Impostazioni");
+    private void AboutNav_Click(object sender, RoutedEventArgs e) => ShowPage(AboutPage, "Informazioni");
 
     private async void CheckForAppUpdates_Click(object sender, RoutedEventArgs e) =>
         await CheckForAppUpdatesAsync(true);
@@ -118,8 +136,9 @@ public partial class MainWindow : Window
         HardwarePage.Visibility = Visibility.Collapsed;
         HistoryPage.Visibility = Visibility.Collapsed;
         SettingsPage.Visibility = Visibility.Collapsed;
+        AboutPage.Visibility = Visibility.Collapsed;
         page.Visibility = Visibility.Visible;
-        PageTitle.Text = title;
+        PageTitle.Text = LocalizationService.Translate(title);
         if (ReferenceEquals(page, SystemInfoPage))
             _hardwareTimer.Start();
         else
@@ -128,9 +147,16 @@ public partial class MainWindow : Window
 
     private async void Scan_Click(object sender, RoutedEventArgs e)
     {
+        await RunScanAsync(navigateToResults: true);
+    }
+
+    private async Task RunScanAsync(bool navigateToResults)
+    {
+        if (_viewModel.IsBusy) return;
         ShowPage(HomePage, "Home");
         await _viewModel.ScanAsync();
-        if (_viewModel.AvailableCount > 0)
+        ShowUpdatesNotification();
+        if (navigateToResults && _viewModel.AvailableCount > 0)
             ShowPage(UpdatesPage, "Aggiornamenti");
     }
 
@@ -194,8 +220,11 @@ public partial class MainWindow : Window
         _viewModel.SaveSettings();
         ThemeService.Apply(_viewModel.Settings.ThemeMode);
         TypographyService.Apply(_viewModel.Settings.FontSizeMode);
+        if (_notifyIcon is not null)
+            _notifyIcon.Visible = _viewModel.Settings.NotifyWhenUpdatesAreAvailable;
         ApplyResponsiveLayout();
-        MessageBox.Show("Impostazioni salvate.", "Update Center", MessageBoxButton.OK, MessageBoxImage.Information);
+        MessageBox.Show(LocalizationService.Text("Impostazioni salvate.", "Settings saved."),
+            "Update Center", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void ThemeChoice_Click(object sender, RoutedEventArgs e)
@@ -233,6 +262,25 @@ public partial class MainWindow : Window
         LargeFontChoice.IsChecked = mode == "Grande";
     }
 
+    private void LanguageChoice_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton { Tag: string language }) return;
+        _viewModel.Settings.LanguageMode = LocalizationService.Normalize(language);
+        LocalizationService.Initialize(_viewModel.Settings.LanguageMode);
+        _viewModel.SaveSettings();
+        LocalizationService.ApplyTo(this);
+        ApplyResponsiveLayout();
+        UpdateLanguageChoices();
+        _viewModel.NotifyLanguageChanged();
+    }
+
+    private void UpdateLanguageChoices()
+    {
+        var language = LocalizationService.Normalize(_viewModel.Settings.LanguageMode);
+        ItalianLanguageChoice.IsChecked = language == "it";
+        EnglishLanguageChoice.IsChecked = language == "en";
+    }
+
     private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyResponsiveLayout();
 
     private void ApplyResponsiveLayout()
@@ -241,6 +289,8 @@ public partial class MainWindow : Window
         var iconOnly = ActualWidth < 900;
         var compact = ActualWidth < 1120;
         var narrow = ActualWidth < 1000;
+        var shortDriverLayout = ActualHeight < 680;
+        var stackedUpdatesFooter = ActualWidth < 1120;
         var sidebarWidth = iconOnly ? 76d : narrow ? 205d : compact ? 230d : 260d;
         SidebarColumn.Width = new GridLength(sidebarWidth);
         TitleSidebarColumn.Width = new GridLength(sidebarWidth);
@@ -249,25 +299,43 @@ public partial class MainWindow : Window
         HomeStatusColumn.Width = new GridLength(iconOnly ? 210d : narrow ? 220d : compact ? 255d : 300d);
         UpdateFilterColumn.Width = new GridLength(iconOnly ? 135d : narrow ? 145d : 170d);
         DriverFilterColumn.Width = new GridLength(iconOnly ? 145d : narrow ? 160d : 190d);
+        UpdatesFooterSecondRow.Height = stackedUpdatesFooter ? GridLength.Auto : new GridLength(0);
+        Grid.SetRow(UpdatesFooterRight, stackedUpdatesFooter ? 1 : 0);
+        Grid.SetColumn(UpdatesFooterRight, stackedUpdatesFooter ? 0 : 2);
+        Grid.SetColumnSpan(UpdatesFooterRight, stackedUpdatesFooter ? 3 : 1);
+        UpdatesFooterRight.Margin = stackedUpdatesFooter ? new Thickness(0, 8, 0, 0) : new Thickness(0);
+        VisibleUpdatesText.Visibility = stackedUpdatesFooter ? Visibility.Collapsed : Visibility.Visible;
 
         SidebarHeading.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         SidebarSourceCard.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         AppNameText.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         VersionBadge.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         HistoryHintBadge.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        DriverSummaryPanel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        DriverSummaryPanel.Visibility = compact || shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
+        DriverMachineName.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
+        DriverSourceDescription.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
+        DriverHeaderCard.Padding = shortDriverLayout ? new Thickness(14) : new Thickness(18);
+        if (_shortDriverLayout != shortDriverLayout)
+        {
+            DriverVendorExpander.IsExpanded = !shortDriverLayout;
+            _shortDriverLayout = shortDriverLayout;
+        }
+        HomeStatusCard.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
+        HomeStatusColumn.Width = new GridLength(iconOnly ? 0d : narrow ? 220d : compact ? 255d : 300d);
+        Grid.SetColumnSpan(HomeHeroContent, iconOnly ? 2 : 1);
         BrandPanel.HorizontalAlignment = iconOnly ? HorizontalAlignment.Center : HorizontalAlignment.Left;
         BrandPanel.Margin = iconOnly ? new Thickness(0) : new Thickness(20, 0, 0, 0);
 
-        SetNavigationAppearance(HomeNav, iconOnly ? "⌂" : "⌂   Home", iconOnly);
-        SetNavigationAppearance(UpdatesNav, iconOnly ? "↓" : "↓   Aggiornamenti", iconOnly);
-        SetNavigationAppearance(SystemInfoNav, iconOnly ? "▤" : "▤   Hardware", iconOnly);
-        SetNavigationAppearance(HardwareNav, iconOnly ? "▣" : "▣   Driver e chipset", iconOnly);
-        SetNavigationAppearance(HistoryNav, iconOnly ? "◷" : "◷   Cronologia", iconOnly);
-        SetNavigationAppearance(SettingsNav, iconOnly ? "⚙" : "⚙   Impostazioni", iconOnly);
+        SetNavigationAppearance(HomeNav, iconOnly ? "⌂" : $"⌂   {LocalizationService.Translate("Home")}", iconOnly);
+        SetNavigationAppearance(UpdatesNav, iconOnly ? "↓" : $"↓   {LocalizationService.Translate("Aggiornamenti")}", iconOnly);
+        SetNavigationAppearance(SystemInfoNav, iconOnly ? "▤" : $"▤   {LocalizationService.Translate("Hardware")}", iconOnly);
+        SetNavigationAppearance(HardwareNav, iconOnly ? "▣" : $"▣   {LocalizationService.Translate("Driver e chipset")}", iconOnly);
+        SetNavigationAppearance(HistoryNav, iconOnly ? "◷" : $"◷   {LocalizationService.Translate("Cronologia")}", iconOnly);
+        SetNavigationAppearance(SettingsNav, iconOnly ? "⚙" : $"⚙   {LocalizationService.Translate("Impostazioni")}", iconOnly);
+        SetNavigationAppearance(AboutNav, iconOnly ? "ⓘ" : $"ⓘ   {LocalizationService.Translate("Informazioni")}", iconOnly);
     }
 
-    private static void SetNavigationAppearance(Button button, string content, bool centered)
+    private static void SetNavigationAppearance(System.Windows.Controls.Button button, string content, bool centered)
     {
         button.Content = content;
         button.HorizontalContentAlignment = centered ? HorizontalAlignment.Center : HorizontalAlignment.Left;
@@ -340,6 +408,69 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo("explorer.exe", AppPaths.LogsDirectory) { UseShellExecute = true });
     }
 
+    private void DriverInventoryGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (HardwarePage.Visibility != Visibility.Visible || HardwarePage.ScrollableHeight <= 0) return;
+        HardwarePage.ScrollToVerticalOffset(HardwarePage.VerticalOffset - (e.Delta / 3d));
+        e.Handled = true;
+    }
+
+    private async void ScheduledScanTimer_Tick(object? sender, EventArgs e)
+    {
+        if (_scheduledScanRunning || _viewModel.IsBusy || !_viewModel.IsScheduledScanDue) return;
+        _scheduledScanRunning = true;
+        try
+        {
+            await RunScanAsync(navigateToResults: false);
+        }
+        finally
+        {
+            _scheduledScanRunning = false;
+        }
+    }
+
+    private void InitializeNotificationIcon()
+    {
+        try
+        {
+            var executable = Environment.ProcessPath;
+            var icon = string.IsNullOrWhiteSpace(executable)
+                ? null
+                : System.Drawing.Icon.ExtractAssociatedIcon(executable);
+            _notifyIcon = new System.Windows.Forms.NotifyIcon
+            {
+                Icon = icon ?? System.Drawing.SystemIcons.Information,
+                Text = "Update Center",
+                Visible = _viewModel.Settings.NotifyWhenUpdatesAreAvailable
+            };
+            _notifyIcon.BalloonTipClicked += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                Show();
+                Activate();
+                ShowPage(UpdatesPage, "Aggiornamenti");
+            }));
+        }
+        catch (Exception ex)
+        {
+            LogService.Write("Icona notifiche non disponibile.", ex);
+        }
+    }
+
+    private void ShowUpdatesNotification()
+    {
+        if (!_viewModel.Settings.NotifyWhenUpdatesAreAvailable ||
+            _viewModel.AvailableCount == 0 || _notifyIcon is null)
+            return;
+
+        _notifyIcon.BalloonTipTitle = "Update Center";
+        _notifyIcon.BalloonTipText = LocalizationService.IsEnglish
+            ? $"{_viewModel.AvailableCount} updates are ready to review."
+            : $"{_viewModel.AvailableCount} aggiornamenti disponibili da controllare.";
+        _notifyIcon.BalloonTipIcon = System.Windows.Forms.ToolTipIcon.Info;
+        _notifyIcon.ShowBalloonTip(8000);
+    }
+
     private void OpenSystemProtection_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -394,13 +525,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void HistoryDetail_MouseEnter(object sender, MouseEventArgs e)
+    private void HistoryDetail_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: HistoryEntry entry } element) return;
         ArmHistoryDetail(element, entry);
     }
 
-    private void HistoryDetail_MouseLeave(object sender, MouseEventArgs e)
+    private void HistoryDetail_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (HistoryDetailPopup.IsOpen) return;
         _historyHoverTimer.Stop();
@@ -450,9 +581,12 @@ public partial class MainWindow : Window
         }
 
         HistoryDetailTitle.Text = _pendingHistoryEntry.Name;
-        HistoryDetailText.Text = string.IsNullOrWhiteSpace(_pendingHistoryEntry.Details)
+        var readableDetails = string.IsNullOrWhiteSpace(_pendingHistoryEntry.Details)
             ? "Nessun dettaglio disponibile per questa operazione."
             : _pendingHistoryEntry.Details;
+        HistoryDetailText.Text = string.IsNullOrWhiteSpace(_pendingHistoryEntry.Diagnostics)
+            ? readableDetails
+            : $"{readableDetails}\n\n--- Diagnostica tecnica ---\n{_pendingHistoryEntry.Diagnostics}";
         HistoryDetailStatus.Text = "";
         HistoryDetailPopup.PlacementTarget = _pendingHistoryElement;
         HistoryDetailPopup.IsOpen = true;
@@ -492,13 +626,13 @@ public partial class MainWindow : Window
         _pendingHistoryElement = null;
     }
 
-    private static CustomPopupPlacement[] PlaceHistoryDetailPopup(Size popupSize, Size targetSize, Point offset)
+    private static CustomPopupPlacement[] PlaceHistoryDetailPopup(System.Windows.Size popupSize, System.Windows.Size targetSize, System.Windows.Point offset)
     {
         var horizontal = Math.Min(0, targetSize.Width - popupSize.Width);
         return
         [
-            new CustomPopupPlacement(new Point(horizontal, targetSize.Height + 8), PopupPrimaryAxis.Vertical),
-            new CustomPopupPlacement(new Point(horizontal, -popupSize.Height - 8), PopupPrimaryAxis.Vertical)
+            new CustomPopupPlacement(new System.Windows.Point(horizontal, targetSize.Height + 8), PopupPrimaryAxis.Vertical),
+            new CustomPopupPlacement(new System.Windows.Point(horizontal, -popupSize.Height - 8), PopupPrimaryAxis.Vertical)
         ];
     }
 

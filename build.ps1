@@ -7,7 +7,6 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = Join-Path $projectRoot 'UpdateCenter.csproj'
 $output = Join-Path $projectRoot 'dist'
-$uninstallerTemplate = Join-Path $projectRoot 'Assets\PackageRemoval.template'
 $projectXml = [xml](Get-Content -LiteralPath $project -Raw)
 $versionNode = $projectXml.SelectSingleNode('/Project/PropertyGroup/Version')
 $packageVersion = if ($null -ne $versionNode) { $versionNode.InnerText.Trim() } else { '' }
@@ -86,6 +85,5 @@ il controllo di dominio ufficiale, ID hardware, Windows/architettura, SHA-256 e 
 BIOS e firmware restano esclusi dall'installazione automatica.
 "@
 Set-Content -Path (Join-Path $output 'LEGGIMI.txt') -Value $readme -Encoding UTF8
-Copy-Item -LiteralPath $uninstallerTemplate -Destination (Join-Path $output 'UNINSTALLA.bat') -Force
 
 Write-Host "`nOperazione completata: $exe" -ForegroundColor Green

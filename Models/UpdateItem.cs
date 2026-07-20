@@ -18,8 +18,9 @@ public static class DriverInstallModes
 public sealed class UpdateItem : INotifyPropertyChanged
 {
     private bool _isSelected = true;
-    private string _status = "Da aggiornare";
+    private string _status = Services.LocalizationService.Text("Da aggiornare", "Update available");
     private string _resultDetails = "";
+    private string _diagnostics = "";
     private double _progress;
 
     public bool IsSelected
@@ -31,7 +32,9 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public required string Id { get; init; }
     public required string Name { get; init; }
     public required UpdateKind Kind { get; init; }
-    public string KindLabel => Kind == UpdateKind.Software ? "Software" : "Driver";
+    public string KindLabel => Kind == UpdateKind.Software
+        ? "Software"
+        : UpdateCenter.Services.LocalizationService.Text("Driver", "Driver");
     public string Publisher { get; init; } = "";
     public string InstalledVersion { get; init; } = "—";
     public string AvailableVersion { get; init; } = "—";
@@ -57,17 +60,31 @@ public sealed class UpdateItem : INotifyPropertyChanged
         ? Source
         : $"{Source} · {SourceConfidence}";
     public string PriorityLabel => IsImportant
-        ? "Importante"
-        : IsOptional ? "Facoltativo" : "Standard";
-    public string PriorityDescription => IsImportant
-        ? "Aggiornamento obbligatorio o di sicurezza secondo la fonte ufficiale."
+        ? UpdateCenter.Services.LocalizationService.Text("Importante", "Important")
         : IsOptional
-            ? "Driver non selezionato automaticamente da Windows Update."
+            ? UpdateCenter.Services.LocalizationService.Text("Facoltativo", "Optional")
+            : "Standard";
+    public string PriorityDescription => IsImportant
+        ? UpdateCenter.Services.LocalizationService.Text(
+            "Aggiornamento obbligatorio o di sicurezza secondo la fonte ufficiale.",
+            "Mandatory or security update according to the source.")
+        : IsOptional
+            ? UpdateCenter.Services.LocalizationService.Text(
+                "Driver non selezionato automaticamente da Windows Update.",
+                "Driver not automatically selected by Windows Update.")
             : Kind == UpdateKind.Software
-                ? "Aggiornamento software standard disponibile tramite WinGet; non costituisce una raccomandazione."
-                : "Driver selezionato automaticamente da Windows Update, senza priorità di sicurezza dichiarata.";
-    public string RestartLabel => RequiresRestart ? "Sì" : "No";
-    public bool CanRetry => Status.Equals("Errore", StringComparison.OrdinalIgnoreCase);
+                ? UpdateCenter.Services.LocalizationService.Text(
+                    "Aggiornamento software standard disponibile tramite WinGet; non costituisce una raccomandazione.",
+                    "Standard software update available through WinGet; this is not a recommendation.")
+                : UpdateCenter.Services.LocalizationService.Text(
+                    "Driver selezionato automaticamente da Windows Update, senza priorità di sicurezza dichiarata.",
+                    "Driver automatically selected by Windows Update, with no declared security priority.");
+    public string RestartLabel => RequiresRestart
+        ? UpdateCenter.Services.LocalizationService.Text("Sì", "Yes")
+        : "No";
+    public bool CanRetry => Status.Equals("Errore", StringComparison.OrdinalIgnoreCase) ||
+                            Status.Equals("Error", StringComparison.OrdinalIgnoreCase);
+    public bool CanShowDetails => !string.IsNullOrWhiteSpace(ResultDetails) || !string.IsNullOrWhiteSpace(Diagnostics);
 
     public string Status
     {
@@ -83,7 +100,23 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public string ResultDetails
     {
         get => _resultDetails;
-        set { _resultDetails = value ?? ""; OnPropertyChanged(); }
+        set
+        {
+            _resultDetails = value ?? "";
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanShowDetails));
+        }
+    }
+
+    public string Diagnostics
+    {
+        get => _diagnostics;
+        set
+        {
+            _diagnostics = value ?? "";
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanShowDetails));
+        }
     }
 
     public double Progress
@@ -93,6 +126,15 @@ public sealed class UpdateItem : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    public void RefreshLocalizedProperties()
+    {
+        Status = UpdateCenter.Services.LocalizationService.Translate(Status);
+        OnPropertyChanged(nameof(KindLabel));
+        OnPropertyChanged(nameof(PriorityLabel));
+        OnPropertyChanged(nameof(PriorityDescription));
+        OnPropertyChanged(nameof(RestartLabel));
+    }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

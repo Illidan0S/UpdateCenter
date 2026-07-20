@@ -19,8 +19,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private CancellationTokenSource? _scanCancellation;
     private bool _isBusy;
     private double _progress;
-    private string _statusText = "Pronto per la scansione";
-    private string _currentItemText = "Software e driver verranno verificati tramite fonti ufficiali.";
+    private string _statusText = LocalizationService.Text("Pronto per la scansione", "Ready to scan");
+    private string _currentItemText = LocalizationService.Text("Premi Avvia scansione per iniziare.", "Select Start scan to begin.");
     private string _searchText = "";
     private string _filter = "Tutti";
     private string _driverSearchText = "";
@@ -34,14 +34,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _hardwareOverviewLoading;
     private bool _hardwareMetricsLoading;
     private bool _isAppUpdateCheckBusy;
-    private string _appUpdateStatus = "Controllo aggiornamenti dell'app non ancora eseguito.";
+    private string _appUpdateStatus = LocalizationService.Text(
+        "Controllo aggiornamenti dell'app non ancora eseguito.",
+        "The app update check has not run yet.");
 
     public MainViewModel()
     {
         AppPaths.EnsureCreated();
         Settings = JsonStorage.LoadSettings();
         if (Settings.LastAppUpdateCheckUtc is DateTime lastUpdateCheck)
-            _appUpdateStatus = $"Ultimo controllo: {lastUpdateCheck.ToLocalTime():dd/MM/yyyy HH:mm}.";
+            _appUpdateStatus = LocalizationService.IsEnglish
+                ? $"Last check: {lastUpdateCheck.ToLocalTime():MM/dd/yyyy HH:mm}."
+                : $"Ultimo controllo: {lastUpdateCheck.ToLocalTime():dd/MM/yyyy HH:mm}.";
         foreach (var entry in JsonStorage.LoadHistory()) History.Add(entry);
         UpdatesView = CollectionViewSource.GetDefaultView(Updates);
         UpdatesView.Filter = FilterUpdate;
@@ -102,13 +106,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int DriverUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Driver);
     public int VendorCheckCount => VendorTools.Count;
     public string LastScanLabel => Settings.LastScanUtc is DateTime timestamp
-        ? timestamp.ToLocalTime().ToString("dd/MM/yyyy 'alle' HH:mm")
-        : "Nessuna scansione completata";
+        ? LocalizationService.IsEnglish
+            ? timestamp.ToLocalTime().ToString("MM/dd/yyyy 'at' HH:mm", LocalizationService.Culture)
+            : timestamp.ToLocalTime().ToString("dd/MM/yyyy 'alle' HH:mm", LocalizationService.Culture)
+        : LocalizationService.Text("Nessuna scansione completata", "No completed scans");
     public string HomeScanSummary => !_hasCurrentScan
-        ? "Avvia una scansione per ottenere risultati aggiornati."
+        ? LocalizationService.Text("Avvia una scansione per ottenere risultati aggiornati.", "Start a scan to get current results.")
         : AvailableCount == 0
-            ? "Nessun aggiornamento disponibile al momento."
-            : $"{SoftwareUpdateCount} software e {DriverUpdateCount} driver da controllare.";
+            ? LocalizationService.Text("Nessun aggiornamento disponibile al momento.", "No updates are currently available.")
+            : LocalizationService.IsEnglish
+                ? $"{SoftwareUpdateCount} software and {DriverUpdateCount} driver updates to review."
+                : $"{SoftwareUpdateCount} software e {DriverUpdateCount} driver da controllare.";
     public IReadOnlyList<UpdateItem> SelectedItems => Updates.Where(x => x.IsSelected).ToList();
     public bool IsAppUpdateCheckBusy
     {
@@ -127,8 +135,25 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set { _appUpdateStatus = value; OnPropertyChanged(); }
     }
     public string LastAppUpdateCheckLabel => Settings.LastAppUpdateCheckUtc is DateTime timestamp
-        ? timestamp.ToLocalTime().ToString("dd/MM/yyyy 'alle' HH:mm")
-        : "Mai eseguito";
+        ? LocalizationService.IsEnglish
+            ? timestamp.ToLocalTime().ToString("MM/dd/yyyy 'at' HH:mm", LocalizationService.Culture)
+            : timestamp.ToLocalTime().ToString("dd/MM/yyyy 'alle' HH:mm", LocalizationService.Culture)
+        : LocalizationService.Text("Mai eseguito", "Never");
+
+    public bool IsScheduledScanDue
+    {
+        get
+        {
+            var interval = Settings.AutomaticScanInterval switch
+            {
+                "Daily" => TimeSpan.FromDays(1),
+                "Weekly" => TimeSpan.FromDays(7),
+                _ => TimeSpan.MaxValue
+            };
+            return interval != TimeSpan.MaxValue &&
+                   (Settings.LastScanUtc is not DateTime last || DateTime.UtcNow - last >= interval);
+        }
+    }
 
     public string CpuName
     {
@@ -180,11 +205,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ScannedCount = 0;
         _hasCurrentScan = false;
         OnPropertyChanged(nameof(HomeScanSummary));
-        StatusText = "Scansione in corso";
-        CurrentItemText = "Preparazione dei servizi di aggiornamento…";
+        StatusText = T("Scansione in corso", "Scan in progress");
+        CurrentItemText = T("Preparazione dei servizi di aggiornamento…", "Preparing update services…");
         ClearUpdates();
         ClearHardware();
-        HardwareCheckStatus = "Controllo automatico dei driver in corso…";
+        HardwareCheckStatus = T("Controllo automatico dei driver in corso…", "Automatic driver check in progress…");
         _scanCancellation = new CancellationTokenSource();
         var warnings = new List<string>();
         HardwareScanResult? hardwareScan = null;
@@ -195,7 +220,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             Progress = 12;
-            CurrentItemText = "Ricerca dei software aggiornabili con WinGet…";
+            CurrentItemText = T("Ricerca dei software aggiornabili con WinGet…", "Searching for software updates with WinGet…");
             try
             {
                 var software = await _winGet.ScanAsync(Settings.IncludeUnknownVersions, _scanCancellation.Token);
@@ -209,7 +234,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             Progress = 38;
-            CurrentItemText = "Inventario di processore, chipset e driver installati…";
+            CurrentItemText = T("Inventario di processore, chipset e driver installati…", "Inventorying processor, chipset and installed drivers…");
             try
             {
                 hardwareScan = await _hardwareInventory.ScanAsync(_scanCancellation.Token);
@@ -222,7 +247,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             Progress = 68;
-            CurrentItemText = "Ricerca dei driver proposti da Windows Update…";
+            CurrentItemText = T("Ricerca dei driver proposti da Windows Update…", "Searching for drivers offered by Windows Update…");
             try
             {
                 var driverScan = await _windowsUpdate.ScanDriversAsync(
@@ -238,13 +263,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 warnings.Add(ex.Message);
                 LogService.Write("Scansione driver fallita.", ex);
-                HardwareCheckStatus = "Controllo automatico dei driver non completato.";
+                HardwareCheckStatus = T("Controllo automatico dei driver non completato.", "The automatic driver check did not complete.");
             }
 
             if (hardwareScan is not null)
             {
                 Progress = 84;
-                CurrentItemText = "Confronto con il catalogo verificato dei produttori…";
+                CurrentItemText = T("Confronto con il catalogo verificato dei produttori…", "Comparing with the verified manufacturer catalog…");
                 try
                 {
                     var catalogScan = await _officialDriverCatalog.ScanAsync(
@@ -268,20 +293,30 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ApplyHardware(hardwareScan);
                 var sourceLabel = string.Join(", ", driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase));
                 var verifiedCount = microsoftDriverCount + catalogDriverCount;
-                HardwareCheckStatus = verifiedCount > 0
-                    ? $"{verifiedCount} aggiornamenti driver verificati ({microsoftDriverCount} Microsoft, {catalogDriverCount} produttori). Fonti: {sourceLabel}."
-                    : $"Nessun driver installabile verificato. Controllate {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} fonti automatiche; disponibili {hardwareScan.VendorTools.Count} controlli manuali ufficiali senza app aggiuntive.";
+                HardwareCheckStatus = LocalizationService.IsEnglish
+                    ? verifiedCount > 0
+                        ? $"{verifiedCount} verified driver updates ({microsoftDriverCount} Microsoft, {catalogDriverCount} manufacturers). Sources: {sourceLabel}."
+                        : $"No verified installable drivers. Checked {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} automatic sources; {hardwareScan.VendorTools.Count} manual manufacturer checks are available without extra apps."
+                    : verifiedCount > 0
+                        ? $"{verifiedCount} aggiornamenti driver verificati ({microsoftDriverCount} Microsoft, {catalogDriverCount} produttori). Fonti: {sourceLabel}."
+                        : $"Nessun driver installabile verificato. Controllate {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} fonti automatiche; disponibili {hardwareScan.VendorTools.Count} controlli manuali ufficiali senza app aggiuntive.";
             }
 
             Progress = 100;
             StatusText = warnings.Count > 0 && Updates.Count == 0
-                ? "Scansione incompleta"
+                ? T("Scansione incompleta", "Incomplete scan")
                 : Updates.Count == 0
-                    ? "Il PC risulta aggiornato"
-                    : $"{Updates.Count} aggiornamenti disponibili";
+                    ? T("Il PC risulta aggiornato", "The PC is up to date")
+                    : LocalizationService.IsEnglish
+                        ? $"{Updates.Count} updates available"
+                        : $"{Updates.Count} aggiornamenti disponibili";
             CurrentItemText = warnings.Count == 0
-                ? "Scansione completata usando WinGet, Windows Update e il catalogo verificato dei produttori."
-                : $"Scansione completata con avvisi: {string.Join(" · ", warnings)}";
+                ? T(
+                    "Scansione completata usando WinGet, Windows Update e il catalogo verificato dei produttori.",
+                    "Scan completed using WinGet, Windows Update and the verified manufacturer catalog.")
+                : LocalizationService.IsEnglish
+                    ? $"Scan completed with warnings: {string.Join(" · ", warnings)}"
+                    : $"Scansione completata con avvisi: {string.Join(" · ", warnings)}";
             _hasCurrentScan = true;
             Settings.LastScanUtc = DateTime.UtcNow;
             JsonStorage.SaveSettings(Settings);
@@ -290,9 +325,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         catch (OperationCanceledException)
         {
-            StatusText = "Scansione annullata";
-            CurrentItemText = "Puoi avviare una nuova scansione.";
-            HardwareCheckStatus = "Controllo automatico annullato.";
+            StatusText = T("Scansione annullata", "Scan cancelled");
+            CurrentItemText = T("Puoi avviare una nuova scansione.", "You can start a new scan.");
+            HardwareCheckStatus = T("Controllo automatico annullato.", "Automatic check cancelled.");
         }
         finally
         {
@@ -314,7 +349,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return null;
 
         IsAppUpdateCheckBusy = true;
-        AppUpdateStatus = "Controllo della Release stabile più recente…";
+        AppUpdateStatus = T("Controllo della Release stabile più recente…", "Checking the latest stable release…");
         var checkAttempted = false;
         try
         {
@@ -324,25 +359,29 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var update = await _appUpdateService.CheckForUpdateAsync(CancellationToken.None);
             if (update is null)
             {
-                AppUpdateStatus = "Update Center è aggiornato.";
+                AppUpdateStatus = T("Update Center è aggiornato.", "Update Center is up to date.");
                 return null;
             }
 
             if (Settings.IgnoredAppVersion.Equals(update.AvailableVersion.ToString(), StringComparison.OrdinalIgnoreCase))
             {
-                AppUpdateStatus = $"La versione v{update.AvailableVersion} è stata ignorata.";
+                AppUpdateStatus = LocalizationService.IsEnglish
+                    ? $"Version v{update.AvailableVersion} is ignored."
+                    : $"La versione v{update.AvailableVersion} è stata ignorata.";
                 return null;
             }
 
-            AppUpdateStatus = $"Disponibile Update Center v{update.AvailableVersion}.";
+            AppUpdateStatus = LocalizationService.IsEnglish
+                ? $"Update Center v{update.AvailableVersion} is available."
+                : $"Disponibile Update Center v{update.AvailableVersion}.";
             return update;
         }
         catch (Exception ex)
         {
             LogService.Write("Controllo aggiornamenti dell'app non riuscito.", ex);
             AppUpdateStatus = manual
-                ? "Controllo non riuscito. Verifica la connessione e riprova."
-                : "Controllo automatico non disponibile; l'app continuerà normalmente.";
+                ? T("Controllo non riuscito. Verifica la connessione e riprova.", "Check failed. Verify your connection and try again.")
+                : T("Controllo automatico non disponibile; l'app continuerà normalmente.", "Automatic check unavailable; the app will continue normally.");
             return null;
         }
         finally
@@ -361,7 +400,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         Settings.IgnoredAppVersion = version.ToString();
         JsonStorage.SaveSettings(Settings);
-        AppUpdateStatus = $"La versione v{version} non verrà più proposta.";
+        AppUpdateStatus = LocalizationService.IsEnglish
+            ? $"Version v{version} will no longer be offered."
+            : $"La versione v{version} non verrà più proposta.";
     }
 
     public async Task LoadHardwareOverviewAsync(bool force = false)
@@ -419,12 +460,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         IsBusy = true;
         Progress = 0;
-        StatusText = "Aggiornamento in corso";
-        CurrentItemText = "Conferma la richiesta di Controllo account utente di Windows.";
+        StatusText = T("Aggiornamento in corso", "Update in progress");
+        CurrentItemText = T("Conferma la richiesta di Controllo account utente di Windows.", "Confirm the Windows User Account Control prompt if requested.");
         foreach (var item in selected)
         {
-            item.Status = "In attesa";
-            item.ResultDetails = "In attesa dell'installazione.";
+            item.Status = T("In attesa", "Waiting");
+            item.ResultDetails = T("In attesa dell'installazione.", "Waiting for installation.");
         }
 
         try
@@ -436,16 +477,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     Progress = status.Total == 0 ? 0 : status.CurrentIndex * 100d / status.Total;
                     CurrentItemText = status.Message;
                     StatusText = string.IsNullOrWhiteSpace(status.CurrentName)
-                        ? "Aggiornamento in corso"
-                        : $"Aggiornamento: {status.CurrentName}";
+                        ? T("Aggiornamento in corso", "Update in progress")
+                        : LocalizationService.IsEnglish ? $"Updating: {status.CurrentName}" : $"Aggiornamento: {status.CurrentName}";
 
                     foreach (var runResult in status.Results)
                     {
                         var item = Updates.FirstOrDefault(x => x.Id == runResult.Id);
                         if (item is not null)
                         {
-                            item.Status = runResult.Success ? "Aggiornato" : "Errore";
+                            item.Status = runResult.Success ? T("Aggiornato", "Updated") : T("Errore", "Error");
                             item.ResultDetails = runResult.Message;
+                            item.Diagnostics = runResult.Diagnostics;
                         }
                     }
                 });
@@ -453,29 +495,33 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             SaveRunToHistory(selected, result);
             Progress = 100;
-            StatusText = result.Results.All(x => x.Success) ? "Aggiornamenti completati" : "Completato con alcuni errori";
+            StatusText = result.Results.All(x => x.Success)
+                ? T("Aggiornamenti completati", "Updates completed")
+                : T("Completato con alcuni errori", "Completed with some errors");
             CurrentItemText = result.Message;
             return result;
         }
         catch (OperationCanceledException ex)
         {
-            StatusText = "Aggiornamento annullato";
+            StatusText = T("Aggiornamento annullato", "Update cancelled");
             CurrentItemText = ex.Message;
-            foreach (var item in selected.Where(x => x.Status == "In attesa"))
+            foreach (var item in selected.Where(x =>
+                         x.Status.Equals("In attesa", StringComparison.OrdinalIgnoreCase) ||
+                         x.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)))
             {
-                item.Status = "Da aggiornare";
-                item.ResultDetails = "Operazione annullata prima dell'installazione.";
+                item.Status = T("Da aggiornare", "Update available");
+                item.ResultDetails = T("Operazione annullata prima dell'installazione.", "Operation cancelled before installation.");
             }
             return null;
         }
         catch (Exception ex)
         {
             LogService.Write("Aggiornamento selezionato fallito.", ex);
-            StatusText = "Aggiornamento non avviato";
+            StatusText = T("Aggiornamento non avviato", "Update not started");
             CurrentItemText = ex.Message;
             foreach (var item in selected)
             {
-                item.Status = "Errore";
+                item.Status = T("Errore", "Error");
                 item.ResultDetails = ex.Message;
             }
             return null;
@@ -509,7 +555,27 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(HomeScanSummary));
     }
 
-    public void SaveSettings() => JsonStorage.SaveSettings(Settings);
+    public void SaveSettings()
+    {
+        Settings.LanguageMode = LocalizationService.Normalize(Settings.LanguageMode);
+        Settings.AutomaticScanInterval = Settings.AutomaticScanInterval is "Daily" or "Weekly"
+            ? Settings.AutomaticScanInterval
+            : "Off";
+        JsonStorage.SaveSettings(Settings);
+    }
+
+    public void NotifyLanguageChanged()
+    {
+        StatusText = LocalizationService.Translate(StatusText);
+        CurrentItemText = LocalizationService.Translate(CurrentItemText);
+        AppUpdateStatus = LocalizationService.Translate(AppUpdateStatus);
+        foreach (var item in Updates) item.RefreshLocalizedProperties();
+        OnPropertyChanged(nameof(LastScanLabel));
+        OnPropertyChanged(nameof(HomeScanSummary));
+        OnPropertyChanged(nameof(LastAppUpdateCheckLabel));
+        OnPropertyChanged(nameof(AppUpdateStatus));
+        NotifyCounts();
+    }
 
     public void ClearHistory()
     {
@@ -583,7 +649,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             "Facoltativi" => item.IsOptional,
             "Selezionati" => item.IsSelected,
             "Riavvio richiesto" => item.RequiresRestart,
-            "Errori" => item.Status.Equals("Errore", StringComparison.OrdinalIgnoreCase),
+            "Errori" => item.Status.Equals("Errore", StringComparison.OrdinalIgnoreCase) ||
+                        item.Status.Equals("Error", StringComparison.OrdinalIgnoreCase),
             _ => true
         };
         var searchMatches = string.IsNullOrWhiteSpace(SearchText) ||
@@ -653,7 +720,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 FromVersion = item?.InstalledVersion ?? "",
                 ToVersion = item?.AvailableVersion ?? "",
                 Result = runResult.Success ? "Riuscito" : "Fallito",
-                Details = BuildReadableHistoryDetails(item, runResult)
+                Details = BuildReadableHistoryDetails(item, runResult),
+                Diagnostics = runResult.Diagnostics
             };
             History.Insert(0, entry);
         }
@@ -680,6 +748,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+    private static string T(string italian, string english) => LocalizationService.Text(italian, english);
     private void OnPropertyChanged([CallerMemberName] string? name = null) =>
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

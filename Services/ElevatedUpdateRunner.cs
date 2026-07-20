@@ -7,7 +7,7 @@ namespace UpdateCenter.Services;
 
 public static class ElevatedUpdateRunner
 {
-    public static int Run(string planPath)
+    public static int Run(string planPath, bool requireAdministrator)
     {
         if (!OperatingSystem.IsWindows()) return 2;
 
@@ -29,7 +29,7 @@ public static class ElevatedUpdateRunner
             };
             WriteStatus(plan.StatusFile, status);
 
-            if (!IsAdministrator())
+            if (requireAdministrator && !IsAdministrator())
                 throw new UnauthorizedAccessException("I privilegi di amministratore non sono stati concessi.");
 
             if (plan.CreateRestorePoint)
@@ -99,6 +99,10 @@ public static class ElevatedUpdateRunner
                 .Select(x => x.Trim())
                 .Where(x => x.Length > 2)
                 .TakeLast(4));
+            var alreadyCurrentMessage = result.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Trim())
+                .FirstOrDefault(x => x.Contains("risulta già aggiornato", StringComparison.OrdinalIgnoreCase));
 
             return new ItemRunResult
             {
@@ -106,8 +110,11 @@ public static class ElevatedUpdateRunner
                 Name = item.Name,
                 Kind = item.Kind,
                 Success = result.Success,
-                Message = result.Success ? "Software aggiornato con WinGet." :
-                    (string.IsNullOrWhiteSpace(output) ? $"WinGet ha restituito il codice {result.ExitCode}." : output)
+                Message = result.Success
+                    ? alreadyCurrentMessage ?? "Software aggiornato con WinGet."
+                    :
+                    (string.IsNullOrWhiteSpace(output) ? $"WinGet ha restituito il codice {result.ExitCode}." : output),
+                Diagnostics = BuildProcessDiagnostics(result)
             };
         }
         catch (Exception ex)
@@ -119,9 +126,24 @@ public static class ElevatedUpdateRunner
                 Name = item.Name,
                 Kind = item.Kind,
                 Success = false,
-                Message = ex.Message
+                Message = ex.Message,
+                Diagnostics = ex.ToString()
             };
         }
+    }
+
+    private static string BuildProcessDiagnostics(ProcessResult result)
+    {
+        var lines = new List<string>
+        {
+            $"Codice di uscita: {result.ExitCode}",
+            $"Comando/i eseguiti:\n{result.CommandLine}"
+        };
+        if (!string.IsNullOrWhiteSpace(result.StandardOutput))
+            lines.Add("Output:\n" + result.StandardOutput.Trim());
+        if (!string.IsNullOrWhiteSpace(result.StandardError))
+            lines.Add("Errori:\n" + result.StandardError.Trim());
+        return string.Join("\n\n", lines);
     }
 
     private static bool TryCreateRestorePoint(out string message)
@@ -194,6 +216,50 @@ public sealed class UpdateCoordinator
         CancellationToken cancellationToken)
     {
         AppPaths.EnsureCreated();
+        var software = selectedItems.Where(x => x.Kind == UpdateKind.Software).ToList();
+        var drivers = selectedItems.Where(x => x.Kind == UpdateKind.Driver).ToList();
+        var aggregate = new UpdateRunStatus
+        {
+            State = "Running",
+            Total = selectedItems.Count,
+            Message = "Preparazione aggiornamenti…"
+        };
+
+        if (software.Count > 0)
+        {
+            var softwareResult = await RunBatchAsync(
+                software, settings, requireAdministrator: false, aggregate.Results.Count,
+                aggregate, progress, cancellationToken);
+            MergeBatch(aggregate, softwareResult);
+        }
+
+        if (drivers.Count > 0)
+        {
+            var driverResult = await RunBatchAsync(
+                drivers, settings, requireAdministrator: true, aggregate.Results.Count,
+                aggregate, progress, cancellationToken);
+            MergeBatch(aggregate, driverResult);
+        }
+
+        aggregate.State = "Completed";
+        aggregate.CurrentIndex = aggregate.Results.Count;
+        aggregate.CurrentName = "";
+        aggregate.Message = aggregate.Results.All(x => x.Success)
+            ? "Tutti gli aggiornamenti selezionati sono terminati."
+            : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
+        progress(aggregate);
+        return aggregate;
+    }
+
+    private static async Task<UpdateRunStatus> RunBatchAsync(
+        IReadOnlyList<UpdateItem> selectedItems,
+        AppSettings settings,
+        bool requireAdministrator,
+        int completedBeforeBatch,
+        UpdateRunStatus aggregate,
+        Action<UpdateRunStatus> progress,
+        CancellationToken cancellationToken)
+    {
         var token = Guid.NewGuid().ToString("N");
         var planPath = Path.Combine(AppPaths.DataDirectory, $"update-plan-{token}.json");
         var statusPath = Path.Combine(AppPaths.DataDirectory, $"update-status-{token}.json");
@@ -234,11 +300,12 @@ public sealed class UpdateCoordinator
             var startInfo = new ProcessStartInfo
             {
                 FileName = executable,
-                UseShellExecute = true,
-                Verb = "runas",
+                UseShellExecute = requireAdministrator,
                 WorkingDirectory = AppContext.BaseDirectory
             };
-            startInfo.ArgumentList.Add("--elevated-update");
+            if (requireAdministrator)
+                startInfo.Verb = "runas";
+            startInfo.ArgumentList.Add(requireAdministrator ? "--update-runner-admin" : "--update-runner-user");
             startInfo.ArgumentList.Add(planPath);
 
             try
@@ -259,7 +326,7 @@ public sealed class UpdateCoordinator
                 if (current is not null)
                 {
                     latest = current;
-                    progress(current);
+                    progress(BuildAggregateProgress(aggregate, current, completedBeforeBatch));
                 }
                 await Task.Delay(350, cancellationToken);
             }
@@ -267,7 +334,7 @@ public sealed class UpdateCoordinator
             UpdateRunStatus final = JsonStorage.Read<UpdateRunStatus>(statusPath)
                 ?? latest
                 ?? throw new InvalidOperationException("Il processo di aggiornamento non ha restituito uno stato.");
-            progress(final);
+            progress(BuildAggregateProgress(aggregate, final, completedBeforeBatch));
             return final;
         }
         finally
@@ -276,6 +343,30 @@ public sealed class UpdateCoordinator
             TryDelete(planPath);
             TryDelete(statusPath);
         }
+    }
+
+    private static UpdateRunStatus BuildAggregateProgress(
+        UpdateRunStatus aggregate,
+        UpdateRunStatus batch,
+        int completedBeforeBatch) => new()
+    {
+        State = batch.State,
+        CurrentIndex = completedBeforeBatch + batch.CurrentIndex,
+        Total = aggregate.Total,
+        CurrentName = batch.CurrentName,
+        Message = batch.Message,
+        RestorePointRequested = aggregate.RestorePointRequested || batch.RestorePointRequested,
+        RestorePointCreated = aggregate.RestorePointCreated || batch.RestorePointCreated,
+        RestartRequired = aggregate.RestartRequired || batch.RestartRequired,
+        Results = aggregate.Results.Concat(batch.Results).ToList()
+    };
+
+    private static void MergeBatch(UpdateRunStatus aggregate, UpdateRunStatus batch)
+    {
+        aggregate.Results.AddRange(batch.Results);
+        aggregate.RestorePointRequested |= batch.RestorePointRequested;
+        aggregate.RestorePointCreated |= batch.RestorePointCreated;
+        aggregate.RestartRequired |= batch.RestartRequired;
     }
 
     private static void TryDelete(string path)
