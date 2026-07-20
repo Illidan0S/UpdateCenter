@@ -51,4 +51,5 @@ public sealed class ItemRunResult
     public bool Success { get; set; }
     public bool RestartRequired { get; set; }
     public string Message { get; set; } = "";
+    public string Diagnostics { get; set; } = "";
 }

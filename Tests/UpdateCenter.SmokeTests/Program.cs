@@ -1,4 +1,5 @@
 using UpdateCenter.Models;
+using UpdateCenter.Services;
 using System.Reflection;
 using System.Text.Json;
 
@@ -26,10 +27,14 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.2")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.2.");
 
 var settings = new AppSettings();
 if (!settings.CheckAppUpdatesAutomatically)
     throw new InvalidOperationException("Il controllo automatico deve essere attivo per impostazione predefinita.");
+if (!settings.NotifyWhenUpdatesAreAvailable || settings.LanguageMode != "it" || settings.AutomaticScanInterval != "Off")
+    throw new InvalidOperationException("Le nuove preferenze predefinite non sono valide.");
 
 var smallScale = TypographyOptions.ScaleFor("Piccola");
 var mediumScale = TypographyOptions.ScaleFor("Media");
@@ -50,10 +55,32 @@ if (DriverVersionComparer.Compare("32.0.21043.19003", "32.0.21043.1000") <= 0 ||
     DriverVersionComparer.Compare("25.040.2.218", "25.40.2.217") <= 0)
     throw new InvalidOperationException("Confronto delle versioni driver non valido.");
 
-var catalogResource = Assembly.GetExecutingAssembly().GetManifestResourceNames()
+var wingetItalian = string.Join('\n',
+    $"{"Nome",-24}{"Id",-25}{"Versione",-16}{"Disponibile",-16}Origine",
+    new string('-', 90),
+    $"{"Opera GX Stable",-24}{"Opera.OperaGX",-25}{"133.0.5932.39",-16}{"133.0.5932.56",-16}winget");
+var wingetEnglish = string.Join('\n',
+    $"{"Name",-24}{"Id",-25}{"Version",-16}{"Available",-16}Source",
+    new string('-', 90),
+    $"{"PowerToys (Preview)",-24}{"Microsoft.PowerToys",-25}{"0.90.0",-16}{"0.91.0",-16}winget");
+var parsedItalian = WinGetService.ParseUpgradeTable(wingetItalian);
+var parsedEnglish = WinGetService.ParseUpgradeTable(wingetEnglish);
+if (parsedItalian.Count != 1 || parsedItalian[0].Id != "Opera.OperaGX" ||
+    parsedItalian[0].AvailableVersion != "133.0.5932.56")
+    throw new InvalidOperationException("Parsing della tabella WinGet italiana non riuscito.");
+if (parsedEnglish.Count != 1 || parsedEnglish[0].Id != "Microsoft.PowerToys")
+    throw new InvalidOperationException("Parsing della tabella WinGet inglese non riuscito.");
+
+LocalizationService.Initialize("en");
+if (LocalizationService.Translate("Aggiornamenti") != "Updates")
+    throw new InvalidOperationException("Traduzione inglese non disponibile.");
+LocalizationService.Initialize("it");
+
+var catalogAssembly = typeof(AppSettings).Assembly;
+var catalogResource = catalogAssembly.GetManifestResourceNames()
     .SingleOrDefault(x => x.EndsWith("driver-catalog.json", StringComparison.OrdinalIgnoreCase))
     ?? throw new InvalidOperationException("Catalogo driver incorporato nei test non trovato.");
-using (var catalogStream = Assembly.GetExecutingAssembly().GetManifestResourceStream(catalogResource)!)
+using (var catalogStream = catalogAssembly.GetManifestResourceStream(catalogResource)!)
 using (var catalogJson = JsonDocument.Parse(catalogStream))
 {
     if (catalogJson.RootElement.GetProperty("schemaVersion").GetInt32() != 1 ||
@@ -61,4 +88,4 @@ using (var catalogJson = JsonDocument.Parse(catalogStream))
         throw new InvalidOperationException("Schema del catalogo driver non valido.");
 }
 
-Console.WriteLine("Smoke test superati: versioni, updater, tipografia, migrazione e catalogo driver.");
+Console.WriteLine("Smoke test superati: versioni, WinGet, lingua, tipografia, migrazione e catalogo driver.");

@@ -6,7 +6,8 @@
         mc:Ignorable="d"
         Title="Update Center" Icon="Assets/UpdateCenter.ico" Width="1240" Height="790" MinWidth="720" MinHeight="500"
         WindowStartupLocation="CenterScreen" WindowStyle="None" AllowsTransparency="True"
-        ResizeMode="CanResize" Background="Transparent">
+        ResizeMode="CanResize" Background="Transparent" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display">
     <Window.Resources>
         <Style x:Key="Card" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
@@ -62,7 +63,7 @@
                     <Border x:Name="VersionBadge" Margin="8,0,0,0" Padding="7,3" VerticalAlignment="Center"
                             Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
                             BorderThickness="1" CornerRadius="7">
-                        <TextBlock x:Name="VersionText" Text="v1.0.1" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock x:Name="VersionText" Text="v1.0.2" Foreground="{DynamicResource AccentBrush}"
                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
                     </Border>
                 </StackPanel>
@@ -98,11 +99,12 @@
                             <Button x:Name="HardwareNav" Style="{StaticResource NavButton}" Content="▣   Driver e chipset" ToolTip="Driver e chipset" Click="HardwareNav_Click" />
                             <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="◷   Cronologia" ToolTip="Cronologia" Click="HistoryNav_Click" />
                             <Button x:Name="SettingsNav" Style="{StaticResource NavButton}" Content="⚙   Impostazioni" ToolTip="Impostazioni" Click="SettingsNav_Click" />
+                            <Button x:Name="AboutNav" Style="{StaticResource NavButton}" Content="ⓘ   Informazioni" ToolTip="Informazioni" Click="AboutNav_Click" />
                         </StackPanel>
                         <Border x:Name="SidebarSourceCard" Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,10,0,0">
                             <StackPanel>
-                                <TextBlock Text="Fonti protette" FontWeight="SemiBold" FontSize="{DynamicResource FontSize12}" />
-                                <TextBlock Text="WinGet e Windows Update" Foreground="{DynamicResource MutedTextBrush}"
+                                <TextBlock Text="Controllo locale" FontWeight="SemiBold" FontSize="{DynamicResource FontSize12}" />
+                                <TextBlock Text="Nessuna telemetria" Foreground="{DynamicResource MutedTextBrush}"
                                            FontSize="{DynamicResource FontSize11}" Margin="0,4,0,0" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
@@ -119,7 +121,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition x:Name="HomeStatusColumn" Width="300" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel>
+                                    <StackPanel x:Name="HomeHeroContent">
                                         <TextBlock Text="Mantieni il PC aggiornato" FontSize="{DynamicResource FontSize30}" FontWeight="SemiBold" />
                                         <TextBlock Text="Controlla software e driver da fonti ufficiali, poi scegli tu cosa installare."
                                                    Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize15}" Margin="0,10,20,24"
@@ -131,13 +133,11 @@
                                                     Click="CancelScan_Click" />
                                         </StackPanel>
                                     </StackPanel>
-                                    <Border Grid.Column="1" Background="{DynamicResource AccentSoftBrush}" CornerRadius="18" Padding="24">
+                                    <Border x:Name="HomeStatusCard" Grid.Column="1" Background="{DynamicResource AccentSoftBrush}" CornerRadius="18" Padding="24">
                                         <StackPanel VerticalAlignment="Center">
                                             <TextBlock Text="STATO" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding StatusText}" FontSize="{DynamicResource FontSize20}" FontWeight="SemiBold" Margin="0,8,0,4"
                                                        TextWrapping="Wrap" />
-                                            <TextBlock Text="{Binding CurrentItemText}" Foreground="{DynamicResource MutedTextBrush}"
-                                                       FontSize="{DynamicResource FontSize12}" TextWrapping="Wrap" />
                                         </StackPanel>
                                     </Border>
                                 </Grid>
@@ -235,16 +235,16 @@
                                     </TextBlock.Style>
                                 </TextBlock>
                             </Grid>
-                            <ComboBox Grid.Column="1" SelectedValue="{Binding Filter}" SelectedValuePath="Content" Margin="0,0,10,0">
-                                <ComboBoxItem Content="Tutti" />
-                                <ComboBoxItem Content="Software" />
-                                <ComboBoxItem Content="Driver" />
-                                <ComboBoxItem Content="Importanti" />
-                                <ComboBoxItem Content="Standard" />
-                                <ComboBoxItem Content="Facoltativi" />
-                                <ComboBoxItem Content="Selezionati" />
-                                <ComboBoxItem Content="Riavvio richiesto" />
-                                <ComboBoxItem Content="Errori" />
+                            <ComboBox Grid.Column="1" SelectedValue="{Binding Filter}" SelectedValuePath="Tag" Margin="0,0,10,0">
+                                <ComboBoxItem Content="Tutti" Tag="Tutti" />
+                                <ComboBoxItem Content="Software" Tag="Software" />
+                                <ComboBoxItem Content="Driver" Tag="Driver" />
+                                <ComboBoxItem Content="Importanti" Tag="Importanti" />
+                                <ComboBoxItem Content="Standard" Tag="Standard" />
+                                <ComboBoxItem Content="Facoltativi" Tag="Facoltativi" />
+                                <ComboBoxItem Content="Selezionati" Tag="Selezionati" />
+                                <ComboBoxItem Content="Riavvio richiesto" Tag="Riavvio richiesto" />
+                                <ComboBoxItem Content="Errori" Tag="Errori" />
                             </ComboBox>
                             <Button Grid.Column="2" Content="Nuova scansione" Style="{StaticResource SecondaryButton}"
                                     IsEnabled="{Binding CanScan}" Click="Scan_Click" />
@@ -311,7 +311,15 @@
                                                         <Setter TargetName="PriorityBadge" Property="Background" Value="{DynamicResource DangerSoftBrush}" />
                                                         <Setter TargetName="PriorityText" Property="Foreground" Value="{DynamicResource DangerBrush}" />
                                                     </DataTrigger>
+                                                    <DataTrigger Binding="{Binding PriorityLabel}" Value="Important">
+                                                        <Setter TargetName="PriorityBadge" Property="Background" Value="{DynamicResource DangerSoftBrush}" />
+                                                        <Setter TargetName="PriorityText" Property="Foreground" Value="{DynamicResource DangerBrush}" />
+                                                    </DataTrigger>
                                                     <DataTrigger Binding="{Binding PriorityLabel}" Value="Facoltativo">
+                                                        <Setter TargetName="PriorityBadge" Property="Background" Value="{DynamicResource WarningSoftBrush}" />
+                                                        <Setter TargetName="PriorityText" Property="Foreground" Value="{DynamicResource WarningBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding PriorityLabel}" Value="Optional">
                                                         <Setter TargetName="PriorityBadge" Property="Background" Value="{DynamicResource WarningSoftBrush}" />
                                                         <Setter TargetName="PriorityText" Property="Foreground" Value="{DynamicResource WarningBrush}" />
                                                     </DataTrigger>
@@ -349,22 +357,25 @@
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
 
-                                    <DataGridTemplateColumn Header="" Width="92">
+                                    <DataGridTemplateColumn Header="" Width="Auto">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <Button Content="Riprova" Padding="11,6" FontSize="{DynamicResource FontSize11}" Click="RetryUpdate_Click"
-                                                        IsEnabled="{Binding DataContext.CanScan, RelativeSource={RelativeSource AncestorType=DataGrid}}">
-                                                    <Button.Style>
-                                                        <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-                                                            <Setter Property="Visibility" Value="Collapsed" />
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding CanRetry}" Value="True">
-                                                                    <Setter Property="Visibility" Value="Visible" />
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </Button.Style>
-                                                </Button>
+                                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                                    <Button Content="Riprova" Padding="9,6" FontSize="{DynamicResource FontSize10}"
+                                                            Click="RetryUpdate_Click"
+                                                            IsEnabled="{Binding DataContext.CanScan, RelativeSource={RelativeSource AncestorType=DataGrid}}">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding CanRetry}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                    </Button>
+                                                </StackPanel>
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
@@ -372,14 +383,25 @@
                             </DataGrid>
                         </Border>
 
-                        <Grid Grid.Row="2" Margin="0,12,0,0">
-                            <StackPanel Orientation="Horizontal">
+                        <Grid x:Name="UpdatesFooter" Grid.Row="2" Margin="0,12,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition x:Name="UpdatesFooterSecondRow" Height="0" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
                                 <Button Content="Seleziona tutto" Style="{StaticResource SecondaryButton}" Click="SelectAll_Click" />
                                 <Button Content="Deseleziona tutto" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="DeselectAll_Click" />
-                                <TextBlock Text="{Binding VisibleUpdateCount, StringFormat={}{0} risultati visibili}"
-                                           VerticalAlignment="Center" Foreground="{DynamicResource MutedTextBrush}" Margin="14,0,0,0" />
                             </StackPanel>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <TextBlock x:Name="VisibleUpdatesText" Grid.Column="1"
+                                       Text="{Binding VisibleUpdateCount, StringFormat={}{0} risultati visibili}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource MutedTextBrush}" Margin="12,0" />
+                            <StackPanel x:Name="UpdatesFooterRight" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
                                 <TextBlock Text="{Binding SelectedCount, StringFormat={}{0} selezionati}" VerticalAlignment="Center"
                                            Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,14,0" />
                                 <Button Content="Aggiorna elementi selezionati" Style="{StaticResource RoundedButton}"
@@ -524,14 +546,11 @@
                     </ScrollViewer>
 
                     <!-- DRIVER E CHIPSET -->
-                    <Grid x:Name="HardwarePage" Visibility="Collapsed">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
+                    <ScrollViewer x:Name="HardwarePage" Visibility="Collapsed"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel>
 
-                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                        <Border x:Name="DriverHeaderCard" Style="{StaticResource Card}" Padding="18" Margin="0,0,0,10">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
@@ -540,12 +559,12 @@
                                 <StackPanel>
                                     <TextBlock Text="Driver e chipset" FontSize="{DynamicResource FontSize25}" FontWeight="SemiBold" />
                                     <TextBlock Text="{Binding CpuName}" FontSize="{DynamicResource FontSize15}" Margin="0,8,0,0" />
-                                    <TextBlock Text="{Binding ComputerName}" Foreground="{DynamicResource MutedTextBrush}"
+                                    <TextBlock x:Name="DriverMachineName" Text="{Binding ComputerName}" Foreground="{DynamicResource MutedTextBrush}"
                                                FontSize="{DynamicResource FontSize12}" Margin="0,4,0,0" />
                                     <TextBlock Text="{Binding HardwareCheckStatus}" Foreground="{DynamicResource SuccessBrush}"
                                                FontSize="{DynamicResource FontSize12}" FontWeight="SemiBold" Margin="0,7,0,0"
                                                TextWrapping="Wrap" />
-                                    <TextBlock Text="Update Center usa Windows/Microsoft Update e metadati verificati con collegamenti diretti ai produttori. Se una fonte ufficiale non è interrogabile in modo sicuro, viene indicato un controllo manuale senza installare altre app."
+                                    <TextBlock x:Name="DriverSourceDescription" Text="Update Center usa Windows/Microsoft Update e metadati verificati con collegamenti diretti ai produttori. Se una fonte ufficiale non è interrogabile in modo sicuro, viene indicato un controllo manuale senza installare altre app."
                                                Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
                                                Margin="0,5,30,0" TextWrapping="Wrap" />
                                 </StackPanel>
@@ -567,51 +586,65 @@
                             </Grid>
                         </Border>
 
-                        <ScrollViewer Grid.Row="1" Margin="0,0,0,12" Height="222"
-                                      HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                                      CanContentScroll="True">
-                            <ItemsControl ItemsSource="{Binding VendorTools}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Width="320" Height="214" Style="{StaticResource Card}" Margin="0,0,10,0" Padding="17">
-                                            <Grid>
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="Auto" />
-                                                    <RowDefinition Height="*" />
-                                                    <RowDefinition Height="Auto" />
-                                                </Grid.RowDefinitions>
-                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="{DynamicResource FontSize14}" TextWrapping="Wrap" />
-                                                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,7,0,5">
-                                                    <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="7" Padding="7,3" Margin="0,0,6,0">
-                                                        <TextBlock Text="{Binding ConfidenceLabel}" Foreground="{DynamicResource AccentBrush}"
-                                                                   FontSize="{DynamicResource FontSize9}" FontWeight="SemiBold" />
-                                                    </Border>
-                                                    <TextBlock Text="{Binding SourceLabel}" Foreground="{DynamicResource MutedTextBrush}"
-                                                               FontSize="{DynamicResource FontSize9}" VerticalAlignment="Center" />
-                                                </StackPanel>
-                                                <StackPanel Grid.Row="2">
-                                                    <TextBlock Text="{Binding Description}" Foreground="{DynamicResource MutedTextBrush}"
-                                                               FontSize="{DynamicResource FontSize10}" TextWrapping="Wrap" Margin="0,0,0,3" />
-                                                    <TextBlock Text="{Binding CompatibilityLabel}" Foreground="{DynamicResource MutedTextBrush}"
-                                                               FontSize="{DynamicResource FontSize9}" TextWrapping="Wrap" FontStyle="Italic" />
-                                                </StackPanel>
-                                                <Button Grid.Row="3" Content="{Binding ActionLabel}" Tag="{Binding Url}"
-                                                        Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
-                                                        Padding="12,7" FontSize="{DynamicResource FontSize11}" Click="OpenVendorSupport_Click" />
-                                            </Grid>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" Margin="0,0,0,10" ClipToBounds="True">
+                            <Expander x:Name="DriverVendorExpander" IsExpanded="True" HorizontalContentAlignment="Stretch">
+                                <Expander.Header>
+                                    <StackPanel Orientation="Horizontal" MinHeight="42" Margin="12,0,14,0">
+                                        <TextBlock Text="Controlli e supporto produttore" FontWeight="SemiBold"
+                                                   FontSize="{DynamicResource FontSize13}" VerticalAlignment="Center" />
+                                        <TextBlock Margin="12,0,0,0" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center">
+                                            <Run Text="{Binding VendorCheckCount, Mode=OneWay}" /><Run Text=" disponibili" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Expander.Header>
+                                <ScrollViewer Height="142" Margin="12,0,12,12"
+                                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                              CanContentScroll="True">
+                                    <ItemsControl ItemsSource="{Binding VendorTools}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Width="290" Height="134" Background="{DynamicResource SurfaceAltBrush}"
+                                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="13" Margin="0,0,9,0" Padding="13">
+                                                    <Grid ToolTip="{Binding CompatibilityLabel}">
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="*" />
+                                                            <RowDefinition Height="Auto" />
+                                                        </Grid.RowDefinitions>
+                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                                   FontSize="{DynamicResource FontSize13}" TextTrimming="CharacterEllipsis" />
+                                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5,0,4">
+                                                            <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="7" Padding="6,2" Margin="0,0,6,0">
+                                                                <TextBlock Text="{Binding ConfidenceLabel}" Foreground="{DynamicResource AccentBrush}"
+                                                                           FontSize="{DynamicResource FontSize9}" FontWeight="SemiBold" />
+                                                            </Border>
+                                                            <TextBlock Text="{Binding SourceLabel}" Foreground="{DynamicResource MutedTextBrush}"
+                                                                       FontSize="{DynamicResource FontSize9}" VerticalAlignment="Center"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Row="2" Text="{Binding Description}" Foreground="{DynamicResource MutedTextBrush}"
+                                                                   FontSize="{DynamicResource FontSize9}" TextWrapping="Wrap"
+                                                                   MaxHeight="30" TextTrimming="CharacterEllipsis" />
+                                                        <Button Grid.Row="3" Content="{Binding ActionLabel}" Tag="{Binding Url}"
+                                                                Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
+                                                                Padding="10,5" FontSize="{DynamicResource FontSize10}" Click="OpenVendorSupport_Click" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </Expander>
+                        </Border>
 
-                        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True" Margin="0,0,0,2">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -660,19 +693,21 @@
                                         </TextBlock>
                                     </Grid>
                                     <ComboBox Grid.Column="1" SelectedValue="{Binding DriverInventoryFilter}"
-                                              SelectedValuePath="Content">
-                                        <ComboBoxItem Content="Tutti" />
-                                        <ComboBoxItem Content="Con aggiornamenti" />
-                                        <ComboBoxItem Content="CPU e chipset" />
-                                        <ComboBoxItem Content="Grafica" />
-                                        <ComboBoxItem Content="Audio" />
-                                        <ComboBoxItem Content="Rete" />
+                                              SelectedValuePath="Tag">
+                                        <ComboBoxItem Content="Tutti" Tag="Tutti" />
+                                        <ComboBoxItem Content="Con aggiornamenti" Tag="Con aggiornamenti" />
+                                        <ComboBoxItem Content="CPU e chipset" Tag="CPU e chipset" />
+                                        <ComboBoxItem Content="Grafica" Tag="Grafica" />
+                                        <ComboBoxItem Content="Audio" Tag="Audio" />
+                                        <ComboBoxItem Content="Rete" Tag="Rete" />
                                     </ComboBox>
                                 </Grid>
 
                                 <DataGrid x:Name="DriverInventoryGrid" Grid.Row="2"
                                           ItemsSource="{Binding DriverInventoryView, Mode=OneWay}" IsReadOnly="True"
-                                          SelectionUnit="FullRow" VerticalContentAlignment="Center">
+                                          SelectionUnit="FullRow" VerticalContentAlignment="Center"
+                                          ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                                          PreviewMouseWheel="DriverInventoryGrid_PreviewMouseWheel">
                                     <DataGrid.Resources>
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridText}" />
                                     </DataGrid.Resources>
@@ -763,7 +798,8 @@
                                 </DataGrid>
                             </Grid>
                         </Border>
-                    </Grid>
+                        </StackPanel>
+                    </ScrollViewer>
 
                     <!-- CRONOLOGIA -->
                     <Grid x:Name="HistoryPage" Visibility="Collapsed">
@@ -983,14 +1019,83 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Border>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Avvio e scansioni automatiche" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" Margin="0,0,0,16" />
+                                    <CheckBox IsChecked="{Binding Settings.ScanAtStartup}" Content="Avvia automaticamente la scansione all'apertura" />
+                                    <TextBlock Text="Frequenza scansione" FontWeight="SemiBold" Margin="0,17,0,8" />
+                                    <ComboBox SelectedValue="{Binding Settings.AutomaticScanInterval, Mode=TwoWay}"
+                                              SelectedValuePath="Tag" Width="220" HorizontalAlignment="Left">
+                                        <ComboBoxItem Content="Disattivata" Tag="Off" />
+                                        <ComboBoxItem Content="Ogni giorno" Tag="Daily" />
+                                        <ComboBoxItem Content="Ogni settimana" Tag="Weekly" />
+                                    </ComboBox>
+                                    <TextBlock Text="La scansione periodica viene eseguita mentre Update Center è aperto oppure al successivo avvio, se è scaduta. L'installazione richiede sempre la tua conferma."
+                                               Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}"
+                                               Margin="0,7,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Notifiche" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" Margin="0,0,0,16" />
+                                    <CheckBox IsChecked="{Binding Settings.NotifyWhenUpdatesAreAvailable}"
+                                              Content="Avvisami quando vengono trovati aggiornamenti" />
+                                    <TextBlock Text="Le notifiche sono locali e non richiedono account o servizi di telemetria."
+                                               Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}"
+                                               Margin="24,5,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
                             <Border Style="{StaticResource Card}">
                                 <StackPanel>
-                                    <TextBlock Text="Avvio" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" Margin="0,0,0,16" />
-                                    <CheckBox IsChecked="{Binding Settings.ScanAtStartup}" Content="Avvia automaticamente la scansione all'apertura" />
+                                    <TextBlock Text="Lingua" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" Margin="0,0,0,14" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="ItalianLanguageChoice" Content="Italiano" Tag="it" GroupName="LanguageMode"
+                                                     Style="{StaticResource ThemeChoice}" Click="LanguageChoice_Click" />
+                                        <RadioButton x:Name="EnglishLanguageChoice" Content="Inglese" Tag="en" GroupName="LanguageMode"
+                                                     Style="{StaticResource ThemeChoice}" Click="LanguageChoice_Click" />
+                                    </StackPanel>
                                 </StackPanel>
                             </Border>
                             <Button Content="Salva impostazioni" Style="{StaticResource RoundedButton}" HorizontalAlignment="Left"
                                     Margin="0,18,0,0" Click="SaveSettings_Click" />
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- INFORMAZIONI -->
+                    <ScrollViewer x:Name="AboutPage" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="Informazioni sul progetto" FontSize="{DynamicResource FontSize24}" FontWeight="SemiBold" />
+                            <TextBlock Text="Update Center per Windows 10 e Windows 11" Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,20" />
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Ideato e sviluppato da" Foreground="{DynamicResource MutedTextBrush}" />
+                                    <TextBlock Text="Illidan0S" FontSize="{DynamicResource FontSize23}" FontWeight="SemiBold" Margin="0,6,0,16" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="Versione installata" Foreground="{DynamicResource MutedTextBrush}" />
+                                            <TextBlock x:Name="AboutVersionText" FontWeight="SemiBold" Margin="0,5,0,0" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="Repository del progetto" Foreground="{DynamicResource MutedTextBrush}" />
+                                            <Button Content="Apri GitHub" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
+                                                    Margin="0,7,0,0" Tag="https://github.com/Illidan0S/UpdateCenter" Click="OpenVendorSupport_Click" />
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                                <StackPanel>
+                                    <TextBlock Text="Privacy" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" />
+                                    <TextBlock Text="Update Center non raccoglie dati personali e non include telemetria."
+                                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,7,0,0" TextWrapping="Wrap" />
+                                    <TextBlock Text="Scansioni, impostazioni, cronologia e log restano memorizzati localmente sul computer."
+                                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,0" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

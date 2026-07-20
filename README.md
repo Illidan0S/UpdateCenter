@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica iniziale: **1.0.0** (`v1.0.0`).
+Versione pubblica attuale: **1.0.2** (`v1.0.2`).
 
 Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e driver tramite **Windows Update Agent** più un catalogo incorporato e trasparente di metadati verificati dei produttori. L'utente sceglie singolarmente cosa installare.
 
@@ -10,11 +10,11 @@ Il controllo Windows Update è automatico. Il catalogo Update Center può propor
 
 ## Quale file usare
 
-Il pacchetto binario pubblicato nella GitHub Release include già `dist\UpdateCenter.exe`, quindi normalmente conviene usare **`INSTALLA.bat`**: copia l'eseguibile in `%LOCALAPPDATA%\Programs\UpdateCenter`, aggiunge il collegamento al menu Start e avvia l'app. Non richiede il compilatore .NET. Il repository sorgente non versiona `dist`, eseguibili o ZIP.
+Per installare normalmente il programma usa **`UpdateCenter-Setup-vVERSIONE.exe`** dalla sezione GitHub Releases. È un installer grafico per utente: non richiede il compilatore .NET né privilegi amministrativi, copia l'app in `%LOCALAPPDATA%\Programs\UpdateCenter`, aggiunge il collegamento al menu Start e registra il disinstallatore `.exe` in **App installate** di Windows.
 
-Usa **`CREA-EXE.bat`** soltanto se hai modificato il codice sorgente o vuoi rigenerare personalmente l'eseguibile. Questo file non installa l'app: controlla o propone .NET 8 SDK, compila il progetto e sostituisce `dist\UpdateCenter.exe`. Terminata la compilazione puoi eseguire `INSTALLA.bat`.
+`UpdateCenter-vVERSIONE.exe` è invece l'eseguibile portatile e viene mantenuto anche perché l'aggiornamento automatico dell'app usa questo asset verificato. Può essere avviato direttamente, ma non crea collegamenti né una voce di disinstallazione.
 
-In breve: per usare il programma scegli `INSTALLA.bat`; per ricompilarlo scegli `CREA-EXE.bat`.
+Usa **`CREA-EXE.bat`** soltanto se hai modificato il codice sorgente o vuoi rigenerare personalmente l'eseguibile portatile. È uno strumento per sviluppatori, non un installer distribuito agli utenti.
 
 ### Creazione dell'eseguibile
 
@@ -38,9 +38,13 @@ dotnet publish .\UpdateCenter.csproj --configuration Release --runtime win-x64 -
 
 La configurazione Release abilita la pubblicazione single-file per `win-x64` senza trimming.
 
-Se vuoi anche copiarlo nella cartella Programmi del tuo profilo e aggiungerlo al menu Start, esegui `INSTALLA.bat` dopo la compilazione. Non sono necessari privilegi amministrativi per questa copia; l'UAC viene richiesto solo quando installi gli aggiornamenti selezionati.
+Per creare anche il Setup `.exe` serve Inno Setup Compiler 6 o 7. Dopo `build.ps1` esegui:
 
-Per rimuovere l'app esegui **`dist\UNINSTALLA.bat`**. Nel pacchetto è presente una sola copia del disinstallatore. Dopo una conferma, chiude Update Center ed elimina la copia installata, il collegamento Start, `%LOCALAPPDATA%\UpdateCenter`, i componenti temporanei dell'eseguibile e l'intera cartella estratta dal file ZIP con tutti i file contenuti. La cartella del progetto viene cancellata soltanto se il disinstallatore ne riconosce la struttura, per evitare rimozioni accidentali. I punti di ripristino gestiti da Windows non vengono eliminati.
+```powershell
+.\build-installer.ps1 -NoAppBuild
+```
+
+Il risultato viene scritto in `installer-dist\UpdateCenter-Setup-vVERSIONE.exe`, insieme al relativo SHA-256. La disinstallazione avviene da **Impostazioni > App > App installate** oppure dal disinstallatore `.exe` creato da Windows. Al termine viene chiesto separatamente se eliminare anche impostazioni, cronologia e log locali.
 
 ## Utilizzo
 
@@ -61,11 +65,13 @@ La schermata **Hardware** mostra CPU, core/thread, GPU, VRAM, RAM, risoluzione, 
 
 Il tema può essere impostato su **Sistema**, **Chiaro** o **Scuro**; alla prima installazione sono preselezionati **Chiaro** e testo **Medio**. In modalità Sistema l'app segue il tema delle applicazioni Windows anche quando cambia durante l'esecuzione. La dimensione del testo può essere impostata su **Piccola**, **Media** o **Grande**. La finestra è ridimensionabile da bordi e angoli; sotto gli 820 pixel la navigazione passa automaticamente alla modalità compatta a icone.
 
-La pagina **Cronologia** usa descrizioni semplici per indicare esito, versioni, fonte e necessità di riavvio. I dettagli lunghi vengono abbreviati nella tabella; mantenendo il puntatore sul testo per un secondo si apre un pannello con il contenuto completo, selezionabile e copiabile.
+La pagina **Cronologia** usa descrizioni semplici per indicare esito, versioni, fonte e necessità di riavvio. I dettagli lunghi vengono abbreviati nella tabella; mantenendo il puntatore sul testo per un secondo si apre un pannello con il contenuto completo, selezionabile e copiabile, inclusa la diagnostica WinGet quando disponibile.
+
+L'interfaccia può essere usata in italiano o inglese. Le Impostazioni consentono inoltre notifiche locali e scansioni giornaliere o settimanali mentre Update Center è aperto, oppure al successivo avvio quando la scansione è scaduta. L'installazione non parte mai automaticamente.
 
 ## Fonti e comportamento
 
-- Software: comando ufficiale `winget upgrade`, un pacchetto alla volta.
+- Software: comando ufficiale `winget upgrade`, un pacchetto alla volta. Prima dell'installazione viene ricontrollata la corrispondenza; i pacchetti per utente restano nel contesto dell'utente e WinGet può ritentare senza vincolo di sorgente o tramite un nome esatto e univoco.
 - Driver Microsoft: aggiornamenti firmati e compatibili offerti da Windows Update al PC specifico.
 - Driver produttore: soltanto pacchetti ZIP/CAB composti da driver INF e autorizzati dal catalogo incorporato. Prima dell'installazione vengono ricontrollati dominio ufficiale, ID hardware, Windows/architettura, SHA-256 e firma Authenticode del catalogo `.cat`.
 - CPU/chipset: inventario delle componenti di sistema e accesso al controllo ufficiale AMD o Intel rilevato sul PC.
@@ -86,7 +92,7 @@ Update Center non usa il catalogo proprietario di Driver Easy e non presenta com
 - Nessuna utility del produttore viene installata o eseguita: i pacchetti con `.exe`, `.msi` o script vengono rifiutati.
 - I pacchetti driver esterni devono contenere INF compatibili e cataloghi `.cat` con firma Authenticode valida.
 - Argomenti dei processi separati, senza concatenare input in una shell.
-- Una sola elevazione UAC per la fase di installazione.
+- Il software viene aggiornato nel contesto dell'utente; l'elevazione UAC viene usata soltanto per driver e operazioni che richiedono realmente privilegi amministrativi.
 - Piano di aggiornamento limitato alla cartella dati dell'app.
 - Nessuna telemetria e nessun dato personale trasmesso dall'app.
 
@@ -110,12 +116,11 @@ Windows 10 standard ha terminato il supporto Microsoft il 14 ottobre 2025. L'app
 - `Services/OfficialDriverPackageService.cs`: download e installazione protetta dei soli pacchetti INF verificati.
 - `Services/ElevatedUpdateRunner.cs`: elevazione UAC, punto di ripristino e avanzamento.
 - `Models`: modelli dati e piano di aggiornamento.
-- `Assets/PackageRemoval.template`: modello interno dal quale `build.ps1` genera l'unica copia del disinstallatore, `dist\UNINSTALLA.bat`.
 - `Assets/driver-catalog.json`: metadati incorporati dei driver produttore; non ospita binari né mirror.
 - `App.xaml` e `MainWindow.xaml`: risorse grafiche, stili e pagine dell'interfaccia WPF.
 - `build.ps1`: restore e publish self-contained/single-file in `dist`.
+- `build-installer.ps1` e `installer.iss`: generazione del Setup grafico `.exe` con installazione e disinstallazione per utente.
 - `CREA-EXE.bat`: controllo/installazione dell'SDK .NET 8 e avvio della compilazione.
-- `INSTALLA.bat`: installazione per utente dalla cartella `dist` in `%LOCALAPPDATA%\Programs\UpdateCenter`.
 - `Tests/UpdateCenter.SmokeTests`: controlli senza dipendenze esterne per versioni semantiche e impostazioni predefinite dell'updater.
 
 ## Aggiornamento automatico dell'app
@@ -128,12 +133,12 @@ L'eseguibile viene scaricato in `%LOCALAPPDATA%\UpdateCenter\Updates` e installa
 
 ## GitHub Actions e pubblicazione delle versioni
 
-Il workflow `.github/workflows/release.yml` compila su Windows con .NET 8, pubblica `win-x64` self-contained e single-file, verifica versione e contenuto del pacchetto, genera SHA-256 e carica gli artefatti. Con un tag stabile `vMAJOR.MINOR.PATCH` crea la Release soltanto dopo il superamento di tutti i controlli.
+Il workflow `.github/workflows/release.yml` compila su Windows con .NET 8, genera sia l'eseguibile portatile sia il Setup grafico `.exe`, verifica versione e contenuto, genera i rispettivi SHA-256 e carica gli artefatti. Con un tag stabile `vMAJOR.MINOR.PATCH` crea la Release soltanto dopo il superamento di tutti i controlli.
 
 Per una versione futura:
 
 1. aggiorna `Version`, `AssemblyVersion`, `FileVersion` e `InformationalVersion` in `UpdateCenter.csproj` e il fallback visibile nell'interfaccia;
-2. esegui `build.ps1` e verifica localmente l'app;
+2. esegui `build.ps1` e `build-installer.ps1 -NoAppBuild`, quindi verifica localmente app, installazione e disinstallazione;
 3. pubblica le modifiche su `main` e attendi il completamento positivo del workflow;
 4. crea e pubblica il tag corrispondente, per esempio `v1.0.1`;
-5. verifica che la Release contenga ZIP, EXE versionato e i rispettivi file `.sha256`.
+5. verifica che la Release contenga Setup `.exe`, eseguibile portatile versionato e i rispettivi file `.sha256`.
