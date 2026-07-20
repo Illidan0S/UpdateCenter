@@ -106,7 +106,7 @@ public static class OfficialDriverPackageService
     {
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.2");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.3");
         var current = new Uri(item.OfficialDownloadUrl, UriKind.Absolute);
         for (var redirect = 0; redirect <= 5; redirect++)
         {

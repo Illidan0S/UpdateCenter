@@ -1,8 +1,10 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.2** (`v1.0.2`).
+Versione pubblica attuale: **1.0.3** (`v1.0.3`).
 
 Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e driver tramite **Windows Update Agent** più un catalogo incorporato e trasparente di metadati verificati dei produttori. L'utente sceglie singolarmente cosa installare.
+
+Il progetto è distribuito con licenza [MIT](LICENSE): può essere usato, modificato e redistribuito mantenendo l'avviso di copyright e il testo della licenza.
 
 La sezione **Driver e chipset** crea inoltre un inventario locale dei driver PnP installati, inclusi ID hardware e ID compatibili, associa quando possibile la versione installata a quella proposta e riconosce i componenti CPU/chipset. Le schede dei produttori sono generate soltanto dall'hardware realmente rilevato: un modello preciso riceve la sua pagina precisa; se l'abbinamento non è certo viene mostrato il portale generico ufficiale.
 
