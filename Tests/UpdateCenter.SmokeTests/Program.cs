@@ -27,8 +27,8 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.4")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.4.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.5")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.5.");
 
 var settings = new AppSettings();
 if (!settings.CheckAppUpdatesAutomatically)
@@ -89,6 +89,17 @@ if (!manifestUris[0].AbsoluteUri.EndsWith(
         "/manifests/j/JetBrains/CLion/2026.2/JetBrains.CLion.installer.yaml",
         StringComparison.Ordinal))
     throw new InvalidOperationException("Percorso del manifest WinGet non valido.");
+
+var riskySelection = new UpdateItem
+{
+    Id = "Example.Risky",
+    Name = "Risky package",
+    Kind = UpdateKind.Software,
+    RequiresRiskConfirmation = true
+};
+riskySelection.IsSelected = false;
+if (!riskySelection.CanInstall || riskySelection.IsSelected || riskySelection.PriorityLabel != "Conferma")
+    throw new InvalidOperationException("Gli aggiornamenti rischiosi devono restare installabili ma non preselezionati.");
 
 var duplicateOperaRows = string.Join('\n',
     $"{"Nome",-36}{"Id",-20}{"Versione",-16}{"Disponibile",-16}Origine",

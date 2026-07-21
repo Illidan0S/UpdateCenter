@@ -553,7 +553,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void SetAllSelected(bool selected)
     {
         foreach (var item in Updates)
-            item.IsSelected = selected && item.CanInstall;
+            item.IsSelected = selected && item.CanInstall && !item.RequiresRiskConfirmation;
         NotifyCounts();
     }
 

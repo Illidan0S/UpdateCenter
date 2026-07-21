@@ -7,6 +7,9 @@ namespace UpdateCenter;
 
 public partial class UpdateConfirmationWindow : Window
 {
+    private readonly bool _preflightCanContinue;
+    private readonly bool _requiresRiskConfirmation;
+
     public UpdateConfirmationWindow(
         IReadOnlyList<UpdateItem> items,
         PreflightResult preflight,
@@ -14,6 +17,8 @@ public partial class UpdateConfirmationWindow : Window
         bool restorePointWillBeCreated)
     {
         InitializeComponent();
+        _preflightCanContinue = preflight.CanContinue;
+        _requiresRiskConfirmation = items.Any(x => x.RequiresRiskConfirmation);
         Loaded += (_, _) => LocalizationService.ApplyTo(this);
         ItemsGrid.ItemsSource = items;
 
@@ -33,6 +38,18 @@ public partial class UpdateConfirmationWindow : Window
             ConfirmButton.IsEnabled = false;
             ConfirmButton.Content = "Controlli non superati";
             FooterInfoText.Text = "Correggi i problemi indicati e riprova.";
+        }
+
+        if (_requiresRiskConfirmation)
+        {
+            RiskItemsList.ItemsSource = items.Where(x => x.RequiresRiskConfirmation).ToList();
+            RiskConfirmationPanel.Visibility = Visibility.Visible;
+            if (_preflightCanContinue)
+            {
+                ConfirmButton.IsEnabled = false;
+                ConfirmButton.Content = "Conferma il rischio";
+                FooterInfoText.Text = "La conferma aggiuntiva è necessaria per gli installer con rimozione preventiva.";
+            }
         }
 
         RestorePointText.Text = restorePointWillBeCreated
@@ -57,6 +74,13 @@ public partial class UpdateConfirmationWindow : Window
     private void Confirm_Click(object sender, RoutedEventArgs e)
     {
         if (ConfirmButton.IsEnabled) DialogResult = true;
+    }
+    private void RiskAcceptanceChanged(object sender, RoutedEventArgs e)
+    {
+        ConfirmButton.IsEnabled = _preflightCanContinue && RiskAcceptanceCheckBox.IsChecked == true;
+        ConfirmButton.Content = !_preflightCanContinue
+            ? "Controlli non superati"
+            : ConfirmButton.IsEnabled ? "Conferma e aggiorna" : "Conferma il rischio";
     }
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
 }

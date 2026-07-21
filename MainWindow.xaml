@@ -63,7 +63,7 @@
                     <Border x:Name="VersionBadge" Margin="8,0,0,0" Padding="7,3" VerticalAlignment="Center"
                             Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
                             BorderThickness="1" CornerRadius="7">
-                        <TextBlock x:Name="VersionText" Text="v1.0.4" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock x:Name="VersionText" Text="v1.0.5" Foreground="{DynamicResource AccentBrush}"
                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
                     </Border>
                 </StackPanel>

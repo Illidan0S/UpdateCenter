@@ -32,15 +32,16 @@ internal sealed class WinGetManifestSafetyService
                     var safety = await InspectAsync(item.Id, item.AvailableVersion, cancellationToken);
                     if (safety == WinGetUpgradeSafety.Safe) return;
 
-                    item.CanInstall = false;
-                    item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
+                    item.RequiresRiskConfirmation = true;
+                    item.IsSelected = false;
+                    item.Status = LocalizationService.Text("Conferma richiesta", "Confirmation required");
                     item.ResultDetails = safety == WinGetUpgradeSafety.RemovesPreviousVersion
                         ? LocalizationService.Text(
-                            "Il manifest prevede la rimozione della versione funzionante prima dell'installazione. Per evitare perdite in caso di errore, Update Center non esegue automaticamente questo aggiornamento.",
-                            "The manifest removes the working version before installation. To prevent loss if setup fails, Update Center will not run this update automatically.")
+                            "Il manifest prevede la rimozione della versione funzionante prima dell'installazione. Puoi procedere solo dopo un avviso di rischio separato.",
+                            "The manifest removes the working version before installation. You may proceed only after a separate risk warning.")
                         : LocalizationService.Text(
-                            "Update Center non è riuscito a verificare in modo certo il comportamento dell'installer. L'aggiornamento automatico è stato disattivato per sicurezza.",
-                            "Update Center could not reliably verify the installer behavior. Automatic updating was disabled for safety.");
+                            "Update Center non è riuscito a verificare in modo certo il comportamento dell'installer. Puoi procedere solo dopo un avviso di rischio separato.",
+                            "Update Center could not reliably verify the installer behavior. You may proceed only after a separate risk warning.");
                 }
                 finally
                 {
@@ -107,7 +108,7 @@ internal sealed class WinGetManifestSafetyService
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.4");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.5");
         return client;
     }
 }
