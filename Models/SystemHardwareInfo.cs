@@ -9,6 +9,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     private string _cpuCores = "—";
     private string _gpuName = "Rilevamento in corso…";
     private string _vramTotal = "—";
+    private string _vramDetails = "—";
     private string _ramTotal = "—";
     private string _resolution = "—";
     private string _refreshRate = "—";
@@ -19,6 +20,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     private double _gpuUsage;
     private string _ramUsed = "—";
     private string _vramUsed = "—";
+    private string _gpuMetricsSource = "Contatori GPU di Windows";
     private string _cpuTemperature = "Non disponibile";
     private string _gpuTemperature = "Non disponibile";
     private string _monitoringStatus = "Preparazione del monitoraggio…";
@@ -27,6 +29,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     public string CpuCores { get => _cpuCores; private set => Set(ref _cpuCores, value); }
     public string GpuName { get => _gpuName; private set => Set(ref _gpuName, value); }
     public string VramTotal { get => _vramTotal; private set => Set(ref _vramTotal, value); }
+    public string VramDetails { get => _vramDetails; private set => Set(ref _vramDetails, value); }
     public string RamTotal { get => _ramTotal; private set => Set(ref _ramTotal, value); }
     public string Resolution { get => _resolution; private set => Set(ref _resolution, value); }
     public string RefreshRate { get => _refreshRate; private set => Set(ref _refreshRate, value); }
@@ -37,6 +40,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     public double GpuUsage { get => _gpuUsage; private set { if (Set(ref _gpuUsage, value)) OnPropertyChanged(nameof(GpuUsageLabel)); } }
     public string RamUsed { get => _ramUsed; private set => Set(ref _ramUsed, value); }
     public string VramUsed { get => _vramUsed; private set => Set(ref _vramUsed, value); }
+    public string GpuMetricsSource { get => _gpuMetricsSource; private set => Set(ref _gpuMetricsSource, value); }
     public string CpuTemperature { get => _cpuTemperature; private set => Set(ref _cpuTemperature, value); }
     public string GpuTemperature { get => _gpuTemperature; private set => Set(ref _gpuTemperature, value); }
     public string MonitoringStatus { get => _monitoringStatus; set => Set(ref _monitoringStatus, value); }
@@ -50,6 +54,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         CpuCores = snapshot.CpuCores;
         GpuName = snapshot.GpuName;
         VramTotal = snapshot.VramTotal;
+        VramDetails = snapshot.VramDetails;
         RamTotal = snapshot.RamTotal;
         Resolution = snapshot.Resolution;
         RefreshRate = snapshot.RefreshRate;
@@ -64,6 +69,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         GpuUsage = Clamp(metrics.GpuUsage);
         RamUsed = metrics.RamUsed;
         VramUsed = metrics.VramUsed;
+        GpuMetricsSource = metrics.GpuMetricsSource;
         CpuTemperature = FormatTemperature(metrics.CpuTemperature, "Non esposta da Windows/firmware");
         GpuTemperature = FormatTemperature(metrics.GpuTemperature, "Non esposta dal driver video");
         MonitoringStatus = metrics.Status;
@@ -77,8 +83,10 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         $"Utilizzo CPU: {CpuUsageLabel}",
         "",
         $"GPU: {GpuName}",
-        $"VRAM: {VramTotal}",
-        $"VRAM in uso: {VramUsed}",
+        $"Memoria video principale: {VramTotal}",
+        $"Memoria per GPU: {VramDetails}",
+        $"Memoria video in uso: {VramUsed}",
+        $"Dati in tempo reale riferiti a: {GpuMetricsSource}",
         $"Temperatura GPU: {GpuTemperature}",
         $"Utilizzo GPU: {GpuUsageLabel}",
         "",
@@ -115,6 +123,7 @@ public sealed record HardwareOverviewSnapshot(
     string CpuCores,
     string GpuName,
     string VramTotal,
+    string VramDetails,
     string RamTotal,
     string Resolution,
     string RefreshRate,
@@ -127,6 +136,7 @@ public sealed record HardwareMetricsSnapshot(
     double? GpuUsage,
     string RamUsed,
     string VramUsed,
+    string GpuMetricsSource,
     double? CpuTemperature,
     double? GpuTemperature,
     string Status);

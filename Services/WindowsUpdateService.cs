@@ -149,6 +149,7 @@ public sealed class WindowsUpdateService
                     RequiresRestart = reboot,
                     IsImportant = isImportant,
                     IsOptional = !isImportant && (browseOnly || autoSelected == false),
+                    IsSelected = isImportant || (!browseOnly && autoSelected != false),
                     WindowsUpdateId = updateId,
                     WindowsUpdateRevision = revision,
                     WindowsUpdateServerSelection = source.ServerSelection,
@@ -241,7 +242,8 @@ public sealed class WindowsUpdateService
             searcher.ServiceID = source.ServiceId;
     }
 
-    public static ItemRunResult InstallDriver(PlanItem planItem)
+    public static ItemRunResult InstallDriver(
+        PlanItem planItem, Action<int, string>? progress = null)
     {
         EnsureWindows();
         object? sessionObject = null;
@@ -251,6 +253,7 @@ public sealed class WindowsUpdateService
 
         try
         {
+            progress?.Invoke(8, "Ricerca del driver nella sorgente Windows Update...");
             var sessionType = Type.GetTypeFromProgID("Microsoft.Update.Session")
                 ?? throw new InvalidOperationException("Windows Update Agent non è disponibile.");
             sessionObject = Activator.CreateInstance(sessionType)!;
@@ -291,6 +294,7 @@ public sealed class WindowsUpdateService
             dynamic collection = collectionObject;
             collection.Add(selectedUpdate);
 
+            progress?.Invoke(35, "Download del driver tramite Windows Update...");
             dynamic downloader = session.CreateUpdateDownloader();
             downloader.Updates = collection;
             dynamic downloadResult = downloader.Download();
@@ -298,12 +302,14 @@ public sealed class WindowsUpdateService
             if (downloadCode is not (2 or 3))
                 return Failed(planItem, $"Download del driver non riuscito (codice {downloadCode}).");
 
+            progress?.Invoke(72, "Installazione del driver tramite Windows Update...");
             dynamic installer = session.CreateUpdateInstaller();
             installer.Updates = collection;
             dynamic installResult = installer.Install();
             int resultCode = Convert.ToInt32(installResult.ResultCode);
             bool reboot = Convert.ToBoolean(installResult.RebootRequired);
             bool success = resultCode is 2 or 3;
+            progress?.Invoke(98, "Verifica del risultato restituito da Windows Update...");
 
             return new ItemRunResult
             {

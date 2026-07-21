@@ -81,6 +81,7 @@ public sealed class OfficialDriverCatalogService
                 RequiresRestart = entry.RequiresRestart,
                 IsImportant = false,
                 IsOptional = true,
+                IsSelected = false,
                 DriverInstallMode = DriverInstallModes.OfficialInfPackage,
                 OfficialReleasePageUrl = entry.ReleasePageUrl,
                 OfficialDownloadUrl = entry.DownloadUrl,

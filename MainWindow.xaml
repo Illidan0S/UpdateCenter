@@ -63,7 +63,7 @@
                     <Border x:Name="VersionBadge" Margin="8,0,0,0" Padding="7,3" VerticalAlignment="Center"
                             Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
                             BorderThickness="1" CornerRadius="7">
-                        <TextBlock x:Name="VersionText" Text="v1.0.3" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock x:Name="VersionText" Text="v1.0.4" Foreground="{DynamicResource AccentBrush}"
                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
                     </Border>
                 </StackPanel>
@@ -129,6 +129,7 @@
                                             <Button Content="Avvia scansione" Style="{StaticResource RoundedButton}"
                                                     IsEnabled="{Binding CanScan}" Click="Scan_Click" />
                                             <Button Content="Annulla" Style="{StaticResource SecondaryButton}" Margin="10,0,0,0"
+                                                    IsEnabled="{Binding IsScanRunning}"
                                                     Click="CancelScan_Click" />
                                         </StackPanel>
                                     </StackPanel>
@@ -245,8 +246,12 @@
                                 <ComboBoxItem Content="Riavvio richiesto" Tag="Riavvio richiesto" />
                                 <ComboBoxItem Content="Errori" Tag="Errori" />
                             </ComboBox>
-                            <Button Grid.Column="2" Content="Nuova scansione" Style="{StaticResource SecondaryButton}"
-                                    IsEnabled="{Binding CanScan}" Click="Scan_Click" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="ShowProgressButton" Content="Mostra avanzamento" Style="{StaticResource RoundedButton}"
+                                        Visibility="Collapsed" Margin="0,0,8,0" Click="ShowProgress_Click" />
+                                <Button Content="Nuova scansione" Style="{StaticResource SecondaryButton}"
+                                        IsEnabled="{Binding CanScan}" Click="Scan_Click" />
+                            </StackPanel>
                         </Grid>
 
                         <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
@@ -261,6 +266,7 @@
                                             <DataTemplate>
                                                 <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
                                                     <CheckBox Style="{StaticResource ModernCheckBox}"
+                                                              IsEnabled="{Binding CanInstall}"
                                                               IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                                 </Grid>
                                             </DataTemplate>
@@ -360,6 +366,22 @@
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                                    <Button Content="Apri fonte" Padding="8,2" Height="28"
+                                                            VerticalAlignment="Center" Margin="0,0,7,0"
+                                                            FontSize="{DynamicResource FontSize10}"
+                                                            Tag="{Binding OfficialReleasePageUrl}"
+                                                            Click="OpenVendorSupport_Click">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding CanOpenOfficialSource}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                    </Button>
                                                     <Button Content="Riprova" Padding="9,6" FontSize="{DynamicResource FontSize10}"
                                                             Click="RetryUpdate_Click"
                                                             IsEnabled="{Binding DataContext.CanScan, RelativeSource={RelativeSource AncestorType=DataGrid}}">
@@ -487,16 +509,23 @@
                                 <StackPanel Grid.Column="2">
                                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                                         <StackPanel>
-                                            <TextBlock Text="SCHEDA VIDEO" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" FontSize="{DynamicResource FontSize12}" />
+                                            <TextBlock Text="SCHEDE VIDEO RILEVATE" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" FontSize="{DynamicResource FontSize12}" />
                                             <TextBox Text="{Binding HardwareInfo.GpuName, Mode=OneWay}" Style="{StaticResource SelectableValue}"
                                                      FontSize="{DynamicResource FontSize18}" FontWeight="SemiBold" Margin="0,8,0,14" />
-                                            <TextBlock Text="VRAM" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                            <TextBlock Text="MEMORIA VIDEO PRINCIPALE" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
                                             <TextBox Text="{Binding HardwareInfo.VramTotal, Mode=OneWay}" Style="{StaticResource SelectableValue}"
-                                                     Margin="0,5,0,6" />
-                                            <TextBlock Text="VRAM IN USO" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                                     FontSize="{DynamicResource FontSize15}" FontWeight="SemiBold" Margin="0,5,0,10" />
+                                            <TextBlock Text="DETTAGLIO MEMORIA PER GPU" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                            <TextBox Text="{Binding HardwareInfo.VramDetails, Mode=OneWay}" Style="{StaticResource SelectableValue}"
+                                                     TextWrapping="Wrap" Margin="0,5,0,10" />
+                                            <TextBlock Text="MEMORIA VIDEO IN USO" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
                                             <TextBox Text="{Binding HardwareInfo.VramUsed, Mode=OneWay}"
                                                      Style="{StaticResource SelectableValue}" Foreground="{DynamicResource MutedTextBrush}"
-                                                     FontSize="{DynamicResource FontSize11}" Margin="0,4,0,14" />
+                                                     FontSize="{DynamicResource FontSize11}" Margin="0,4,0,4" />
+                                            <TextBlock Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
+                                                       TextWrapping="Wrap" Margin="0,0,0,14">
+                                                <Run Text="GPU monitorata:" /><Run Text=" " /><Run Text="{Binding HardwareInfo.GpuMetricsSource, Mode=OneWay}" />
+                                            </TextBlock>
                                             <Grid>
                                                 <TextBlock Text="Utilizzo" Foreground="{DynamicResource MutedTextBrush}" />
                                                 <TextBlock Text="{Binding HardwareInfo.GpuUsageLabel}" HorizontalAlignment="Right" FontWeight="SemiBold" />
@@ -569,14 +598,14 @@
                                 </StackPanel>
                                 <StackPanel x:Name="DriverSummaryPanel" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                     <StackPanel HorizontalAlignment="Right">
-                                        <TextBlock Text="AGGIORNAMENTI VERIFICATI" Foreground="{DynamicResource MutedTextBrush}"
+                                        <TextBlock Text="DRIVER DA CONTROLLARE" Foreground="{DynamicResource MutedTextBrush}"
                                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" HorizontalAlignment="Right" />
                                         <TextBlock Text="{Binding DriverUpdateCount}" Foreground="{DynamicResource DangerBrush}"
                                                    FontSize="{DynamicResource FontSize30}" FontWeight="SemiBold" HorizontalAlignment="Right" />
                                     </StackPanel>
                                     <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="20,0" />
                                     <StackPanel HorizontalAlignment="Right">
-                                        <TextBlock Text="CONTROLLI PRODUTTORE" Foreground="{DynamicResource MutedTextBrush}"
+                                        <TextBlock Text="CONTROLLI MANUALI" Foreground="{DynamicResource MutedTextBrush}"
                                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" HorizontalAlignment="Right" />
                                         <TextBlock Text="{Binding VendorCheckCount}" Foreground="{DynamicResource AccentBrush}"
                                                    FontSize="{DynamicResource FontSize30}" FontWeight="SemiBold" HorizontalAlignment="Right" />
@@ -586,19 +615,21 @@
                         </Border>
 
                         <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" Margin="0,0,0,10" ClipToBounds="True">
-                            <Expander x:Name="DriverVendorExpander" IsExpanded="True" HorizontalContentAlignment="Stretch">
-                                <Expander.Header>
-                                    <StackPanel Orientation="Horizontal" MinHeight="42" Margin="12,0,14,0">
-                                        <TextBlock Text="Controlli e supporto produttore" FontWeight="SemiBold"
-                                                   FontSize="{DynamicResource FontSize13}" VerticalAlignment="Center" />
-                                        <TextBlock Margin="12,0,0,0" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center">
-                                            <Run Text="{Binding VendorCheckCount, Mode=OneWay}" /><Run Text=" disponibili" />
-                                        </TextBlock>
-                                    </StackPanel>
-                                </Expander.Header>
-                                <ScrollViewer Height="142" Margin="12,0,12,12"
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Orientation="Horizontal" MinHeight="42" Margin="16,0,14,0">
+                                    <TextBlock Text="Controlli manuali e supporto ufficiale" FontWeight="SemiBold"
+                                               FontSize="{DynamicResource FontSize13}" VerticalAlignment="Center" />
+                                    <TextBlock Margin="12,0,0,0" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center">
+                                        <Run Text="{Binding VendorCheckCount, Mode=OneWay}" /><Run Text=" disponibili" />
+                                    </TextBlock>
+                                </StackPanel>
+                                <ScrollViewer x:Name="DriverVendorScrollViewer" Grid.Row="1" Height="142" Margin="12,0,12,12"
                                               HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                                              CanContentScroll="True">
+                                              CanContentScroll="True" PreviewMouseWheel="DriverVendorScrollViewer_PreviewMouseWheel">
                                     <ItemsControl ItemsSource="{Binding VendorTools}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
@@ -640,7 +671,7 @@
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                 </ScrollViewer>
-                            </Expander>
+                            </Grid>
                         </Border>
 
                         <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0" ClipToBounds="True" Margin="0,0,0,2">
@@ -776,8 +807,8 @@
                                         <DataGridTemplateColumn Header="" Width="112">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
-                                                    <Button Content="Vedi update"
-                                                            Padding="11,6" FontSize="{DynamicResource FontSize11}"
+                                                    <Button Content="Vedi update" Height="28" VerticalAlignment="Center"
+                                                            Padding="9,2" FontSize="{DynamicResource FontSize10}"
                                                             Click="OpenUpdates_Click">
                                                         <Button.Style>
                                                             <Style TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
@@ -839,9 +870,14 @@
                                       SelectionUnit="FullRow" VerticalContentAlignment="Center" Margin="0">
                                 <DataGrid.Resources>
                                     <Style TargetType="TextBlock" BasedOn="{StaticResource DataGridText}" />
+                                    <Style x:Key="HistoryDateText" TargetType="TextBlock"
+                                           BasedOn="{StaticResource DataGridText}">
+                                        <Setter Property="Margin" Value="12,0,0,0" />
+                                    </Style>
                                 </DataGrid.Resources>
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Data" Binding="{Binding DisplayDate}" Width="135" ElementStyle="{StaticResource DataGridText}" />
+                                    <DataGridTextColumn Header="Data" Binding="{Binding DisplayDate}" Width="135"
+                                                        ElementStyle="{StaticResource HistoryDateText}" />
                                     <DataGridTemplateColumn Header="Nome" Width="2*">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
