@@ -77,6 +77,19 @@ if (WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15002B), 
     WinGetService.ClassifyOutcome(new ProcessResult(0, "", "")) != UpdateOutcomes.Completed)
     throw new InvalidOperationException("Classificazione degli esiti WinGet non valida.");
 
+var safeManifest = "PackageIdentifier: Example.Safe\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: install";
+var destructiveManifest = "PackageIdentifier: Example.Risky\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: uninstallPrevious";
+var unknownManifest = "PackageIdentifier: Example.Unknown\nInstallerType: exe";
+if (WinGetManifestSafetyService.ParseUpgradeSafety(safeManifest) != WinGetUpgradeSafety.Safe ||
+    WinGetManifestSafetyService.ParseUpgradeSafety(destructiveManifest) != WinGetUpgradeSafety.RemovesPreviousVersion ||
+    WinGetManifestSafetyService.ParseUpgradeSafety(unknownManifest) != WinGetUpgradeSafety.Unknown)
+    throw new InvalidOperationException("Classificazione di sicurezza dei manifest WinGet non valida.");
+var manifestUris = WinGetManifestSafetyService.BuildManifestUris("JetBrains.CLion", "2026.2");
+if (!manifestUris[0].AbsoluteUri.EndsWith(
+        "/manifests/j/JetBrains/CLion/2026.2/JetBrains.CLion.installer.yaml",
+        StringComparison.Ordinal))
+    throw new InvalidOperationException("Percorso del manifest WinGet non valido.");
+
 var duplicateOperaRows = string.Join('\n',
     $"{"Nome",-36}{"Id",-20}{"Versione",-16}{"Disponibile",-16}Origine",
     new string('-', 96),

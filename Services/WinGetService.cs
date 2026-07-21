@@ -6,6 +6,7 @@ namespace UpdateCenter.Services;
 
 public sealed class WinGetService
 {
+    private readonly WinGetManifestSafetyService _manifestSafety = new();
     private const int ShellExecuteInstallFailed = unchecked((int)0x8A150006);
     private const int UpdateNotApplicable = unchecked((int)0x8A15002B);
     private const int UpdateInstallTechnologyMismatch = unchecked((int)0x8A15008E);
@@ -25,7 +26,10 @@ public sealed class WinGetService
 
         var parsed = ParseUpgradeTable(output);
         if (parsed.Count > 0)
+        {
+            await _manifestSafety.ApplyAsync(parsed, cancellationToken);
             return parsed;
+        }
 
         if (!result.Success && !ContainsNoUpdatesMessage(output))
             throw new InvalidOperationException(SummarizeError(output, "WinGet non ha completato la scansione."));
@@ -49,11 +53,7 @@ public sealed class WinGetService
                 x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
             if (installedRow is not null && IsVersionAtLeast(installedRow.InstalledVersion, item.AvailableVersion))
                 return AlreadyCurrent(attempts, item, installedRow.InstalledVersion);
-
-            var interactiveRetry = RunUpgrade(
-                item, silent: false, useSource: true, useName: false, interactive: true);
-            attempts.Add(interactiveRetry);
-            return CombineAttempts(attempts, interactiveRetry.ExitCode);
+            return CombineAttempts(attempts, first.ExitCode);
         }
 
         if (!IsInstalledPackageMatchFailure(first))
