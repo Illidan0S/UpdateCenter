@@ -18,6 +18,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly AppUpdateService _appUpdateService = new();
     private CancellationTokenSource? _scanCancellation;
     private bool _isBusy;
+    private bool _isScanRunning;
     private double _progress;
     private string _statusText = LocalizationService.Text("Pronto per la scansione", "Ready to scan");
     private string _currentItemText = LocalizationService.Text("Premi Avvia scansione per iniziare.", "Select Start scan to begin.");
@@ -51,6 +52,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         UpdatesView.Filter = FilterUpdate;
         DriverInventoryView = CollectionViewSource.GetDefaultView(DriverInventory);
         DriverInventoryView.Filter = FilterDriverInventory;
+        DriverInventoryView.SortDescriptions.Add(
+            new SortDescription(nameof(DriverInventoryItem.HasUpdate), ListSortDirection.Descending));
+        DriverInventoryView.SortDescriptions.Add(
+            new SortDescription(nameof(DriverInventoryItem.DisplayName), ListSortDirection.Ascending));
     }
 
     public ObservableCollection<UpdateItem> Updates { get; } = [];
@@ -70,7 +75,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public bool CanScan => !IsBusy;
-    public bool CanUpdate => !IsBusy && Updates.Any(x => x.IsSelected);
+    public bool CanUpdate => !IsBusy && Updates.Any(x => x.CanInstall && x.IsSelected);
+
+    public bool IsScanRunning
+    {
+        get => _isScanRunning;
+        private set { _isScanRunning = value; OnPropertyChanged(); }
+    }
 
     public double Progress
     {
@@ -97,7 +108,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     }
 
     public int AvailableCount => Updates.Count;
-    public int SelectedCount => Updates.Count(x => x.IsSelected);
+    public int SelectedCount => Updates.Count(x => x.CanInstall && x.IsSelected);
     public int VisibleUpdateCount => UpdatesView.Cast<object>().Count();
     public int SoftwareUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Software);
     public int DriverCount => DriverInventory.Count;
@@ -117,7 +128,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : LocalizationService.IsEnglish
                 ? $"{SoftwareUpdateCount} software and {DriverUpdateCount} driver updates to review."
                 : $"{SoftwareUpdateCount} software e {DriverUpdateCount} driver da controllare.";
-    public IReadOnlyList<UpdateItem> SelectedItems => Updates.Where(x => x.IsSelected).ToList();
+    public IReadOnlyList<UpdateItem> SelectedItems => Updates.Where(x => x.CanInstall && x.IsSelected).ToList();
     public bool IsAppUpdateCheckBusy
     {
         get => _isAppUpdateCheckBusy;
@@ -211,6 +222,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ClearHardware();
         HardwareCheckStatus = T("Controllo automatico dei driver in corso…", "Automatic driver check in progress…");
         _scanCancellation = new CancellationTokenSource();
+        IsScanRunning = true;
         var warnings = new List<string>();
         HardwareScanResult? hardwareScan = null;
         var driverSources = new List<string>();
@@ -286,6 +298,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     warnings.Add(ex.Message);
                     LogService.Write("Catalogo driver ufficiali non disponibile.", ex);
                 }
+
             }
 
             if (hardwareScan is not null)
@@ -333,12 +346,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         {
             _scanCancellation.Dispose();
             _scanCancellation = null;
+            IsScanRunning = false;
             IsBusy = false;
             NotifyCounts();
         }
     }
 
-    public void CancelScan() => _scanCancellation?.Cancel();
+    public void CancelScan()
+    {
+        if (!IsScanRunning) return;
+        IsScanRunning = false;
+        _scanCancellation?.Cancel();
+    }
 
     public async Task<AppUpdateInfo?> CheckForAppUpdateAsync(bool manual)
     {
@@ -459,7 +478,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (IsBusy || selected.Count == 0) return null;
 
         IsBusy = true;
-        Progress = 0;
+        Progress = 2;
         StatusText = T("Aggiornamento in corso", "Update in progress");
         CurrentItemText = T("Conferma la richiesta di Controllo account utente di Windows.", "Confirm the Windows User Account Control prompt if requested.");
         foreach (var item in selected)
@@ -474,25 +493,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
-                    Progress = status.Total == 0 ? 0 : status.CurrentIndex * 100d / status.Total;
+                    var itemFraction = status.CurrentIndex < status.Total
+                        ? Math.Clamp(status.CurrentItemProgress, 0, 100) / 100d
+                        : 0;
+                    var completedPercentage = status.Total == 0
+                        ? 0
+                        : (status.CurrentIndex + itemFraction) * 100d / status.Total;
+                    Progress = Math.Max(Progress, completedPercentage);
                     CurrentItemText = status.Message;
                     StatusText = string.IsNullOrWhiteSpace(status.CurrentName)
                         ? T("Aggiornamento in corso", "Update in progress")
                         : LocalizationService.IsEnglish ? $"Updating: {status.CurrentName}" : $"Aggiornamento: {status.CurrentName}";
 
-                    foreach (var runResult in status.Results)
-                    {
-                        var item = Updates.FirstOrDefault(x => x.Id == runResult.Id);
-                        if (item is not null)
-                        {
-                            item.Status = runResult.Success ? T("Aggiornato", "Updated") : T("Errore", "Error");
-                            item.ResultDetails = runResult.Message;
-                            item.Diagnostics = runResult.Diagnostics;
-                        }
-                    }
+                    ApplyRunResults(selected, status.Results);
                 });
             }, CancellationToken.None);
 
+            ApplyRunResults(selected, result.Results);
             SaveRunToHistory(selected, result);
             Progress = 100;
             StatusText = result.Results.All(x => x.Success)
@@ -536,7 +553,43 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void SetAllSelected(bool selected)
     {
         foreach (var item in Updates)
-            item.IsSelected = selected;
+            item.IsSelected = selected && item.CanInstall;
+        NotifyCounts();
+    }
+
+    private void ApplyRunResults(
+        IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results)
+    {
+        var removedAny = false;
+        foreach (var runResult in results)
+        {
+            var item = selected.FirstOrDefault(x =>
+                x.Id.Equals(runResult.Id, StringComparison.OrdinalIgnoreCase) &&
+                x.Kind.ToString().Equals(runResult.Kind, StringComparison.OrdinalIgnoreCase));
+            if (item is null) continue;
+
+            item.Status = runResult.Outcome switch
+            {
+                UpdateOutcomes.NotApplicable => T("Non applicabile", "Not applicable"),
+                UpdateOutcomes.ManualRequired => T("Aggiornamento manuale", "Manual update"),
+                _ => runResult.Success ? T("Aggiornato", "Updated") : T("Errore", "Error")
+            };
+            item.ResultDetails = runResult.Message;
+            item.Diagnostics = runResult.Diagnostics;
+            if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
+                item.CanInstall = false;
+
+            var shouldRemove = runResult.Success &&
+                               !runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal);
+            if (shouldRemove && Updates.Remove(item))
+            {
+                item.PropertyChanged -= UpdateItemOnPropertyChanged;
+                removedAny = true;
+            }
+        }
+
+        if (!removedAny) return;
+        RefreshUpdatesView();
         NotifyCounts();
     }
 
@@ -587,6 +640,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         foreach (var item in updates)
         {
+            if (Updates.Any(existing =>
+                    existing.Kind == item.Kind &&
+                    existing.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase)))
+                continue;
             item.PropertyChanged += UpdateItemOnPropertyChanged;
             Updates.Add(item);
         }
@@ -719,7 +776,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Kind = runResult.Kind,
                 FromVersion = item?.InstalledVersion ?? "",
                 ToVersion = item?.AvailableVersion ?? "",
-                Result = runResult.Success ? "Riuscito" : "Fallito",
+                Result = runResult.Outcome switch
+                {
+                    UpdateOutcomes.NotApplicable => "Non applicabile",
+                    UpdateOutcomes.ManualRequired => "Manuale",
+                    _ => runResult.Success ? "Riuscito" : "Fallito"
+                },
                 Details = BuildReadableHistoryDetails(item, runResult),
                 Diagnostics = runResult.Diagnostics
             };
@@ -734,6 +796,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var toVersion = string.IsNullOrWhiteSpace(item?.AvailableVersion) ? "versione più recente disponibile" : item.AvailableVersion;
         var source = string.IsNullOrWhiteSpace(item?.Source) ? "fonte di aggiornamento configurata" : item.Source;
         var technicalDetail = string.IsNullOrWhiteSpace(runResult.Message) ? "Nessun dettaglio tecnico aggiuntivo." : runResult.Message.Trim();
+
+        if (runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
+            return $"{runResult.Name} non Ã¨ applicabile a questo PC secondo WinGet. " +
+                   $"La segnalazione da {fromVersion} a {toVersion} Ã¨ stata rimossa. Dettaglio: {technicalDetail}";
+
+        if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
+            return $"{runResult.Name} richiede un aggiornamento manuale perchÃ© il pacchetto installato e quello nuovo " +
+                   $"non supportano un upgrade automatico compatibile. Dettaglio: {technicalDetail}";
 
         if (runResult.Success)
         {

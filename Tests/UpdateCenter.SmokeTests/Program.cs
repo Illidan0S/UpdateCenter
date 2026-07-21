@@ -27,8 +27,8 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.3")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.3.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.4")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.4.");
 
 var settings = new AppSettings();
 if (!settings.CheckAppUpdatesAutomatically)
@@ -71,6 +71,28 @@ if (parsedItalian.Count != 1 || parsedItalian[0].Id != "Opera.OperaGX" ||
 if (parsedEnglish.Count != 1 || parsedEnglish[0].Id != "Microsoft.PowerToys")
     throw new InvalidOperationException("Parsing della tabella WinGet inglese non riuscito.");
 
+if (WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15002B), "", "")) != UpdateOutcomes.NotApplicable ||
+    WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15008E), "", "")) != UpdateOutcomes.ManualRequired ||
+    WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A150114), "", "")) != UpdateOutcomes.ManualRequired ||
+    WinGetService.ClassifyOutcome(new ProcessResult(0, "", "")) != UpdateOutcomes.Completed)
+    throw new InvalidOperationException("Classificazione degli esiti WinGet non valida.");
+
+var duplicateOperaRows = string.Join('\n',
+    $"{"Nome",-36}{"Id",-20}{"Versione",-16}{"Disponibile",-16}Origine",
+    new string('-', 96),
+    $"{"Opera GX Stable 133.0.5932.39",-36}{"Opera.OperaGX",-20}{"133.0.5932.39",-16}{"133.0.5932.56",-16}winget",
+    $"{"Opera GX Stable 133.0.5932.39",-36}{"Opera.OperaGX",-20}{"133.0.5932.39",-16}{"",-16}winget");
+var parseRowsMethod = typeof(WinGetService).GetMethod("ParsePackageRows", BindingFlags.Static | BindingFlags.NonPublic)
+    ?? throw new InvalidOperationException("Parser interno WinGet non trovato.");
+var duplicateParsedRows = parseRowsMethod.Invoke(null, [duplicateOperaRows])
+    ?? throw new InvalidOperationException("Parsing delle righe duplicate WinGet non riuscito.");
+var resolveMatchMethod = typeof(WinGetService).GetMethod("ResolveExactInstalledMatch", BindingFlags.Static | BindingFlags.NonPublic)
+    ?? throw new InvalidOperationException("Risoluzione della corrispondenza WinGet non trovata.");
+var resolvedOpera = resolveMatchMethod.Invoke(null,
+    [duplicateParsedRows, "Opera GX Stable 133.0.5932.39", "Opera.OperaGX"]);
+if (resolvedOpera is null)
+    throw new InvalidOperationException("Le righe WinGet duplicate dello stesso pacchetto non sono state unificate.");
+
 LocalizationService.Initialize("en");
 if (LocalizationService.Translate("Aggiornamenti") != "Updates")
     throw new InvalidOperationException("Traduzione inglese non disponibile.");
@@ -88,4 +110,4 @@ using (var catalogJson = JsonDocument.Parse(catalogStream))
         throw new InvalidOperationException("Schema del catalogo driver non valido.");
 }
 
-Console.WriteLine("Smoke test superati: versioni, WinGet, lingua, tipografia, migrazione e catalogo driver.");
+Console.WriteLine("Smoke test superati: versioni, WinGet, lingua, tipografia, migrazione e catalogo driver stabile.");

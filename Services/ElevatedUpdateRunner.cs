@@ -46,24 +46,41 @@ public static class ElevatedUpdateRunner
                 var item = plan.Items[index];
                 status.CurrentIndex = index;
                 status.CurrentName = item.Name;
+                status.Phase = "Preparazione";
+                status.CurrentItemProgress = 1;
+                status.LastHeartbeatUtc = DateTime.UtcNow;
                 status.Message = $"Aggiornamento di {item.Name}…";
                 WriteStatus(plan.StatusFile, status);
+
+                void ReportItemProgress(int percent, string message)
+                {
+                    status.CurrentItemProgress = Math.Clamp(percent, 1, 99);
+                    status.Phase = message;
+                    status.Message = message;
+                    status.LastHeartbeatUtc = DateTime.UtcNow;
+                    WriteStatus(plan.StatusFile, status);
+                }
 
                 ItemRunResult result;
                 if (item.Kind.Equals(nameof(UpdateKind.Driver), StringComparison.OrdinalIgnoreCase))
                 {
-                    result = item.DriverInstallMode.Equals(DriverInstallModes.OfficialInfPackage, StringComparison.Ordinal)
-                        ? OfficialDriverPackageService.Install(item)
-                        : WindowsUpdateService.InstallDriver(item);
+                    result = item.DriverInstallMode.Equals(
+                        DriverInstallModes.OfficialInfPackage, StringComparison.Ordinal)
+                        ? OfficialDriverPackageService.Install(item, ReportItemProgress)
+                        : WindowsUpdateService.InstallDriver(item, ReportItemProgress);
                 }
                 else
                 {
+                    ReportItemProgress(12, "Avvio dell'aggiornamento software con WinGet...");
                     result = InstallSoftware(item, plan.SilentSoftwareInstall);
                 }
 
                 status.Results.Add(result);
                 status.RestartRequired |= result.RestartRequired;
                 status.CurrentIndex = index + 1;
+                status.CurrentItemProgress = 100;
+                status.Phase = "Completato";
+                status.LastHeartbeatUtc = DateTime.UtcNow;
                 status.Message = result.Message;
                 WriteStatus(plan.StatusFile, status);
             }
@@ -94,6 +111,7 @@ public static class ElevatedUpdateRunner
         try
         {
             var result = WinGetService.Upgrade(item, silent);
+            var outcome = WinGetService.ClassifyOutcome(result);
             var output = string.Join(" ", (result.StandardOutput + "\n" + result.StandardError)
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
@@ -109,11 +127,17 @@ public static class ElevatedUpdateRunner
                 Id = item.Id,
                 Name = item.Name,
                 Kind = item.Kind,
-                Success = result.Success,
-                Message = result.Success
-                    ? alreadyCurrentMessage ?? "Software aggiornato con WinGet."
-                    :
-                    (string.IsNullOrWhiteSpace(output) ? $"WinGet ha restituito il codice {result.ExitCode}." : output),
+                Success = !outcome.Equals(UpdateOutcomes.Failed, StringComparison.Ordinal),
+                Outcome = outcome,
+                Message = outcome switch
+                {
+                    UpdateOutcomes.Completed => alreadyCurrentMessage ?? "Software aggiornato con WinGet.",
+                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non Ã¨ applicabile a questo PC. La voce verrÃ  rimossa fino alla prossima scansione.",
+                    UpdateOutcomes.ManualRequired => "Questo pacchetto non supporta l'aggiornamento automatico con la tecnologia di installazione corrente. Usa l'installer ufficiale del produttore.",
+                    _ => string.IsNullOrWhiteSpace(output)
+                        ? $"WinGet ha restituito il codice {result.ExitCode}."
+                        : output
+                },
                 Diagnostics = BuildProcessDiagnostics(result)
             };
         }
@@ -215,6 +239,10 @@ public sealed class UpdateCoordinator
         Action<UpdateRunStatus> progress,
         CancellationToken cancellationToken)
     {
+        if (selectedItems.Any(x => !x.CanInstall))
+            throw new InvalidOperationException(
+                "Gli elementi non installabili automaticamente non possono essere avviati.");
+
         AppPaths.EnsureCreated();
         var software = selectedItems.Where(x => x.Kind == UpdateKind.Software).ToList();
         var drivers = selectedItems.Where(x => x.Kind == UpdateKind.Driver).ToList();
@@ -327,6 +355,13 @@ public sealed class UpdateCoordinator
                 {
                     latest = current;
                     progress(BuildAggregateProgress(aggregate, current, completedBeforeBatch));
+                    if (current.State.Equals("Running", StringComparison.OrdinalIgnoreCase) &&
+                        DateTime.UtcNow - current.LastHeartbeatUtc > TimeSpan.FromMinutes(12))
+                    {
+                        try { process.Kill(true); } catch { }
+                        throw new TimeoutException(
+                            $"L'aggiornamento di {current.CurrentName} non ha comunicato progressi per 12 minuti ed Ã¨ stato interrotto.");
+                    }
                 }
                 await Task.Delay(350, cancellationToken);
             }
@@ -334,6 +369,10 @@ public sealed class UpdateCoordinator
             UpdateRunStatus final = JsonStorage.Read<UpdateRunStatus>(statusPath)
                 ?? latest
                 ?? throw new InvalidOperationException("Il processo di aggiornamento non ha restituito uno stato.");
+            if (final.State.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
+                final.State.Equals("Starting", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"Il processo di aggiornamento di {final.CurrentName} si Ã¨ chiuso prima di restituire un risultato.");
             progress(BuildAggregateProgress(aggregate, final, completedBeforeBatch));
             return final;
         }
@@ -355,6 +394,9 @@ public sealed class UpdateCoordinator
         Total = aggregate.Total,
         CurrentName = batch.CurrentName,
         Message = batch.Message,
+        Phase = batch.Phase,
+        CurrentItemProgress = batch.CurrentItemProgress,
+        LastHeartbeatUtc = batch.LastHeartbeatUtc,
         RestorePointRequested = aggregate.RestorePointRequested || batch.RestorePointRequested,
         RestorePointCreated = aggregate.RestorePointCreated || batch.RestorePointCreated,
         RestartRequired = aggregate.RestartRequired || batch.RestartRequired,

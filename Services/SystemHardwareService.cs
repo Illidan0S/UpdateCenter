@@ -110,18 +110,21 @@ public sealed class SystemHardwareService
         var gpuName = gpus.Count > 0
             ? string.Join(" · ", gpus.Select(x => x.Name))
             : "Scheda video non rilevata";
-        var vram = gpus.Where(x => x.AdapterRam > 0).ToList();
-        var hasIntegratedGpu = gpus.Any(x =>
-            x.Name.Contains("Integrated", StringComparison.OrdinalIgnoreCase) ||
-            x.Name.Contains("Intel", StringComparison.OrdinalIgnoreCase) ||
-            x.Name.Contains("Iris", StringComparison.OrdinalIgnoreCase) ||
-            x.Name.Contains("UHD", StringComparison.OrdinalIgnoreCase) ||
-            x.Name.Contains("Radeon(TM) Graphics", StringComparison.OrdinalIgnoreCase));
-        var vramLabel = vram.Count == 0
+        var vram = gpus.Where(x => x.AdapterRam > 0).OrderByDescending(x => x.AdapterRam).ToList();
+        var hasIntegratedGpu = gpus.Any(x => IsIntegratedGpu(x.Name));
+        var primaryGpu = vram.FirstOrDefault(x => !IsIntegratedGpu(x.Name)) ?? vram.FirstOrDefault();
+        var vramLabel = primaryGpu is null
             ? hasIntegratedGpu ? "Memoria condivisa dinamicamente con la RAM" : "Non esposta dal driver video"
-            : string.Join(" · ", vram.Select(x => gpus.Count == 1
-                ? FormatBytes(x.AdapterRam)
-                : $"{x.Name}: {FormatBytes(x.AdapterRam)}"));
+            : IsIntegratedGpu(primaryGpu.Name)
+                ? $"{FormatBytes(primaryGpu.AdapterRam)} riservati"
+                : $"{FormatBytes(primaryGpu.AdapterRam)} dedicati";
+        var vramDetails = vram.Count == 0
+            ? hasIntegratedGpu
+                ? "La GPU integrata utilizza memoria condivisa con la RAM quando necessario."
+                : "Il driver video non comunica la quantità di memoria."
+            : string.Join(Environment.NewLine, vram.Select(x => IsIntegratedGpu(x.Name)
+                ? $"{x.Name} — {FormatBytes(x.AdapterRam)} riservati + RAM condivisa dinamica"
+                : $"{x.Name} — {FormatBytes(x.AdapterRam)} dedicati"));
 
         var osParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(osCaption)) osParts.Add(osCaption);
@@ -144,6 +147,7 @@ public sealed class SystemHardwareService
             cpuCores,
             gpuName,
             vramLabel,
+            vramDetails,
             ramBytes > 0 ? FormatBytes(ramBytes) : "Non rilevata",
             width > 0 && height > 0 ? $"{width} × {height}" : "Non rilevata",
             frequency > 1 ? $"{frequency} Hz" : "Non rilevata",
@@ -160,6 +164,7 @@ public sealed class SystemHardwareService
         var cpuUsage = ReadCpuUsage();
         var (ramUsage, ramUsed) = ReadMemoryUsage();
         var (gpuUsage, vramUsed) = ReadGpuPerformanceCounters();
+        var gpuMetricsSource = "Contatori GPU di Windows (valore massimo rilevato)";
         var (cpuTemperature, gpuTemperature) = ReadTemperatures();
         var nvidia = TryReadNvidiaMetrics();
         if (nvidia is not null)
@@ -167,6 +172,7 @@ public sealed class SystemHardwareService
             gpuUsage = nvidia.Usage ?? gpuUsage;
             gpuTemperature = nvidia.Temperature ?? gpuTemperature;
             if (!string.IsNullOrWhiteSpace(nvidia.MemoryUsed)) vramUsed = nvidia.MemoryUsed;
+            if (!string.IsNullOrWhiteSpace(nvidia.Name)) gpuMetricsSource = nvidia.Name;
         }
 
         var temperaturesAvailable = cpuTemperature.HasValue || gpuTemperature.HasValue;
@@ -180,6 +186,7 @@ public sealed class SystemHardwareService
             gpuUsage,
             ramUsed,
             vramUsed,
+            gpuMetricsSource,
             cpuTemperature,
             gpuTemperature,
             status);
@@ -288,7 +295,7 @@ public sealed class SystemHardwareService
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 };
-                startInfo.ArgumentList.Add("--query-gpu=temperature.gpu,utilization.gpu,memory.used");
+                startInfo.ArgumentList.Add("--query-gpu=name,temperature.gpu,utilization.gpu,memory.used");
                 startInfo.ArgumentList.Add("--format=csv,noheader,nounits");
                 using var process = Process.Start(startInfo);
                 if (process is null) continue;
@@ -300,13 +307,13 @@ public sealed class SystemHardwareService
                 var line = process.StandardOutput.ReadLine();
                 if (string.IsNullOrWhiteSpace(line)) continue;
                 var parts = line.Split(',', StringSplitOptions.TrimEntries);
-                if (parts.Length < 3) continue;
-                var temperature = double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var temp) ? temp : (double?)null;
-                var usage = double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var load) ? load : (double?)null;
-                var memory = double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var usedMb)
+                if (parts.Length < 4) continue;
+                var temperature = double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var temp) ? temp : (double?)null;
+                var usage = double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var load) ? load : (double?)null;
+                var memory = double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var usedMb)
                     ? $"{usedMb:0.#} MB"
                     : "";
-                return new NvidiaMetrics(temperature, usage, memory);
+                return new NvidiaMetrics(parts[0], temperature, usage, memory);
             }
             catch { }
         }
@@ -359,6 +366,13 @@ public sealed class SystemHardwareService
         }
         return adapters;
     }
+
+    private static bool IsIntegratedGpu(string name) =>
+        name.Contains("Integrated", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("Intel", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("Iris", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("UHD", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("Radeon(TM) Graphics", StringComparison.OrdinalIgnoreCase);
 
     private static void TryQueryWmi(string nameSpace, string query, Action<dynamic> consume)
     {
@@ -676,5 +690,5 @@ public sealed class SystemHardwareService
     }
 
     private sealed record GpuInfo(string Name, long AdapterRam, long Width, long Height, long RefreshRate);
-    private sealed record NvidiaMetrics(double? Temperature, double? Usage, string MemoryUsed);
+    private sealed record NvidiaMetrics(string Name, double? Temperature, double? Usage, string MemoryUsed);
 }

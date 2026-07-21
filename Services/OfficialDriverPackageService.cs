@@ -14,36 +14,48 @@ public static class OfficialDriverPackageService
     private static readonly string[] ForbiddenPackageExtensions =
         [".exe", ".msi", ".msp", ".appx", ".msix", ".bat", ".cmd", ".ps1", ".vbs", ".js"];
 
-    public static ItemRunResult Install(PlanItem item)
+    public static ItemRunResult Install(PlanItem item, Action<int, string>? progress = null)
     {
         var workRoot = Path.Combine(Path.GetTempPath(), "UpdateCenter", "driver-" + Guid.NewGuid().ToString("N"));
         try
         {
+            progress?.Invoke(10, "Verifica del piano di installazione driver...");
             ValidatePlan(item);
             Directory.CreateDirectory(workRoot);
             var packagePath = Path.Combine(workRoot,
                 item.DriverPackageType.Equals("cab-inf", StringComparison.OrdinalIgnoreCase) ? "driver.cab" : "driver.zip");
-            DownloadVerified(item, packagePath);
+            progress?.Invoke(15, "Download del pacchetto driver ufficiale...");
+            DownloadVerified(item, packagePath, progress);
 
             var extractPath = Path.Combine(workRoot, "extracted");
             Directory.CreateDirectory(extractPath);
+            progress?.Invoke(62, "Estrazione sicura del pacchetto driver...");
             if (item.DriverPackageType.Equals("zip-inf", StringComparison.OrdinalIgnoreCase))
                 ExtractZipSafely(packagePath, extractPath);
             else
                 ExtractCab(packagePath, extractPath);
 
             RejectCompanionApplications(extractPath);
+            progress?.Invoke(72, "Verifica della compatibilita con il dispositivo...");
             var matchingInfs = FindMatchingInfs(extractPath, item.CompatibleHardwareIds);
             if (matchingInfs.Count == 0)
                 return Failed(item, "Pacchetto rifiutato: nessun INF contiene uno degli ID hardware verificati.");
 
-            foreach (var infPath in matchingInfs)
+            for (var infIndex = 0; infIndex < matchingInfs.Count; infIndex++)
+            {
+                var infPath = matchingInfs[infIndex];
+                progress?.Invoke(80 + (int)(7d * infIndex / Math.Max(1, matchingInfs.Count)),
+                    $"Verifica firma: {Path.GetFileName(infPath)}...");
                 VerifyCatalogSignature(infPath, item.ExpectedSignerSubjects, extractPath);
+            }
 
             var messages = new List<string>();
             var restartRequired = false;
-            foreach (var infPath in matchingInfs)
+            for (var infIndex = 0; infIndex < matchingInfs.Count; infIndex++)
             {
+                var infPath = matchingInfs[infIndex];
+                progress?.Invoke(88 + (int)(8d * infIndex / Math.Max(1, matchingInfs.Count)),
+                    $"Installazione del driver {Path.GetFileName(infPath)}...");
                 var result = ProcessRunner.RunAsync(
                     "pnputil.exe",
                     ["/add-driver", infPath, "/install"],
@@ -62,6 +74,7 @@ public static class OfficialDriverPackageService
                 messages.Add(Path.GetFileName(infPath));
             }
 
+            progress?.Invoke(99, "Verifica finale della versione installata...");
             return new ItemRunResult
             {
                 Id = item.Id,
@@ -102,11 +115,14 @@ public static class OfficialDriverPackageService
         OfficialDriverCatalogService.ValidateAuthorizedPackagePlan(item);
     }
 
-    private static void DownloadVerified(PlanItem item, string destinationPath)
+    private static void DownloadVerified(
+        PlanItem item,
+        string destinationPath,
+        Action<int, string>? progress)
     {
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.3");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.4");
         var current = new Uri(item.OfficialDownloadUrl, UriKind.Absolute);
         for (var redirect = 0; redirect <= 5; redirect++)
         {
@@ -129,6 +145,7 @@ public static class OfficialDriverPackageService
             using var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             var buffer = new byte[128 * 1024];
             long total = 0;
+            var expectedLength = response.Content.Headers.ContentLength;
             while (true)
             {
                 var read = source.Read(buffer, 0, buffer.Length);
@@ -136,8 +153,15 @@ public static class OfficialDriverPackageService
                 total += read;
                 if (total > MaximumDownloadBytes) throw new InvalidOperationException("Pacchetto driver troppo grande.");
                 destination.Write(buffer, 0, read);
+                if (expectedLength is > 0)
+                {
+                    var percent = 15 + (int)Math.Min(42, total * 42d / expectedLength.Value);
+                    progress?.Invoke(percent,
+                        $"Download driver: {FormatBytes(total)} di {FormatBytes(expectedLength.Value)}...");
+                }
             }
             destination.Flush(true);
+            progress?.Invoke(58, "Verifica dell'hash SHA-256 del pacchetto...");
             VerifyHash(destinationPath, item.ExpectedSha256);
             return;
         }
@@ -150,6 +174,15 @@ public static class OfficialDriverPackageService
         var actual = Convert.ToHexString(SHA256.HashData(stream));
         if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Pacchetto driver rifiutato: hash SHA-256 non corrispondente.");
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB"];
+        var value = (double)Math.Max(0, bytes);
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
+        return $"{value:0.#} {units[unit]}";
     }
 
     private static void ExtractZipSafely(string packagePath, string destinationRoot)

@@ -6,6 +6,10 @@ namespace UpdateCenter.Services;
 
 public sealed class WinGetService
 {
+    private const int ShellExecuteInstallFailed = unchecked((int)0x8A150006);
+    private const int UpdateNotApplicable = unchecked((int)0x8A15002B);
+    private const int UpdateInstallTechnologyMismatch = unchecked((int)0x8A15008E);
+    private const int InstallUpgradeNotSupported = unchecked((int)0x8A150114);
     private static readonly Regex AnsiEscape = new("\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])", RegexOptions.Compiled);
     private static readonly Regex DividerLine = new("^\\s*-{10,}\\s*$", RegexOptions.Compiled);
     private static readonly Regex HeaderToken = new("\\S+", RegexOptions.Compiled);
@@ -32,13 +36,31 @@ public sealed class WinGetService
     public static ProcessResult Upgrade(PlanItem item, bool silent)
     {
         var attempts = new List<ProcessResult>();
-        var first = RunUpgrade(item, silent, useSource: true, useName: false);
+        var first = RunUpgrade(item, silent, useSource: true, useName: false, interactive: false);
         attempts.Add(first);
-        if (first.Success || !IsInstalledPackageMatchFailure(first))
+        if (first.Success)
+            return first;
+
+        if (silent && first.ExitCode == ShellExecuteInstallFailed)
+        {
+            var installed = QueryInstalled("--id", item.Id);
+            attempts.Add(installed.Result);
+            var installedRow = installed.Rows.FirstOrDefault(x =>
+                x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
+            if (installedRow is not null && IsVersionAtLeast(installedRow.InstalledVersion, item.AvailableVersion))
+                return AlreadyCurrent(attempts, item, installedRow.InstalledVersion);
+
+            var interactiveRetry = RunUpgrade(
+                item, silent: false, useSource: true, useName: false, interactive: true);
+            attempts.Add(interactiveRetry);
+            return CombineAttempts(attempts, interactiveRetry.ExitCode);
+        }
+
+        if (!IsInstalledPackageMatchFailure(first))
             return first;
 
         // La sorgente può impedire a WinGet di correlare un'app installata per utente.
-        var withoutSource = RunUpgrade(item, silent, useSource: false, useName: false);
+        var withoutSource = RunUpgrade(item, silent, useSource: false, useName: false, interactive: false);
         attempts.Add(withoutSource);
         if (withoutSource.Success)
             return CombineAttempts(attempts, withoutSource.ExitCode);
@@ -54,23 +76,43 @@ public sealed class WinGetService
             return AlreadyCurrent(attempts, item, idRow.InstalledVersion);
 
         // Alcuni pacchetti WinGet sono elencati correttamente ma non sono più correlabili tramite ID.
-        // Il ripiego sul nome è consentito solo con una singola corrispondenza esatta.
+        // Il ripiego sul nome è consentito solo con una singola identità esatta; righe duplicate
+        // dello stesso ID e della stessa versione vengono considerate una sola corrispondenza.
         var installedByName = QueryInstalled("--name", item.Name);
         attempts.Add(installedByName.Result);
-        var exactNameRows = installedByName.Rows
-            .Where(x => x.Name.Equals(item.Name, StringComparison.CurrentCultureIgnoreCase))
-            .ToList();
-        if (exactNameRows.Count == 1)
+        var exactNameRow = ResolveExactInstalledMatch(installedByName.Rows, item.Name, item.Id);
+        if (exactNameRow is not null)
         {
-            if (IsVersionAtLeast(exactNameRows[0].InstalledVersion, item.AvailableVersion))
-                return AlreadyCurrent(attempts, item, exactNameRows[0].InstalledVersion);
+            if (IsVersionAtLeast(exactNameRow.InstalledVersion, item.AvailableVersion))
+                return AlreadyCurrent(attempts, item, exactNameRow.InstalledVersion);
 
-            var byName = RunUpgrade(item, silent, useSource: false, useName: true);
+            var byName = RunUpgrade(item, silent, useSource: false, useName: true, interactive: false);
             attempts.Add(byName);
             return CombineAttempts(attempts, byName.ExitCode);
         }
 
         return CombineAttempts(attempts, withoutSource.ExitCode);
+    }
+
+    private static WinGetPackageRow? ResolveExactInstalledMatch(
+        IEnumerable<WinGetPackageRow> rows, string expectedName, string expectedId)
+    {
+        var matches = rows
+            .Where(x => x.Name.Equals(expectedName, StringComparison.CurrentCultureIgnoreCase))
+            .GroupBy(x => new
+            {
+                Name = x.Name.ToUpperInvariant(),
+                Id = x.Id.ToUpperInvariant(),
+                Version = x.InstalledVersion.ToUpperInvariant()
+            })
+            .Select(x => x.First())
+            .ToList();
+
+        if (matches.Count != 1 ||
+            !matches[0].Id.Equals(expectedId, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return matches[0];
     }
 
     public static List<UpdateItem> ParseUpgradeTable(string output) =>
@@ -143,16 +185,20 @@ public sealed class WinGetService
         return [];
     }
 
-    private static ProcessResult RunUpgrade(PlanItem item, bool silent, bool useSource, bool useName)
+    private static ProcessResult RunUpgrade(
+        PlanItem item, bool silent, bool useSource, bool useName, bool interactive)
     {
         var arguments = new List<string>
         {
             "upgrade", useName ? "--name" : "--id", useName ? item.Name : item.Id, "--exact",
-            "--accept-package-agreements", "--accept-source-agreements",
-            "--disable-interactivity", "--nowarn"
+            "--accept-package-agreements", "--accept-source-agreements", "--nowarn"
         };
 
-        if (silent) arguments.Add("--silent");
+        if (interactive)
+            arguments.Add("--interactive");
+        else
+            arguments.Add("--disable-interactivity");
+        if (silent && !interactive) arguments.Add("--silent");
         if (useSource && IsSafeSource(item.Source))
         {
             arguments.Add("--source");
@@ -194,6 +240,13 @@ public sealed class WinGetService
                output.Contains("Non è stato trovato alcun pacchetto installato corrispondente ai criteri di input", StringComparison.OrdinalIgnoreCase) ||
                output.Contains("Nessun pacchetto installato trovato corrispondente ai criteri", StringComparison.OrdinalIgnoreCase);
     }
+
+    public static string ClassifyOutcome(ProcessResult result) => result.ExitCode switch
+    {
+        UpdateNotApplicable => UpdateOutcomes.NotApplicable,
+        UpdateInstallTechnologyMismatch or InstallUpgradeNotSupported => UpdateOutcomes.ManualRequired,
+        _ => result.Success ? UpdateOutcomes.Completed : UpdateOutcomes.Failed
+    };
 
     private static bool IsVersionAtLeast(string installed, string target)
     {

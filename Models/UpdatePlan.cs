@@ -1,5 +1,13 @@
 namespace UpdateCenter.Models;
 
+public static class UpdateOutcomes
+{
+    public const string Completed = "Completed";
+    public const string Failed = "Failed";
+    public const string NotApplicable = "NotApplicable";
+    public const string ManualRequired = "ManualRequired";
+}
+
 public sealed class UpdatePlan
 {
     public bool CreateRestorePoint { get; set; }
@@ -37,6 +45,9 @@ public sealed class UpdateRunStatus
     public int Total { get; set; }
     public string CurrentName { get; set; } = "";
     public string Message { get; set; } = "";
+    public string Phase { get; set; } = "";
+    public double CurrentItemProgress { get; set; }
+    public DateTime LastHeartbeatUtc { get; set; } = DateTime.UtcNow;
     public bool RestorePointRequested { get; set; }
     public bool RestorePointCreated { get; set; }
     public bool RestartRequired { get; set; }
@@ -50,6 +61,7 @@ public sealed class ItemRunResult
     public string Kind { get; set; } = "";
     public bool Success { get; set; }
     public bool RestartRequired { get; set; }
+    public string Outcome { get; set; } = UpdateOutcomes.Completed;
     public string Message { get; set; } = "";
     public string Diagnostics { get; set; } = "";
 }

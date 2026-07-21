@@ -23,12 +23,12 @@ public partial class MainWindow : Window
     private FrameworkElement? _pendingHistoryElement;
     private bool _appUpdateDialogOpen;
     private bool _scheduledScanRunning;
-    private bool? _shortDriverLayout;
+    private UpdateProgressWindow? _activeProgressWindow;
 
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.3"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.4"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -187,30 +187,38 @@ public partial class MainWindow : Window
         };
         if (confirmation.ShowDialog() != true) return;
 
+        var progressWindow = new UpdateProgressWindow(_viewModel) { Owner = this };
+        _activeProgressWindow = progressWindow;
+        progressWindow.PresentationChanged += (_, _) => UpdateProgressRecallButton();
+        progressWindow.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_activeProgressWindow, progressWindow))
+                _activeProgressWindow = null;
+            UpdateProgressRecallButton();
+        };
+        progressWindow.Show();
+        progressWindow.Activate();
+        UpdateProgressRecallButton();
+
         var result = await _viewModel.InstallItemsAsync(items);
-        if (result is null) return;
-
-        var succeeded = result.Results.Count(x => x.Success);
-        var failed = result.Results.Count - succeeded;
-        var message = $"Aggiornamenti riusciti: {succeeded}\nAggiornamenti falliti: {failed}";
-        if (result.RestorePointRequested && !result.RestorePointCreated)
-            message += "\n\nIl punto di ripristino non è stato creato. Controlla Protezione sistema.";
-
-        if (result.RestartRequired)
+        if (result is null)
         {
-            message += "\n\nWindows richiede un riavvio. Riavviare adesso?";
-            var restart = MessageBox.Show(message, "Aggiornamento completato", MessageBoxButton.YesNo, MessageBoxImage.Information);
-            if (restart == MessageBoxResult.Yes)
-            {
-                try { Process.Start(new ProcessStartInfo("shutdown.exe", "/r /t 0") { UseShellExecute = false }); }
-                catch (Exception ex) { MessageBox.Show(ex.Message, "Riavvio non avviato", MessageBoxButton.OK, MessageBoxImage.Warning); }
-            }
+            progressWindow.ShowFailure(_viewModel.StatusText, _viewModel.CurrentItemText);
+            UpdateProgressRecallButton();
+            return;
         }
-        else
-        {
-            MessageBox.Show(message, "Aggiornamento completato", MessageBoxButton.OK,
-                failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
-        }
+
+        progressWindow.ShowCompleted(result);
+        UpdateProgressRecallButton();
+    }
+
+    private void ShowProgress_Click(object sender, RoutedEventArgs e) => _activeProgressWindow?.BringToFront();
+
+    private void UpdateProgressRecallButton()
+    {
+        ShowProgressButton.Visibility = _activeProgressWindow is { IsOperationInProgress: true, IsHiddenOrMinimized: true }
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private void SaveSettings_Click(object sender, RoutedEventArgs e)
@@ -313,11 +321,6 @@ public partial class MainWindow : Window
         DriverMachineName.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverSourceDescription.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverHeaderCard.Padding = shortDriverLayout ? new Thickness(14) : new Thickness(18);
-        if (_shortDriverLayout != shortDriverLayout)
-        {
-            DriverVendorExpander.IsExpanded = !shortDriverLayout;
-            _shortDriverLayout = shortDriverLayout;
-        }
         HomeStatusCard.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         HomeStatusColumn.Width = new GridLength(iconOnly ? 0d : narrow ? 220d : compact ? 255d : 300d);
         Grid.SetColumnSpan(HomeHeroContent, iconOnly ? 2 : 1);
@@ -406,6 +409,12 @@ public partial class MainWindow : Window
     }
 
     private void DriverInventoryGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        => ScrollHardwarePage(e);
+
+    private void DriverVendorScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        => ScrollHardwarePage(e);
+
+    private void ScrollHardwarePage(MouseWheelEventArgs e)
     {
         if (HardwarePage.Visibility != Visibility.Visible || HardwarePage.ScrollableHeight <= 0) return;
         HardwarePage.ScrollToVerticalOffset(HardwarePage.VerticalOffset - (e.Delta / 3d));

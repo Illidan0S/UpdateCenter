@@ -24,6 +24,9 @@ public static class PreflightService
     {
         var result = new PreflightResult();
 
+        if (selectedItems.Any(x => !x.CanInstall))
+            result.BlockingIssues.Add("Uno o più driver sono risultati informativi e non possono essere installati automaticamente.");
+
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
             result.BlockingIssues.Add("Update Center richiede Windows 10 versione 1809 (build 17763) o successiva.");
 
