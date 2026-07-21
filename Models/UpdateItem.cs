@@ -50,6 +50,7 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public bool RequiresRestart { get; init; }
     public bool IsImportant { get; init; }
     public bool IsOptional { get; init; }
+    public bool RequiresRiskConfirmation { get; set; }
     public bool CanInstall
     {
         get => _canInstall;
@@ -83,14 +84,20 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public string SourceSummary => string.IsNullOrWhiteSpace(SourceConfidence)
         ? Source
         : $"{Source} · {SourceConfidence}";
-    public string PriorityLabel => !CanInstall
+    public string PriorityLabel => RequiresRiskConfirmation
+        ? UpdateCenter.Services.LocalizationService.Text("Conferma", "Confirm")
+        : !CanInstall
         ? UpdateCenter.Services.LocalizationService.Text("Solo verifica", "Review only")
         : IsImportant
         ? UpdateCenter.Services.LocalizationService.Text("Importante", "Important")
         : IsOptional
             ? UpdateCenter.Services.LocalizationService.Text("Facoltativo", "Optional")
             : "Standard";
-    public string PriorityDescription => !CanInstall
+    public string PriorityDescription => RequiresRiskConfirmation
+        ? UpdateCenter.Services.LocalizationService.Text(
+            "Questo installer può rimuovere la versione funzionante prima di installare quella nuova. È richiesta una conferma separata.",
+            "This installer may remove the working version before installing the new one. Separate confirmation is required.")
+        : !CanInstall
         ? UpdateCenter.Services.LocalizationService.Text(
             "Questo elemento richiede un aggiornamento manuale dalla fonte ufficiale.",
             "This item requires a manual update from its official source.")

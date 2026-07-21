@@ -28,7 +28,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.4"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.5"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };

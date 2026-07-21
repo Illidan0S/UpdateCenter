@@ -107,6 +107,27 @@
                         </ItemsControl>
                     </StackPanel>
 
+                    <Border x:Name="RiskConfirmationPanel" Visibility="Collapsed"
+                            Background="{DynamicResource WarningSoftBrush}" BorderBrush="{DynamicResource WarningBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="14" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="Aggiornamenti con rimozione preventiva" Foreground="{DynamicResource WarningBrush}"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Margin="0,5,0,8" TextWrapping="Wrap"
+                                       Text="Questi installer possono rimuovere la versione funzionante prima di installare quella nuova. Se l'installazione fallisce, il programma potrebbe dover essere reinstallato manualmente:" />
+                            <ItemsControl x:Name="RiskItemsList" Margin="0,0,0,9">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Name, StringFormat=•  {0}}" FontWeight="SemiBold" Margin="0,2" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <CheckBox x:Name="RiskAcceptanceCheckBox"
+                                      Content="Ho compreso il rischio e voglio eseguire comunque questi aggiornamenti"
+                                      Checked="RiskAcceptanceChanged" Unchecked="RiskAcceptanceChanged" />
+                        </StackPanel>
+                    </Border>
+
                     <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="12"
                             ClipToBounds="True">
                         <DataGrid x:Name="ItemsGrid" IsReadOnly="True" MaxHeight="230" RowHeight="46">
