@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.5** (`v1.0.5`).
+Versione pubblica attuale: **1.0.6** (`v1.0.6`).
 
 Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e driver tramite **Windows Update Agent** più un catalogo incorporato e trasparente di metadati verificati dei produttori. L'utente sceglie singolarmente cosa installare.
 
@@ -12,9 +12,12 @@ Il controllo Windows Update è automatico. Il catalogo Update Center può propor
 
 ## Quale file usare
 
-Per installare normalmente il programma usa **`UpdateCenter-Setup-vVERSIONE.exe`** dalla sezione GitHub Releases. È un installer grafico per utente: non richiede il compilatore .NET né privilegi amministrativi, copia l'app in `%LOCALAPPDATA%\Programs\UpdateCenter`, aggiunge il collegamento al menu Start e registra il disinstallatore `.exe` in **App installate** di Windows.
+Le Release ufficiali includono due eseguibili:
 
-`UpdateCenter-vVERSIONE.exe` è invece l'eseguibile portatile e viene mantenuto anche perché l'aggiornamento automatico dell'app usa questo asset verificato. Può essere avviato direttamente, ma non crea collegamenti né una voce di disinstallazione.
+- **`UpdateCenter-vVERSIONE.exe`** è la versione standard usata dall'aggiornamento automatico. Dopo il primo avvio, conservala in una cartella stabile e rinominala `UpdateCenter.exe`: l'app potrà così scaricare, verificare con SHA-256 e sostituire automaticamente il proprio eseguibile quando esce una nuova Release.
+- **`UpdateCenter-vVERSIONE-Portable.exe`** è la versione senza installazione, adatta anche a una chiavetta USB. Può controllare la disponibilità di nuove versioni, ma non si sostituisce automaticamente.
+
+Il file **`UpdateCenter-vVERSIONE.exe.sha256`** non è una terza versione: è la firma SHA-256 usata per verificare in sicurezza il download automatico e deve restare allegata alla Release.
 
 Usa **`CREA-EXE.bat`** soltanto se hai modificato il codice sorgente o vuoi rigenerare personalmente l'eseguibile portatile. È uno strumento per sviluppatori, non un installer distribuito agli utenti.
 
@@ -40,13 +43,13 @@ dotnet publish .\UpdateCenter.csproj --configuration Release --runtime win-x64 -
 
 La configurazione Release abilita la pubblicazione single-file per `win-x64` senza trimming.
 
-Per creare anche il Setup `.exe` serve Inno Setup Compiler 6 o 7. Dopo `build.ps1` esegui:
+Per creare localmente anche un Setup `.exe` serve Inno Setup Compiler 6 o 7. Dopo `build.ps1` esegui:
 
 ```powershell
 .\build-installer.ps1 -NoAppBuild
 ```
 
-Il risultato viene scritto in `installer-dist\UpdateCenter-Setup-vVERSIONE.exe`, insieme al relativo SHA-256. La disinstallazione avviene da **Impostazioni > App > App installate** oppure dal disinstallatore `.exe` creato da Windows. Al termine viene chiesto separatamente se eliminare anche impostazioni, cronologia e log locali.
+Il risultato viene scritto in `installer-dist\UpdateCenter-Setup-vVERSIONE.exe`, insieme al relativo SHA-256. Il Setup è disponibile per test o distribuzioni locali; le Release pubbliche usano gli eseguibili standard e portable descritti sopra.
 
 ## Utilizzo
 
@@ -143,12 +146,12 @@ L'eseguibile viene scaricato in `%LOCALAPPDATA%\UpdateCenter\Updates` e installa
 
 ## GitHub Actions e pubblicazione delle versioni
 
-Il workflow `.github/workflows/release.yml` compila su Windows con .NET 8, genera sia l'eseguibile portatile sia il Setup grafico `.exe`, verifica versione e contenuto, genera i rispettivi SHA-256 e carica gli artefatti. Con un tag stabile `vMAJOR.MINOR.PATCH` crea la Release soltanto dopo il superamento di tutti i controlli.
+Il workflow `.github/workflows/release.yml` compila su Windows con .NET 8, verifica versione e contenuto, genera gli artefatti e le firme SHA-256. Con un tag stabile `vMAJOR.MINOR.PATCH` crea la Release soltanto dopo il superamento di tutti i controlli. La Release pubblica deve contenere l'eseguibile standard per l'aggiornamento automatico, il relativo file `.sha256` e l'eseguibile portable.
 
 Per una versione futura:
 
 1. aggiorna `Version`, `AssemblyVersion`, `FileVersion` e `InformationalVersion` in `UpdateCenter.csproj` e il fallback visibile nell'interfaccia;
-2. esegui `build.ps1` e `build-installer.ps1 -NoAppBuild`, quindi verifica localmente app, installazione e disinstallazione;
+2. esegui `build.ps1`, verifica localmente l'app e, se necessario, usa `build-installer.ps1 -NoAppBuild` per test locali del Setup;
 3. pubblica le modifiche su `main` e attendi il completamento positivo del workflow;
 4. crea e pubblica il tag corrispondente, per esempio `v1.0.1`;
-5. verifica che la Release contenga Setup `.exe`, eseguibile portatile versionato e i rispettivi file `.sha256`.
+5. verifica che la Release contenga `UpdateCenter-vVERSIONE.exe`, `UpdateCenter-vVERSIONE.exe.sha256` e `UpdateCenter-vVERSIONE-Portable.exe`.

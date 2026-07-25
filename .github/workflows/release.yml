@@ -66,14 +66,6 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -NoRestore
 
-      - name: Install Inno Setup Compiler
-        shell: pwsh
-        run: choco install innosetup --no-progress --yes
-
-      - name: Build graphical EXE installer
-        shell: pwsh
-        run: .\build-installer.ps1 -NoAppBuild
-
       - name: Create and verify release artifacts
         id: package
         shell: pwsh
@@ -87,31 +79,26 @@ jobs:
           }
           New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
 
-          $portableName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
-          $setupName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
+          $standardName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
+          $portableName = "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe"
+          $standardPath = Join-Path $artifacts $standardName
           $portablePath = Join-Path $artifacts $portableName
-          $setupPath = Join-Path $artifacts $setupName
+          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $standardPath
           Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $portablePath
-          Copy-Item -LiteralPath ".\installer-dist\$setupName" -Destination $setupPath
 
-          foreach ($assetPath in @($portablePath, $setupPath)) {
-            $hash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash
-            $checksumPath = "$assetPath.sha256"
-            $assetName = Split-Path -Leaf $assetPath
-            Set-Content -LiteralPath $checksumPath -Value "$hash  $assetName" -Encoding ascii
-            $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), '[0-9A-Fa-f]{64}')).Value
-            if ($publishedHash -ne $hash) {
-              throw "Verifica SHA-256 non riuscita per $assetName."
+          $hash = (Get-FileHash -LiteralPath $standardPath -Algorithm SHA256).Hash
+          $checksumPath = "$standardPath.sha256"
+          Set-Content -LiteralPath $checksumPath -Value "$hash  $standardName" -Encoding ascii
+          $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), '[0-9A-Fa-f]{64}')).Value
+          if ($publishedHash -ne $hash) {
+            throw "Verifica SHA-256 non riuscita per $standardName."
+          }
+
+          foreach ($assetPath in @($standardPath, $portablePath)) {
+            $assetVersion = (Get-Item -LiteralPath $assetPath).VersionInfo.ProductVersion.Trim()
+            if ($assetVersion -ne $env:RELEASE_VERSION) {
+              throw "Versione EXE inattesa per $(Split-Path -Leaf $assetPath): $assetVersion"
             }
-          }
-
-          $portableVersion = (Get-Item -LiteralPath $portablePath).VersionInfo.ProductVersion
-          $setupVersion = (Get-Item -LiteralPath $setupPath).VersionInfo.ProductVersion.Trim()
-          if ($portableVersion -ne $env:RELEASE_VERSION) {
-            throw "Versione EXE portatile inattesa: $portableVersion"
-          }
-          if ($setupVersion -ne $env:RELEASE_VERSION) {
-            throw "Versione Setup EXE inattesa: $setupVersion"
           }
           if (@(Get-ChildItem -LiteralPath $artifacts -File -Filter '*.bat').Count -ne 0) {
             throw 'Gli artefatti pubblicabili non devono contenere installer o disinstaller BAT.'
@@ -149,8 +136,8 @@ jobs:
           ASSET_DIRECTORY: artifacts
         run: |
           $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
-          if ($assets.Count -ne 4) {
-            throw "Sono attesi quattro asset di Release, trovati: $($assets.Count)."
+          if ($assets.Count -ne 3) {
+            throw "Sono attesi tre asset di Release, trovati: $($assets.Count)."
           }
           gh release create $env:GITHUB_REF_NAME @assets `
             --repo "$env:GITHUB_REPOSITORY" `
