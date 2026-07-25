@@ -27,14 +27,56 @@ public sealed class WinGetService
         var parsed = ParseUpgradeTable(output);
         if (parsed.Count > 0)
         {
-            await PreparePackageMetadataAsync(parsed, cancellationToken);
-            return parsed;
+            var installedRows = await ReadInstalledInventoryAsync(cancellationToken);
+            var verified = FilterVerifiedInstalledCandidates(parsed, installedRows);
+            var rejectedCount = parsed.Count - verified.Count;
+            if (rejectedCount > 0)
+                LogService.Write($"Esclusi {rejectedCount} candidati WinGet senza un'installazione locale verificata.");
+            await PreparePackageMetadataAsync(verified, cancellationToken);
+            return verified;
         }
 
         if (!result.Success && !ContainsNoUpdatesMessage(output))
             throw new InvalidOperationException(SummarizeError(output, "WinGet non ha completato la scansione."));
 
         return [];
+    }
+
+    private static async Task<List<WinGetPackageRow>> ReadInstalledInventoryAsync(
+        CancellationToken cancellationToken)
+    {
+        var result = await ProcessRunner.RunAsync(
+            "winget.exe",
+            ["list", "--accept-source-agreements", "--disable-interactivity", "--nowarn"],
+            cancellationToken,
+            TimeSpan.FromMinutes(5));
+        var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
+        if (!result.Success)
+            throw new InvalidOperationException(SummarizeError(
+                output,
+                "WinGet non ha permesso di verificare i programmi realmente installati."));
+
+        var rows = ParsePackageRows(output);
+        if (rows.Count == 0)
+            throw new InvalidOperationException(
+                "WinGet non ha restituito un inventario installato verificabile; gli aggiornamenti software dubbi sono stati esclusi.");
+        return rows;
+    }
+
+    internal static List<UpdateItem> FilterVerifiedInstalledCandidates(
+        IEnumerable<UpdateItem> candidates,
+        IEnumerable<WinGetPackageRow> installedRows)
+    {
+        var installedIds = installedRows
+            .Where(row => IsSafePackageId(row.Id))
+            .Select(row => row.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return candidates
+            .Where(candidate => IsSafePackageId(candidate.Id) && installedIds.Contains(candidate.Id))
+            .GroupBy(candidate => candidate.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
     }
 
     public Task PreparePackageMetadataAsync(

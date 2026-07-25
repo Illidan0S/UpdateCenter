@@ -90,6 +90,28 @@ if (parsedEnglish.Count != 1 || parsedEnglish[0].Id != "Microsoft.PowerToys")
 if (parsedRuntime.Count != 1 || parsedRuntime[0].Kind != UpdateKind.Runtime)
     throw new InvalidOperationException("Un pacchetto runtime WinGet non è stato classificato correttamente.");
 
+var installedInventory = string.Join('\n',
+    $"{"Nome",-24}{"Id",-25}{"Versione",-16}{"Disponibile",-16}Origine",
+    new string('-', 90),
+    $"{"Opera GX Stable",-24}{"Opera.OperaGX",-25}{"133.0.5932.39",-16}{"",-16}winget");
+var installedRows = WinGetService.ParsePackageRows(installedInventory);
+var uninstalledCandidate = new UpdateItem
+{
+    Id = "Example.NotInstalled",
+    Name = "Programma non installato",
+    Kind = UpdateKind.Software,
+    InstalledVersion = "1.0",
+    AvailableVersion = "2.0"
+};
+var filterInstalledMethod = typeof(WinGetService).GetMethod(
+    "FilterVerifiedInstalledCandidates", BindingFlags.Static | BindingFlags.NonPublic)
+    ?? throw new InvalidOperationException("Filtro delle installazioni WinGet verificate non trovato.");
+var verifiedCandidates = ((IEnumerable<UpdateItem>?)filterInstalledMethod.Invoke(
+    null, [parsedItalian.Concat([uninstalledCandidate]).ToList(), installedRows]))?.ToList()
+    ?? throw new InvalidOperationException("Filtro delle installazioni WinGet non eseguibile.");
+if (verifiedCandidates.Count != 1 || verifiedCandidates[0].Id != "Opera.OperaGX")
+    throw new InvalidOperationException("Un software non installato è stato incluso negli aggiornamenti WinGet.");
+
 if (WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15002B), "", "")) != UpdateOutcomes.NotApplicable ||
     WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15008E), "", "")) != UpdateOutcomes.ManualRequired ||
     WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A150114), "", "")) != UpdateOutcomes.ManualRequired ||
