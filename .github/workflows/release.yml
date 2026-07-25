@@ -64,6 +64,14 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -NoRestore
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        shell: pwsh
+        run: .\build-installer.ps1 -NoAppBuild
+
       - name: Create and verify release artifacts
         id: package
         shell: pwsh
@@ -77,19 +85,21 @@ jobs:
           }
           New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
 
-          $standardName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
+          $standardName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
           $portableName = "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe"
           $standardPath = Join-Path $artifacts $standardName
           $portablePath = Join-Path $artifacts $portableName
-          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $standardPath
+          Copy-Item -LiteralPath ".\installer-dist\$standardName" -Destination $standardPath
           Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $portablePath
 
-          $hash = (Get-FileHash -LiteralPath $standardPath -Algorithm SHA256).Hash
-          $checksumPath = "$standardPath.sha256"
-          Set-Content -LiteralPath $checksumPath -Value "$hash  $standardName" -Encoding ascii
-          $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), '[0-9A-Fa-f]{64}')).Value
-          if ($publishedHash -ne $hash) {
-            throw "Verifica SHA-256 non riuscita per $standardName."
+          foreach ($asset in @(@($standardPath, $standardName), @($portablePath, $portableName))) {
+            $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
+            $checksumPath = "$($asset[0]).sha256"
+            Set-Content -LiteralPath $checksumPath -Value "$hash  $($asset[1])" -Encoding ascii
+            $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), '[0-9A-Fa-f]{64}')).Value
+            if ($publishedHash -ne $hash) {
+              throw "Verifica SHA-256 non riuscita per $($asset[1])."
+            }
           }
 
           foreach ($assetPath in @($standardPath, $portablePath)) {

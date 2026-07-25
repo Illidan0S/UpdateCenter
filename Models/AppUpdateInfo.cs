@@ -50,6 +50,7 @@ public sealed class AppUpdateInfo
     public required Uri DownloadUri { get; init; }
     public required Uri Sha256Uri { get; init; }
     public required string AssetName { get; init; }
+    public required bool IsInstallerPackage { get; init; }
     public required Uri ReleasePageUri { get; init; }
     public string? ApiSha256 { get; init; }
 

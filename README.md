@@ -24,10 +24,10 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 
 Le [Release GitHub](https://github.com/Illidan0S/UpdateCenter/releases) includono due eseguibili:
 
-- **`UpdateCenter-vVERSIONE.exe`**: versione standard, compatibile con l’aggiornamento automatico senza dover rinominare il file.
+- **`UpdateCenter-Setup-vVERSIONE.exe`**: installer standard, crea la voce nel menu Start e gestisce gli aggiornamenti dell’installazione.
 - **`UpdateCenter-vVERSIONE-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB e aggiornabile automaticamente mantenendo il proprio nome.
 
-Il file **`UpdateCenter-vVERSIONE.exe.sha256`** è la firma di sicurezza usata per verificare il download automatico: non è una terza versione dell’app.
+I file **`.sha256`** sono i checksum di sicurezza usati per verificare i download automatici: non sono versioni dell’app.
 
 ## Utilizzo
 

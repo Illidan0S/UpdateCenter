@@ -65,7 +65,10 @@ public sealed class AppUpdateService
         if (availableVersion <= installedVersion)
             return null;
 
-        var executableName = $"UpdateCenter-v{availableVersion}.exe";
+        var isInstalledSetup = IsInstalledSetup();
+        var executableName = isInstalledSetup
+            ? $"UpdateCenter-Setup-v{availableVersion}.exe"
+            : $"UpdateCenter-v{availableVersion}-Portable.exe";
         var checksumName = executableName + ".sha256";
         var executable = release.Assets.FirstOrDefault(x => x.Name.Equals(executableName, StringComparison.OrdinalIgnoreCase));
         var checksum = release.Assets.FirstOrDefault(x => x.Name.Equals(checksumName, StringComparison.OrdinalIgnoreCase));
@@ -88,6 +91,7 @@ public sealed class AppUpdateService
             DownloadUri = downloadUri,
             Sha256Uri = checksumUri,
             AssetName = executableName,
+            IsInstallerPackage = isInstalledSetup,
             ReleasePageUri = releaseUri,
             ApiSha256 = apiSha256
         };
@@ -146,12 +150,31 @@ public sealed class AppUpdateService
                 throw new InvalidDataException("Il file scaricato non ha superato la verifica SHA-256.");
 
             File.Move(partialPath, finalPath, true);
+            progress?.Report(new AppUpdateDownloadProgress(100, "Download verificato · preparazione del riavvio…"));
+            if (update.IsInstallerPackage)
+            {
+                var installerStart = new ProcessStartInfo
+                {
+                    FileName = finalPath,
+                    WorkingDirectory = AppPaths.UpdatesDirectory,
+                    UseShellExecute = true,
+                    Verb = "runas"
+                };
+                installerStart.ArgumentList.Add("/VERYSILENT");
+                installerStart.ArgumentList.Add("/NORESTART");
+                installerStart.ArgumentList.Add("/CLOSEAPPLICATIONS");
+                installerStart.ArgumentList.Add("/SUPPRESSMSGBOXES");
+                _ = Process.Start(installerStart)
+                    ?? throw new InvalidOperationException("Impossibile avviare l'installer dell'aggiornamento.");
+                LogService.Write($"Installer dell'app v{update.AvailableVersion} scaricato e avviato.");
+                return;
+            }
+
             var targetPath = Environment.ProcessPath
                 ?? throw new InvalidOperationException("Il percorso dell'eseguibile in uso non è disponibile.");
             if (!IsSupportedUpdateTargetName(Path.GetFileName(targetPath)))
                 throw new InvalidOperationException("Il nome dell'eseguibile non consente un aggiornamento automatico sicuro.");
 
-            progress?.Report(new AppUpdateDownloadProgress(100, "Download verificato · preparazione del riavvio…"));
             var startInfo = new ProcessStartInfo
             {
                 FileName = finalPath,
@@ -347,6 +370,23 @@ public sealed class AppUpdateService
 
     private static bool IsSupportedUpdateTargetName(string fileName) =>
         !string.IsNullOrWhiteSpace(fileName) && SupportedExecutableNamePattern.IsMatch(fileName);
+
+    private static bool IsInstalledSetup()
+    {
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath)) return false;
+
+        var directory = Path.GetDirectoryName(processPath);
+        if (string.IsNullOrWhiteSpace(directory)) return false;
+        if (Directory.EnumerateFiles(directory, "unins*.exe", SearchOption.TopDirectoryOnly).Any())
+            return true;
+
+        var localPrograms = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs", "UpdateCenter");
+        return directory.TrimEnd(Path.DirectorySeparatorChar)
+            .Equals(localPrograms.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void WaitForParentExit(int processId)
     {
