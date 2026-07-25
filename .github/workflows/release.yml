@@ -87,12 +87,15 @@ jobs:
 
           $standardName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
           $portableName = "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe"
+          $legacyName = "UpdateCenter-v$env:RELEASE_VERSION.exe"
           $standardPath = Join-Path $artifacts $standardName
           $portablePath = Join-Path $artifacts $portableName
+          $legacyPath = Join-Path $artifacts $legacyName
           Copy-Item -LiteralPath ".\installer-dist\$standardName" -Destination $standardPath
           Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $portablePath
+          Copy-Item -LiteralPath $portablePath -Destination $legacyPath
 
-          foreach ($asset in @(@($standardPath, $standardName), @($portablePath, $portableName))) {
+          foreach ($asset in @(@($standardPath, $standardName), @($portablePath, $portableName), @($legacyPath, $legacyName))) {
             $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
             $checksumPath = "$($asset[0]).sha256"
             Set-Content -LiteralPath $checksumPath -Value "$hash  $($asset[1])" -Encoding ascii
