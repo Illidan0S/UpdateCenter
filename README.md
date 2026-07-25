@@ -1,55 +1,32 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.6** (`v1.0.6`).
+Versione pubblica attuale: **1.0.6** ([v1.0.6](https://github.com/Illidan0S/UpdateCenter/releases/tag/v1.0.6)).
 
-Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e driver tramite **Windows Update Agent** più un catalogo incorporato e trasparente di metadati verificati dei produttori. L'utente sceglie singolarmente cosa installare.
+Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
-Il progetto è distribuito con licenza [MIT](LICENSE): può essere usato, modificato e redistribuito mantenendo l'avviso di copyright e il testo della licenza.
+## Funzioni principali
 
-La sezione **Driver e chipset** crea inoltre un inventario locale dei driver PnP installati, inclusi ID hardware e ID compatibili, associa quando possibile la versione installata a quella proposta e riconosce i componenti CPU/chipset. Le schede dei produttori sono generate soltanto dall'hardware realmente rilevato: un modello preciso riceve la sua pagina precisa; se l'abbinamento non è certo viene mostrato il portale generico ufficiale.
+- Aggiornamento controllato dei software tramite WinGet.
+- Ricerca di driver compatibili da fonti ufficiali e verificate.
+- Diagnosi dei driver problematici segnalati da Gestione dispositivi.
+- Controllo e installazione dei runtime condivisi: DirectX, Visual C++, .NET, Vulkan, PhysX, WebView2 e altri.
+- Filtri per software, driver, runtime ed errori.
+- Riepilogo prima dell’installazione con spazio richiesto, alimentazione, riavvio e avvisi di sicurezza.
+- Pausa e ripresa di un gruppo di aggiornamenti, senza interrompere l’elemento già in installazione.
+- Inventario hardware con CPU, GPU, VRAM, RAM, Windows, driver principali e copia rapida delle informazioni.
+- Salute dello storage con unità fisiche, volumi associati, capacità, stato e temperatura quando disponibile.
+- Collegamento diretto a NVIDIA App o alla pagina ufficiale per i driver GPU NVIDIA.
+- Cronologia degli aggiornamenti, log locali e nessuna telemetria.
+- Controllo automatico delle nuove versioni di Update Center con verifica SHA-256; disponibile per l’eseguibile standard, non per il portable.
 
-Il controllo Windows Update è automatico. Il catalogo Update Center può proporre un pacchetto esterno soltanto quando contiene URL ufficiale, ID hardware esatto, versione, compatibilità Windows/architettura, SHA-256 e firmatari attesi. Le fonti che non offrono metadati ufficiali interrogabili in sicurezza restano indicate come **controllo manuale ufficiale**, senza inventare un aggiornamento. Le voci duplicate con stesso dispositivo, produttore e versione vengono raggruppate per rendere l'inventario più leggibile.
+## Download
 
-## Quale file usare
+Le [Release GitHub](https://github.com/Illidan0S/UpdateCenter/releases) includono due eseguibili:
 
-Le Release ufficiali includono due eseguibili:
+- **`UpdateCenter-vVERSIONE.exe`**: versione standard. Per usare l’aggiornamento automatico, conservala in una cartella stabile e rinominala `UpdateCenter.exe`.
+- **`UpdateCenter-vVERSIONE-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB. Può controllare nuove versioni, ma non si aggiorna da sola.
 
-- **`UpdateCenter-vVERSIONE.exe`** è la versione standard usata dall'aggiornamento automatico. Dopo il primo avvio, conservala in una cartella stabile e rinominala `UpdateCenter.exe`: l'app potrà così scaricare, verificare con SHA-256 e sostituire automaticamente il proprio eseguibile quando esce una nuova Release.
-- **`UpdateCenter-vVERSIONE-Portable.exe`** è la versione senza installazione, adatta anche a una chiavetta USB. Può controllare la disponibilità di nuove versioni, ma non si sostituisce automaticamente.
-
-Il file **`UpdateCenter-vVERSIONE.exe.sha256`** non è una terza versione: è la firma SHA-256 usata per verificare in sicurezza il download automatico e deve restare allegata alla Release.
-
-Usa **`CREA-EXE.bat`** soltanto se hai modificato il codice sorgente o vuoi rigenerare personalmente l'eseguibile portatile. È uno strumento per sviluppatori, non un installer distribuito agli utenti.
-
-### Creazione dell'eseguibile
-
-Su Windows 10 o Windows 11 fai doppio clic su `CREA-EXE.bat`.
-
-Lo script:
-
-1. controlla che sia realmente installato un SDK tramite `dotnet --list-sdks` (la sola presenza del runtime non è sufficiente);
-2. propone l'installazione ufficiale tramite WinGet se il compilatore manca;
-3. compila una versione autonoma per Windows x64;
-4. crea `dist\UpdateCenter.exe`.
-
-L'eseguibile pubblicato è **self-contained**: una volta creato, il PC che lo esegue non deve avere .NET installato.
-
-In alternativa agli script, dalla radice del progetto puoi compilare direttamente con:
-
-```powershell
-dotnet restore .\UpdateCenter.csproj --runtime win-x64
-dotnet publish .\UpdateCenter.csproj --configuration Release --runtime win-x64 --self-contained true --output .\dist
-```
-
-La configurazione Release abilita la pubblicazione single-file per `win-x64` senza trimming.
-
-Per creare localmente anche un Setup `.exe` serve Inno Setup Compiler 6 o 7. Dopo `build.ps1` esegui:
-
-```powershell
-.\build-installer.ps1 -NoAppBuild
-```
-
-Il risultato viene scritto in `installer-dist\UpdateCenter-Setup-vVERSIONE.exe`, insieme al relativo SHA-256. Il Setup è disponibile per test o distribuzioni locali; le Release pubbliche usano gli eseguibili standard e portable descritti sopra.
+Il file **`UpdateCenter-vVERSIONE.exe.sha256`** è la firma di sicurezza usata per verificare il download automatico: non è una terza versione dell’app.
 
 ## Utilizzo
 
@@ -57,101 +34,29 @@ Il risultato viene scritto in `installer-dist\UpdateCenter-Setup-vVERSIONE.exe`,
 2. Premi **Avvia scansione**.
 3. Apri **Aggiornamenti** e controlla gli elementi trovati.
 4. Seleziona solo quelli desiderati.
-5. Premi **Aggiorna elementi selezionati**.
-6. Conferma il riepilogo e la richiesta UAC di Windows.
+5. Premi **Aggiorna elementi selezionati** e conferma il riepilogo.
 
-L'app non riavvia il computer senza chiedere conferma.
+L’app non riavvia il computer senza chiedere conferma.
 
-La pagina **Aggiornamenti** permette di cercare per nome, produttore, versione, fonte o stato e di filtrare software, driver, elementi importanti, standard, facoltativi, selezionati, aggiornamenti con riavvio ed errori. Ogni elemento mostra una priorità chiara e, dopo l'installazione, un esito individuale; gli elementi non riusciti espongono il pulsante **Riprova**.
+## Sicurezza e privacy
 
-Prima dell'elevazione amministratore viene mostrato un riepilogo completo con software, driver, aggiornamenti importanti, riavvii, avvisi preliminari e stato del punto di ripristino. La Home conserva inoltre data e ora dell'ultima scansione completata.
-
-La schermata **Hardware** mostra CPU, core/thread, GPU, VRAM, RAM, risoluzione, frequenza dello schermo, modello del PC e versione di Windows. I dati statici vengono letti separatamente tramite WMI, API Windows e registro, con fallback indipendenti: un componente non disponibile non nasconde più tutti gli altri. Utilizzo CPU, RAM e GPU vengono aggiornati ogni tre secondi mentre la schermata è aperta. Le temperature vengono mostrate soltanto se il firmware, il driver NVIDIA oppure un provider sensori già presente le espone a Windows; l'app non installa driver di monitoraggio. Tutti i valori principali sono selezionabili e il riepilogo completo può essere copiato negli appunti. È incluso un collegamento rapido a Gestione attività.
-
-La scansione controlla inoltre i problemi attivi segnalati da Gestione dispositivi, spiegando i codici PnP senza applicare riparazioni automatiche. Nella schermata Hardware sono disponibili la salute delle unità comunicata da Windows e lo spazio dei volumi. DirectX, Visual C++ x86/x64, OpenAL, Vulkan, .NET Desktop Runtime, PhysX, WebView2, Java, XNA e Mono vengono classificati come **Runtime** e gli elementi installabili compaiono direttamente negli Aggiornamenti. Quando un runtime mancante corrisponde a un pacchetto esatto disponibile nella fonte ufficiale WinGet, può essere installato con la normale selezione, conferma e cronologia; i componenti opzionali non sono preselezionati. Steam e Discord non vengono gestiti perché dispongono già del proprio aggiornamento automatico.
-
-La scansione principale controlla anche la salute dello storage. Nella scheda Hardware, ogni unità fisica occupa una sola riga e mostra nella colonna Volumi le lettere e le etichette associate; il riepilogo copiabile comprende CPU, GPU, VRAM, RAM, Windows, versioni dei driver CPU/chipset e GPU e le unità fisiche non USB. Le temperature vengono mostrate soltanto quando Windows, il firmware o un provider hardware già presente espongono un sensore attendibile. Prima dell'installazione, lo spazio disco mostra la somma delle dimensioni realmente pubblicate dalle fonti e segnala separatamente i pacchetti per cui il peso non è disponibile.
-
-Per le GPU NVIDIA Update Center non scarica né installa direttamente i driver: se NVIDIA App è presente la apre direttamente, altrimenti apre la pagina ufficiale per installarla. Vulkan resta collegato al driver grafico e non viene trattato come pacchetto indipendente se la fonte non è verificabile.
-
-Durante un gruppo di aggiornamenti è possibile richiedere una pausa. Per sicurezza l'elemento corrente termina e la pausa viene applicata prima del successivo: un'installazione driver non viene mai interrotta a metà. Il pulsante **Riprendi** continua lo stesso gruppo.
-
-Il tema può essere impostato su **Sistema**, **Chiaro** o **Scuro**; alla prima installazione sono preselezionati **Chiaro** e testo **Medio**. In modalità Sistema l'app segue il tema delle applicazioni Windows anche quando cambia durante l'esecuzione. La dimensione del testo può essere impostata su **Piccola**, **Media** o **Grande**. La finestra è ridimensionabile da bordi e angoli; sotto gli 820 pixel la navigazione passa automaticamente alla modalità compatta a icone.
-
-La pagina **Cronologia** usa descrizioni semplici per indicare esito, versioni, fonte e necessità di riavvio. I dettagli lunghi vengono abbreviati nella tabella; mantenendo il puntatore sul testo per un secondo si apre un pannello con il contenuto completo, selezionabile e copiabile, inclusa la diagnostica WinGet quando disponibile.
-
-L'interfaccia può essere usata in italiano o inglese. Le Impostazioni consentono inoltre notifiche locali e scansioni giornaliere o settimanali mentre Update Center è aperto, oppure al successivo avvio quando la scansione è scaduta. L'installazione non parte mai automaticamente.
-
-## Fonti e comportamento
-
-- Software: comando ufficiale `winget upgrade`, un pacchetto alla volta. Prima dell'installazione viene ricontrollata la corrispondenza; i pacchetti per utente restano nel contesto dell'utente e WinGet può ritentare senza vincolo di sorgente o tramite un nome esatto e univoco.
-- Driver Microsoft: aggiornamenti firmati e compatibili offerti da Windows Update al PC specifico.
-- Driver produttore: soltanto pacchetti ZIP/CAB composti da driver INF e autorizzati dal catalogo incorporato. Prima dell'installazione vengono ricontrollati dominio ufficiale, ID hardware, Windows/architettura, SHA-256 e firma Authenticode del catalogo `.cat`.
-- CPU/chipset: inventario delle componenti di sistema e accesso al controllo ufficiale AMD o Intel rilevato sul PC.
-- BIOS, UEFI e firmware: esclusi dall'installazione automatica.
-- Versioni preview: non vengono richieste dall'app.
-- Ripristino: se l'opzione è attiva, l'app richiede un solo punto di ripristino per l'intero gruppo soltanto quando sono presenti driver o aggiornamenti importanti. I gruppi composti unicamente da software WinGet non creano punti. Windows può rifiutare la richiesta se Protezione sistema è disattivata o per le proprie regole. Dalle Impostazioni è possibile aprire direttamente il pannello Windows che mostra e limita lo spazio utilizzato.
-- Log e cronologia: `%LOCALAPPDATA%\UpdateCenter`.
-- Pulizia: i file temporanei di installazione vengono eliminati al termine; eventuali residui più vecchi di un giorno e i log più vecchi di 30 giorni vengono rimossi all'avvio. Ogni log giornaliero è limitato a 2 MB.
-- Controlli preliminari: prima dell'installazione la finestra di riepilogo verifica alimentazione e spazio libero. Driver e aggiornamenti importanti vengono bloccati con batteria al 25% o inferiore; l'operazione viene inoltre bloccata quando lo spazio è inferiore alla stima minima necessaria.
-
-Non è tecnicamente possibile garantire che *ogni* programma installato sia aggiornabile: WinGet può gestire soltanto i programmi che riesce ad associare a un pacchetto disponibile. Per i driver, il controllo automatico è possibile soltanto quando Windows Update o il produttore espongono metadati verificabili; negli altri casi viene offerta la pagina ufficiale corretta per il controllo manuale.
-
-Update Center non usa il catalogo proprietario di Driver Easy e non presenta come aggiornamento un pacchetto che Windows o il produttore non hanno confermato per il PC. L'inventario può quindi mostrare gli stessi dispositivi, mentre il numero degli aggiornamenti disponibili può essere inferiore.
-
-## Sicurezza
-
-- Nessun catalogo driver commerciale o mirror di terze parti; il catalogo incorporato contiene solo metadati e URL ufficiali, mai i file dei driver.
-- Nessuna utility del produttore viene installata o eseguita: i pacchetti con `.exe`, `.msi` o script vengono rifiutati.
-- I pacchetti driver esterni devono contenere INF compatibili e cataloghi `.cat` con firma Authenticode valida.
-- Argomenti dei processi separati, senza concatenare input in una shell.
-- Il software viene aggiornato nel contesto dell'utente; l'elevazione UAC viene usata soltanto per driver e operazioni che richiedono realmente privilegi amministrativi.
-- Piano di aggiornamento limitato alla cartella dati dell'app.
-- Nessuna telemetria e nessun dato personale trasmesso dall'app.
+- I software vengono aggiornati tramite WinGet.
+- I driver vengono proposti solo quando la fonte e la compatibilità sono verificabili.
+- BIOS, UEFI e firmware non vengono installati automaticamente.
+- I pacchetti driver esterni devono superare controlli di compatibilità, hash e firma.
+- I runtime installabili usano la normale selezione, conferma e cronologia degli aggiornamenti.
+- Nessuna telemetria e nessun dato personale vengono trasmessi dall’app.
+- Log e cronologia restano sul PC in `%LOCALAPPDATA%\UpdateCenter`.
 
 ## Requisiti
 
 - Windows 10 x64 versione 1809 (build 17763) o successiva, oppure Windows 11 x64.
 - WinGet/App Installer aggiornato.
 - Connessione Internet.
-- Windows Update attivo.
-- Privilegi di amministratore per installare gli elementi selezionati.
+- Privilegi di amministratore solo per gli elementi che li richiedono.
 
-Windows 10 standard ha terminato il supporto Microsoft il 14 ottobre 2025. L'app resta tecnicamente compatibile; per un sistema protetto è consigliato Windows 11 oppure Windows 10 22H2 aderente al programma ESU.
+## Licenza e sviluppo
 
-## Struttura
+Il progetto è distribuito con licenza [MIT](LICENSE).
 
-- `MainWindow.xaml`: interfaccia WPF moderna.
-- `ViewModels/MainViewModel.cs`: stato, scansione, filtri e cronologia.
-- `Services/WinGetService.cs`: scansione e aggiornamento software.
-- `Services/WindowsUpdateService.cs`: ricerca e installazione driver.
-- `Services/OfficialDriverCatalogService.cs`: confronto esatto con il catalogo trasparente dei produttori.
-- `Services/OfficialDriverPackageService.cs`: download e installazione protetta dei soli pacchetti INF verificati.
-- `Services/ElevatedUpdateRunner.cs`: elevazione UAC, punto di ripristino e avanzamento.
-- `Models`: modelli dati e piano di aggiornamento.
-- `Assets/driver-catalog.json`: metadati incorporati dei driver produttore; non ospita binari né mirror.
-- `App.xaml` e `MainWindow.xaml`: risorse grafiche, stili e pagine dell'interfaccia WPF.
-- `build.ps1`: restore e publish self-contained/single-file in `dist`.
-- `build-installer.ps1` e `installer.iss`: generazione del Setup grafico `.exe` con installazione e disinstallazione per utente.
-- `CREA-EXE.bat`: controllo/installazione dell'SDK .NET 8 e avvio della compilazione.
-- `Tests/UpdateCenter.SmokeTests`: controlli senza dipendenze esterne per versioni semantiche e impostazioni predefinite dell'updater.
-
-## Aggiornamento automatico dell'app
-
-Il controllo automatico è attivo per impostazione predefinita e interroga, senza token, la Release stabile più recente del repository pubblico `Illidan0S/UpdateCenter`. Draft e prerelease vengono ignorate. Il controllo in background non blocca l'interfaccia e viene effettuato al massimo una volta ogni 24 ore; nelle Impostazioni può essere disattivato o avviato manualmente con **Controlla ora**.
-
-Quando è disponibile una versione più recente, una finestra coerente con l'app mostra versione installata, nuova versione, note e dimensione. È possibile scegliere **Aggiorna ora**, **Più tardi** oppure **Ignora questa versione**.
-
-L'eseguibile viene scaricato in `%LOCALAPPDATA%\UpdateCenter\Updates` e installato soltanto dopo la verifica SHA-256. Il nuovo eseguibile attende la chiusura del processo precedente, conserva una sola copia temporanea di sicurezza, sostituisce `UpdateCenter.exe` nella stessa cartella e riavvia l'app. Se la sostituzione o il riavvio falliscono, ripristina automaticamente il vecchio eseguibile. Download, backup e file intermedi vengono rimossi dopo l'avvio riuscito; l'esito resta nei log. L'installazione in `%LOCALAPPDATA%\Programs\UpdateCenter` non richiede privilegi amministrativi.
-
-## GitHub Actions e pubblicazione delle versioni
-
-Il workflow `.github/workflows/release.yml` compila su Windows con .NET 8, verifica versione e contenuto, genera gli artefatti e le firme SHA-256. Con un tag stabile `vMAJOR.MINOR.PATCH` crea la Release soltanto dopo il superamento di tutti i controlli. La Release pubblica deve contenere l'eseguibile standard per l'aggiornamento automatico, il relativo file `.sha256` e l'eseguibile portable.
-
-Per una versione futura:
-
-1. aggiorna `Version`, `AssemblyVersion`, `FileVersion` e `InformationalVersion` in `UpdateCenter.csproj` e il fallback visibile nell'interfaccia;
-2. esegui `build.ps1`, verifica localmente l'app e, se necessario, usa `build-installer.ps1 -NoAppBuild` per test locali del Setup;
-3. pubblica le modifiche su `main` e attendi il completamento positivo del workflow;
-4. crea e pubblica il tag corrispondente, per esempio `v1.0.1`;
-5. verifica che la Release contenga `UpdateCenter-vVERSIONE.exe`, `UpdateCenter-vVERSIONE.exe.sha256` e `UpdateCenter-vVERSIONE-Portable.exe`.
+Le istruzioni per compilazione, struttura del progetto, creazione del Setup locale e pubblicazione delle versioni sono disponibili in [docs/SVILUPPO.md](docs/SVILUPPO.md).
