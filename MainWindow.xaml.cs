@@ -28,7 +28,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.6"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.7"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -70,6 +70,7 @@ public partial class MainWindow : Window
         InitializeNotificationIcon();
         _scheduledScanTimer.Start();
         _ = CheckForAppUpdatesAsync(false);
+        _ = _viewModel.EnsureQuickHardwareDataAsync();
         if (_viewModel.Settings.ScanAtStartup || _viewModel.IsScheduledScanDue)
             await RunScanAsync(navigateToResults: false);
     }
@@ -537,10 +538,19 @@ public partial class MainWindow : Window
         }
     }
 
-    private void CopyHardwareInfo_Click(object sender, RoutedEventArgs e)
+    private async void CopyHardwareInfo_Click(object sender, RoutedEventArgs e)
     {
+        var button = sender as Button;
+        var originalContent = button?.Content;
         try
         {
+            if (button is not null)
+            {
+                button.IsEnabled = false;
+                button.Content = "Raccolta informazioni…";
+            }
+            _viewModel.HardwareInfo.MonitoringStatus = "Raccolta delle informazioni hardware locali…";
+            await _viewModel.EnsureQuickHardwareDataAsync();
             Clipboard.SetText(HardwareClipboardService.Build(
                 _viewModel.HardwareInfo,
                 _viewModel.DriverInventory,
@@ -550,6 +560,14 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(ex.Message, "Copia non riuscita", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            if (button is not null)
+            {
+                button.Content = originalContent;
+                button.IsEnabled = true;
+            }
         }
     }
 

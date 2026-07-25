@@ -16,6 +16,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly SystemHardwareService _systemHardware = new();
     private readonly GameDependencyService _gameDependencies = new();
     private readonly StorageHealthService _storageHealth = new();
+    private readonly QuickHardwareDataService _quickHardwareData;
     private readonly UpdateCoordinator _coordinator = new();
     private readonly AppUpdateService _appUpdateService = new();
     private CancellationTokenSource? _scanCancellation;
@@ -38,6 +39,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _hardwareOverviewLoaded;
     private bool _hardwareOverviewLoading;
     private bool _hardwareMetricsLoading;
+    private readonly object _quickHardwareGate = new();
+    private Task<QuickHardwareSnapshot>? _quickHardwareTask;
+    private HardwareScanResult? _cachedHardwareScan;
+    private StorageHealthScanResult? _cachedStorageScan;
+    private bool _quickHardwareDataApplied;
     private bool _isAppUpdateCheckBusy;
     private UpdatePauseController? _activePauseController;
     private bool _isUpdatePaused;
@@ -48,6 +54,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public MainViewModel()
     {
+        _quickHardwareData = new QuickHardwareDataService(_hardwareInventory, _storageHealth);
         AppPaths.EnsureCreated();
         Settings = JsonStorage.LoadSettings();
         if (Settings.LastAppUpdateCheckUtc is DateTime lastUpdateCheck)
@@ -279,6 +286,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public async Task ScanAsync()
     {
         if (IsBusy) return;
+        var quickHardwareTask = GetOrStartQuickHardwareData();
+        _quickHardwareDataApplied = true;
         IsBusy = true;
         Progress = 2;
         ScannedCount = 0;
@@ -317,7 +326,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
             CurrentItemText = T("Inventario di processore, chipset e driver installati…", "Inventorying processor, chipset and installed drivers…");
             try
             {
-                hardwareScan = await _hardwareInventory.ScanAsync(_scanCancellation.Token);
+                var quickSnapshot = await quickHardwareTask;
+                hardwareScan = quickSnapshot.Hardware ?? await _hardwareInventory.ScanAsync(_scanCancellation.Token);
                 ScannedCount += hardwareScan.Drivers.Count;
             }
             catch (Exception ex)
@@ -440,7 +450,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             try
             {
-                ScannedCount += await RefreshStorageHealthAsync(_scanCancellation.Token);
+                ScannedCount += await RefreshStorageHealthAsync(_scanCancellation.Token, _cachedStorageScan);
             }
             catch (Exception ex)
             {
@@ -697,9 +707,54 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private async Task<int> RefreshStorageHealthAsync(CancellationToken cancellationToken)
+    public async Task EnsureQuickHardwareDataAsync()
     {
-        var storage = await _storageHealth.ScanAsync(cancellationToken);
+        var snapshot = await GetOrStartQuickHardwareData();
+        if (_quickHardwareDataApplied || IsScanRunning || !snapshot.HasAnyData) return;
+
+        if (snapshot.Hardware is not null)
+        {
+            ClearDriverInventory();
+            ApplyHardware(snapshot.Hardware);
+            HardwareCheckStatus = T(
+                "Inventario locale pronto; avvia la scansione principale per cercare aggiornamenti.",
+                "Local inventory ready; start the main scan to search for updates.");
+        }
+
+        if (snapshot.Storage is not null)
+            ApplyStorage(snapshot.Storage);
+
+        _quickHardwareDataApplied = true;
+        NotifyCounts();
+    }
+
+    private Task<QuickHardwareSnapshot> GetOrStartQuickHardwareData()
+    {
+        lock (_quickHardwareGate)
+        {
+            return _quickHardwareTask ??= LoadAndCacheQuickHardwareDataAsync();
+        }
+    }
+
+    private async Task<QuickHardwareSnapshot> LoadAndCacheQuickHardwareDataAsync()
+    {
+        var snapshot = await _quickHardwareData.LoadAsync(CancellationToken.None);
+        _cachedHardwareScan = snapshot.Hardware;
+        _cachedStorageScan = snapshot.Storage;
+        return snapshot;
+    }
+
+    private async Task<int> RefreshStorageHealthAsync(
+        CancellationToken cancellationToken,
+        StorageHealthScanResult? cachedStorage = null)
+    {
+        var storage = cachedStorage ?? await _storageHealth.ScanAsync(cancellationToken);
+        ApplyStorage(storage);
+        return storage.Devices.Count;
+    }
+
+    private void ApplyStorage(StorageHealthScanResult storage)
+    {
         StorageDevices.Clear();
         StorageVolumes.Clear();
         StorageRows.Clear();
@@ -708,7 +763,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var row in StorageTableRowFactory.CreateRows(storage.Devices)) StorageRows.Add(row);
         StorageHealthStatus = storage.Status;
         NotifyCounts();
-        return storage.Devices.Count;
     }
 
     public void ToggleUpdatePause()
@@ -857,15 +911,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
         NotifyCounts();
     }
 
-    private void ClearHardware()
+    private void ClearDriverInventory()
     {
         DriverInventory.Clear();
         DriverProblems.Clear();
+        VendorTools.Clear();
+    }
+
+    private void ClearHardware()
+    {
+        ClearDriverInventory();
         GameDependencies.Clear();
         StorageDevices.Clear();
         StorageVolumes.Clear();
         StorageRows.Clear();
-        VendorTools.Clear();
         DriverSearchText = "";
         DriverInventoryFilter = "Tutti";
         CpuName = "Processore non ancora rilevato";

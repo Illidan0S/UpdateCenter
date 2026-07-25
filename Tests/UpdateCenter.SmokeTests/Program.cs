@@ -27,8 +27,20 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.6")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.6.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.7")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.7.");
+
+var supportedUpdateTargetMethod = typeof(AppUpdateService).GetMethod(
+    "IsSupportedUpdateTargetName", BindingFlags.Static | BindingFlags.NonPublic)
+    ?? throw new InvalidOperationException("Validazione del nome dell'eseguibile da aggiornare non trovata.");
+bool IsSupportedUpdateTarget(string name) =>
+    Convert.ToBoolean(supportedUpdateTargetMethod.Invoke(null, [name]));
+if (!IsSupportedUpdateTarget("UpdateCenter.exe") ||
+    !IsSupportedUpdateTarget("UpdateCenter-v1.0.7.exe") ||
+    !IsSupportedUpdateTarget("UpdateCenter-v1.0.7-Portable.exe") ||
+    !IsSupportedUpdateTarget("UpdateCenter-Portable.exe") ||
+    IsSupportedUpdateTarget("AltroProgramma.exe"))
+    throw new InvalidOperationException("La selezione degli eseguibili aggiornabili non è sicura o non supporta standard e portable.");
 
 var settings = new AppSettings();
 if (!settings.CheckAppUpdatesAutomatically)
@@ -186,7 +198,8 @@ if (packageSize.TotalBytes != 150L * 1024 * 1024 || packageSize.KnownCount != 1 
 
 var clipboardHardware = new SystemHardwareInfo();
 clipboardHardware.ApplyOverview(new HardwareOverviewSnapshot(
-    "CPU test", "8 / 16", "GPU test · A\0M\0D GPU", "12 GB", "GPU test: 12 GB", "32 GB", "1920x1080", "60 Hz", "Windows 11", "PC test"));
+    "CPU test", "8 / 16", "GPU test · A\0M\0D GPU", "GPU dedicata rilevata", "12 GB",
+    "GPU test: 12 GB", "Non esposta dal driver o da Windows", "32 GB", "1920x1080", "60 Hz", "Windows 11", "PC test"));
 clipboardHardware.ApplyMetrics(new HardwareMetricsSnapshot(
     10, 20, 30, "6 GB", "2 GB", "GPU test", 55, null, "Test"));
 if (!clipboardHardware.HasCpuTemperature || clipboardHardware.HasGpuTemperature)
@@ -211,6 +224,26 @@ if (!clipboardText.Contains("SSD interno", StringComparison.Ordinal) ||
     clipboardText.Contains('\0'))
     throw new InvalidOperationException("Il riepilogo hardware non contiene tutti i dati richiesti.");
 
+if (GpuPresentationService.Classify("Intel(R) Iris(R) Xe Graphics") != GpuAdapterKind.Integrated ||
+    GpuPresentationService.Classify("Intel Arc A770 Graphics") != GpuAdapterKind.Discrete ||
+    GpuPresentationService.Classify("NVIDIA GeForce RTX 4070 Ti") != GpuAdapterKind.Discrete ||
+    GpuPresentationService.Classify("AMD Radeon(TM) Graphics") != GpuAdapterKind.Integrated ||
+    GpuPresentationService.Classify("Microsoft Basic Display Adapter") != GpuAdapterKind.Virtual ||
+    GpuPresentationService.Classify("Intel Arc Graphics") != GpuAdapterKind.Unknown)
+    throw new InvalidOperationException("La classificazione adattiva delle GPU non è valida.");
+
+var hybridGpuPresentation = GpuPresentationService.Build(
+[
+    new GpuAdapterDescriptor("Intel(R) Iris(R) Xe Graphics", 1024L * 1024 * 1024),
+    new GpuAdapterDescriptor("Intel Arc A770 Graphics", 16L * 1024 * 1024 * 1024)
+]);
+if (!hybridGpuPresentation.ConfigurationLabel.Contains("ibrida", StringComparison.OrdinalIgnoreCase) ||
+    !hybridGpuPresentation.AdaptersLabel.Contains("GPU integrata", StringComparison.Ordinal) ||
+    !hybridGpuPresentation.AdaptersLabel.Contains("GPU dedicata", StringComparison.Ordinal) ||
+    !hybridGpuPresentation.MemoryDetails.Contains("RAM condivisa", StringComparison.Ordinal) ||
+    !hybridGpuPresentation.PrimaryMemoryLabel.Contains("16 GB dedicati", StringComparison.Ordinal))
+    throw new InvalidOperationException("La presentazione delle configurazioni GPU ibride non è valida.");
+
 var nvidiaAppKnownPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
     "NVIDIA Corporation", "NVIDIA app", "CEF", "NVIDIA App.exe");
 if (File.Exists(nvidiaAppKnownPath))
@@ -223,7 +256,13 @@ if (File.Exists(nvidiaAppKnownPath))
         throw new InvalidOperationException("NVIDIA App installata non è stata rilevata.");
 }
 
-var storageHealth = await new StorageHealthService().ScanAsync(CancellationToken.None);
+var quickHardware = await new QuickHardwareDataService(
+    new HardwareInventoryService(),
+    new StorageHealthService()).LoadAsync(CancellationToken.None);
+if (quickHardware.Hardware is null || quickHardware.Hardware.Drivers.Count == 0)
+    throw new InvalidOperationException("L'inventario hardware rapido non ha rilevato i driver installati.");
+var storageHealth = quickHardware.Storage
+    ?? throw new InvalidOperationException("L'inventario hardware rapido non ha rilevato lo storage.");
 if (storageHealth.Volumes.Count == 0)
     throw new InvalidOperationException("Il controllo storage non ha rilevato alcun volume locale.");
 var storageRows = StorageTableRowFactory.CreateRows(storageHealth.Devices);

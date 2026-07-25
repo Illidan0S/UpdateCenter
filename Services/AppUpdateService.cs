@@ -17,6 +17,9 @@ public sealed class AppUpdateService
     private const string LatestReleaseUrl = "https://api.github.com/repos/Illidan0S/UpdateCenter/releases/latest";
     private const string ApiVersion = "2026-03-10";
     private static readonly Regex Sha256Pattern = new("(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])", RegexOptions.Compiled);
+    private static readonly Regex SupportedExecutableNamePattern = new(
+        @"^UpdateCenter(?:-v\d+\.\d+\.\d+)?(?:-Portable)?\.exe$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private readonly HttpClient _httpClient;
 
@@ -145,8 +148,8 @@ public sealed class AppUpdateService
             File.Move(partialPath, finalPath, true);
             var targetPath = Environment.ProcessPath
                 ?? throw new InvalidOperationException("Il percorso dell'eseguibile in uso non è disponibile.");
-            if (!Path.GetFileName(targetPath).Equals("UpdateCenter.exe", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("L'aggiornamento automatico richiede UpdateCenter.exe avviato dalla propria installazione.");
+            if (!IsSupportedUpdateTargetName(Path.GetFileName(targetPath)))
+                throw new InvalidOperationException("Il nome dell'eseguibile non consente un aggiornamento automatico sicuro.");
 
             progress?.Report(new AppUpdateDownloadProgress(100, "Download verificato · preparazione del riavvio…"));
             var startInfo = new ProcessStartInfo
@@ -186,7 +189,8 @@ public sealed class AppUpdateService
                 throw new UnauthorizedAccessException("Il programma di aggiornamento non proviene dalla cartella autorizzata.");
 
             targetPath = Path.GetFullPath(targetPathArgument);
-            if (!Path.GetFileName(targetPath).Equals("UpdateCenter.exe", StringComparison.OrdinalIgnoreCase) ||
+            if (!IsSupportedUpdateTargetName(Path.GetFileName(targetPath)) ||
+                targetPath.StartsWith(updatesRoot, StringComparison.OrdinalIgnoreCase) ||
                 updaterPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("Percorso di destinazione dell'aggiornamento non valido.");
 
@@ -340,6 +344,9 @@ public sealed class AppUpdateService
         using var sha256 = SHA256.Create();
         return Convert.ToHexString(sha256.ComputeHash(stream));
     }
+
+    private static bool IsSupportedUpdateTargetName(string fileName) =>
+        !string.IsNullOrWhiteSpace(fileName) && SupportedExecutableNamePattern.IsMatch(fileName);
 
     private static void WaitForParentExit(int processId)
     {

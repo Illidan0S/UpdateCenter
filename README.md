@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.6** ([v1.0.6](https://github.com/Illidan0S/UpdateCenter/releases/tag/v1.0.6)).
+Versione pubblica attuale: **1.0.7**.
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
@@ -17,20 +17,20 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 - Salute dello storage con unità fisiche, volumi associati, capacità, stato e temperatura quando disponibile.
 - Collegamento diretto a NVIDIA App o alla pagina ufficiale per i driver GPU NVIDIA.
 - Cronologia degli aggiornamenti, log locali e nessuna telemetria.
-- Controllo automatico delle nuove versioni di Update Center con verifica SHA-256; disponibile per l’eseguibile standard, non per il portable.
+- Controllo automatico delle nuove versioni di Update Center con verifica SHA-256 e autosostituzione sicura anche della portable.
 
 ## Download
 
 Le [Release GitHub](https://github.com/Illidan0S/UpdateCenter/releases) includono due eseguibili:
 
-- **`UpdateCenter-vVERSIONE.exe`**: versione standard. Per usare l’aggiornamento automatico, conservala in una cartella stabile e rinominala `UpdateCenter.exe`.
-- **`UpdateCenter-vVERSIONE-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB. Può controllare nuove versioni, ma non si aggiorna da sola.
+- **`UpdateCenter-vVERSIONE.exe`**: versione standard, compatibile con l’aggiornamento automatico senza dover rinominare il file.
+- **`UpdateCenter-vVERSIONE-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB e aggiornabile automaticamente mantenendo il proprio nome.
 
 Il file **`UpdateCenter-vVERSIONE.exe.sha256`** è la firma di sicurezza usata per verificare il download automatico: non è una terza versione dell’app.
 
 ## Utilizzo
 
-1. Avvia `UpdateCenter.exe`.
+1. Avvia l’eseguibile standard o portable.
 2. Premi **Avvia scansione**.
 3. Apri **Aggiornamenti** e controlla gli elementi trovati.
 4. Seleziona solo quelli desiderati.

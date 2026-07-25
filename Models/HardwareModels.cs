@@ -54,3 +54,10 @@ public sealed class HardwareScanResult
     public List<DriverProblemItem> Problems { get; set; } = [];
     public List<VendorSupportItem> VendorTools { get; set; } = [];
 }
+
+public sealed record QuickHardwareSnapshot(
+    HardwareScanResult? Hardware,
+    StorageHealthScanResult? Storage)
+{
+    public bool HasAnyData => Hardware is not null || Storage is not null;
+}

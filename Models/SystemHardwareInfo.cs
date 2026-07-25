@@ -8,8 +8,10 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     private string _cpuName = "Rilevamento in corso…";
     private string _cpuCores = "—";
     private string _gpuName = "Rilevamento in corso…";
+    private string _gpuConfiguration = "Identificazione in corso…";
     private string _vramTotal = "—";
     private string _vramDetails = "—";
+    private string _vramUnavailableReason = "Non esposta dal driver o da Windows";
     private string _ramTotal = "—";
     private string _resolution = "—";
     private string _refreshRate = "—";
@@ -30,6 +32,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     public string CpuName { get => _cpuName; private set => Set(ref _cpuName, value); }
     public string CpuCores { get => _cpuCores; private set => Set(ref _cpuCores, value); }
     public string GpuName { get => _gpuName; private set => Set(ref _gpuName, value); }
+    public string GpuConfiguration { get => _gpuConfiguration; private set => Set(ref _gpuConfiguration, value); }
     public string VramTotal { get => _vramTotal; private set => Set(ref _vramTotal, value); }
     public string VramDetails { get => _vramDetails; private set => Set(ref _vramDetails, value); }
     public string RamTotal { get => _ramTotal; private set => Set(ref _ramTotal, value); }
@@ -57,8 +60,10 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         CpuName = snapshot.CpuName;
         CpuCores = snapshot.CpuCores;
         GpuName = snapshot.GpuName;
+        GpuConfiguration = snapshot.GpuConfiguration;
         VramTotal = snapshot.VramTotal;
         VramDetails = snapshot.VramDetails;
+        _vramUnavailableReason = snapshot.VramUnavailableReason;
         RamTotal = snapshot.RamTotal;
         Resolution = snapshot.Resolution;
         RefreshRate = snapshot.RefreshRate;
@@ -72,7 +77,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         RamUsage = Clamp(metrics.RamUsage);
         GpuUsage = Clamp(metrics.GpuUsage);
         RamUsed = metrics.RamUsed;
-        VramUsed = metrics.VramUsed;
+        VramUsed = IsUnavailable(metrics.VramUsed) ? _vramUnavailableReason : metrics.VramUsed;
         GpuMetricsSource = metrics.GpuMetricsSource;
         HasCpuTemperature = IsValidTemperature(metrics.CpuTemperature);
         HasGpuTemperature = IsValidTemperature(metrics.GpuTemperature);
@@ -86,6 +91,9 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         : unavailableText;
 
     private static bool IsValidTemperature(double? value) => value is >= 1 and <= 125;
+
+    private static bool IsUnavailable(string value) =>
+        string.IsNullOrWhiteSpace(value) || value.Equals("Non disponibile", StringComparison.OrdinalIgnoreCase);
 
     private static double Clamp(double? value) => Math.Clamp(value ?? 0, 0, 100);
 
@@ -106,8 +114,10 @@ public sealed record HardwareOverviewSnapshot(
     string CpuName,
     string CpuCores,
     string GpuName,
+    string GpuConfiguration,
     string VramTotal,
     string VramDetails,
+    string VramUnavailableReason,
     string RamTotal,
     string Resolution,
     string RefreshRate,

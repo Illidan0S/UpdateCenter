@@ -526,8 +526,11 @@
                                         <StackPanel>
                                             <TextBlock Text="SCHEDE VIDEO RILEVATE" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" FontSize="{DynamicResource FontSize12}" />
                                             <TextBox Text="{Binding HardwareInfo.GpuName, Mode=OneWay}" Style="{StaticResource SelectableValue}"
-                                                     FontSize="{DynamicResource FontSize18}" FontWeight="SemiBold" Margin="0,8,0,14" />
-                                            <TextBlock Text="MEMORIA VIDEO PRINCIPALE" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                                     TextWrapping="Wrap" FontSize="{DynamicResource FontSize18}" FontWeight="SemiBold" Margin="0,8,0,4" />
+                                            <TextBox Text="{Binding HardwareInfo.GpuConfiguration, Mode=OneWay}" Style="{StaticResource SelectableValue}"
+                                                     TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"
+                                                     FontSize="{DynamicResource FontSize11}" Margin="0,0,0,14" />
+                                            <TextBlock Text="MEMORIA VIDEO" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
                                             <TextBox Text="{Binding HardwareInfo.VramTotal, Mode=OneWay}" Style="{StaticResource SelectableValue}"
                                                      FontSize="{DynamicResource FontSize15}" FontWeight="SemiBold" Margin="0,5,0,10" />
                                             <TextBlock Text="DETTAGLIO MEMORIA PER GPU" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
@@ -539,7 +542,7 @@
                                                      FontSize="{DynamicResource FontSize11}" Margin="0,4,0,4" />
                                             <TextBlock Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
                                                        TextWrapping="Wrap" Margin="0,0,0,14">
-                                                <Run Text="GPU monitorata:" /><Run Text=" " /><Run Text="{Binding HardwareInfo.GpuMetricsSource, Mode=OneWay}" />
+                                                <Run Text="Origine monitoraggio:" /><Run Text=" " /><Run Text="{Binding HardwareInfo.GpuMetricsSource, Mode=OneWay}" />
                                             </TextBlock>
                                             <Grid>
                                                 <TextBlock Text="Utilizzo" Foreground="{DynamicResource MutedTextBrush}" />
@@ -576,13 +579,6 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <Border Style="{StaticResource Card}">
-                                        <StackPanel>
-                                            <TextBlock Text="Sensori temperatura" FontWeight="SemiBold" />
-                                            <TextBlock Text="Le temperature compaiono solo se firmware o driver espongono i sensori a Windows. Nessun driver di monitoraggio viene installato."
-                                                       Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}" TextWrapping="Wrap" Margin="0,7,0,0" />
-                                        </StackPanel>
-                                    </Border>
                                 </StackPanel>
                             </Grid>
 
