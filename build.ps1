@@ -79,6 +79,9 @@ COMPATIBILITA
 4. Premi "Aggiorna elementi selezionati" e conferma la richiesta UAC.
 
 Fonti utilizzate: WinGet, Windows/Microsoft Update e metadati verificati dei produttori.
+I runtime condivisi vengono mostrati negli Aggiornamenti con il filtro Runtime.
+Per le GPU NVIDIA viene aperta NVIDIA App se installata; altrimenti viene aperta la pagina ufficiale.
+La scansione principale controlla lo storage; ogni unità fisica occupa una riga con i volumi associati e il riepilogo esclude le unità USB.
 Update Center non installa utility come Intel DSA, MSI Center, NVIDIA App o strumenti simili.
 I pacchetti produttore automatici sono ammessi solo se contengono driver INF e superano
 il controllo di dominio ufficiale, ID hardware, Windows/architettura, SHA-256 e firma.

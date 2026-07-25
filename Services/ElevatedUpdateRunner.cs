@@ -19,6 +19,7 @@ public static class ElevatedUpdateRunner
             plan = JsonStorage.Read<UpdatePlan>(planPath)
                 ?? throw new InvalidOperationException("Piano di aggiornamento non valido.");
             ValidateStatusPath(plan.StatusFile);
+            ValidatePausePath(plan.PauseFile);
 
             status = new UpdateRunStatus
             {
@@ -43,6 +44,7 @@ public static class ElevatedUpdateRunner
 
             for (var index = 0; index < plan.Items.Count; index++)
             {
+                WaitWhilePaused(plan, status);
                 var item = plan.Items[index];
                 status.CurrentIndex = index;
                 status.CurrentName = item.Name;
@@ -110,7 +112,10 @@ public static class ElevatedUpdateRunner
     {
         try
         {
-            var result = WinGetService.Upgrade(item, silent);
+            var isFreshInstall = item.PackageOperation.Equals(PackageOperations.Install, StringComparison.Ordinal);
+            var result = isFreshInstall
+                ? WinGetService.Install(item, silent)
+                : WinGetService.Upgrade(item, silent);
             var outcome = WinGetService.ClassifyOutcome(result);
             var output = string.Join(" ", (result.StandardOutput + "\n" + result.StandardError)
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -126,12 +131,16 @@ public static class ElevatedUpdateRunner
             {
                 Id = item.Id,
                 Name = item.Name,
-                Kind = item.Kind,
+                Kind = item.Kind.Equals(nameof(UpdateKind.Runtime), StringComparison.Ordinal)
+                    ? "Runtime"
+                    : item.Kind,
                 Success = !outcome.Equals(UpdateOutcomes.Failed, StringComparison.Ordinal),
                 Outcome = outcome,
                 Message = outcome switch
                 {
-                    UpdateOutcomes.Completed => alreadyCurrentMessage ?? "Software aggiornato con WinGet.",
+                    UpdateOutcomes.Completed => alreadyCurrentMessage ?? (isFreshInstall
+                        ? "Runtime installato con WinGet."
+                        : "Software aggiornato con WinGet."),
                     UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non Ã¨ applicabile a questo PC. La voce verrÃ  rimossa fino alla prossima scansione.",
                     UpdateOutcomes.ManualRequired => "Questo pacchetto non supporta l'aggiornamento automatico con la tecnologia di installazione corrente. Usa l'installer ufficiale del produttore.",
                     _ => string.IsNullOrWhiteSpace(output)
@@ -148,7 +157,9 @@ public static class ElevatedUpdateRunner
             {
                 Id = item.Id,
                 Name = item.Name,
-                Kind = item.Kind,
+                Kind = item.Kind.Equals(nameof(UpdateKind.Runtime), StringComparison.Ordinal)
+                    ? "Runtime"
+                    : item.Kind,
                 Success = false,
                 Message = ex.Message,
                 Diagnostics = ex.ToString()
@@ -228,6 +239,56 @@ public static class ElevatedUpdateRunner
             throw new UnauthorizedAccessException("Percorso dello stato non consentito.");
     }
 
+    private static void ValidatePausePath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var allowedRoot = Path.GetFullPath(AppPaths.DataDirectory) + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(allowedRoot, StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(fullPath).StartsWith("update-pause-", StringComparison.OrdinalIgnoreCase) ||
+            !fullPath.EndsWith(".signal", StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Percorso del segnale di pausa non consentito.");
+    }
+
+    private static void WaitWhilePaused(UpdatePlan plan, UpdateRunStatus status)
+    {
+        var wasPaused = false;
+        while (File.Exists(plan.PauseFile))
+        {
+            if (plan.PauseOwnerProcessId > 0 && !IsProcessRunning(plan.PauseOwnerProcessId))
+            {
+                try { File.Delete(plan.PauseFile); } catch { }
+                break;
+            }
+
+            wasPaused = true;
+            status.State = "Paused";
+            status.CurrentName = "";
+            status.Phase = "Pausa";
+            status.CurrentItemProgress = 0;
+            status.Message = "Aggiornamenti in pausa. Premi Riprendi in Update Center per continuare.";
+            status.LastHeartbeatUtc = DateTime.UtcNow;
+            WriteStatus(plan.StatusFile, status);
+            Thread.Sleep(350);
+        }
+
+        if (!wasPaused) return;
+        status.State = "Running";
+        status.Phase = "Ripresa";
+        status.Message = "Ripresa degli aggiornamenti…";
+        status.LastHeartbeatUtc = DateTime.UtcNow;
+        WriteStatus(plan.StatusFile, status);
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch { return false; }
+    }
+
     private static void WriteStatus(string path, UpdateRunStatus status) => JsonStorage.WriteAtomic(path, status);
 }
 
@@ -236,6 +297,7 @@ public sealed class UpdateCoordinator
     public async Task<UpdateRunStatus> RunAsync(
         IReadOnlyList<UpdateItem> selectedItems,
         AppSettings settings,
+        UpdatePauseController pauseController,
         Action<UpdateRunStatus> progress,
         CancellationToken cancellationToken)
     {
@@ -244,7 +306,7 @@ public sealed class UpdateCoordinator
                 "Gli elementi non installabili automaticamente non possono essere avviati.");
 
         AppPaths.EnsureCreated();
-        var software = selectedItems.Where(x => x.Kind == UpdateKind.Software).ToList();
+        var software = selectedItems.Where(x => x.Kind is UpdateKind.Software or UpdateKind.Runtime).ToList();
         var drivers = selectedItems.Where(x => x.Kind == UpdateKind.Driver).ToList();
         var aggregate = new UpdateRunStatus
         {
@@ -253,35 +315,43 @@ public sealed class UpdateCoordinator
             Message = "Preparazione aggiornamenti…"
         };
 
-        if (software.Count > 0)
+        try
         {
-            var softwareResult = await RunBatchAsync(
-                software, settings, requireAdministrator: false, aggregate.Results.Count,
-                aggregate, progress, cancellationToken);
-            MergeBatch(aggregate, softwareResult);
-        }
+            if (software.Count > 0)
+            {
+                var softwareResult = await RunBatchAsync(
+                    software, settings, pauseController, requireAdministrator: false, aggregate.Results.Count,
+                    aggregate, progress, cancellationToken);
+                MergeBatch(aggregate, softwareResult);
+            }
 
-        if (drivers.Count > 0)
+            if (drivers.Count > 0)
+            {
+                var driverResult = await RunBatchAsync(
+                    drivers, settings, pauseController, requireAdministrator: true, aggregate.Results.Count,
+                    aggregate, progress, cancellationToken);
+                MergeBatch(aggregate, driverResult);
+            }
+
+            aggregate.State = "Completed";
+            aggregate.CurrentIndex = aggregate.Results.Count;
+            aggregate.CurrentName = "";
+            aggregate.Message = aggregate.Results.All(x => x.Success)
+                ? "Tutti gli aggiornamenti selezionati sono terminati."
+                : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
+            progress(aggregate);
+            return aggregate;
+        }
+        finally
         {
-            var driverResult = await RunBatchAsync(
-                drivers, settings, requireAdministrator: true, aggregate.Results.Count,
-                aggregate, progress, cancellationToken);
-            MergeBatch(aggregate, driverResult);
+            pauseController.Cleanup();
         }
-
-        aggregate.State = "Completed";
-        aggregate.CurrentIndex = aggregate.Results.Count;
-        aggregate.CurrentName = "";
-        aggregate.Message = aggregate.Results.All(x => x.Success)
-            ? "Tutti gli aggiornamenti selezionati sono terminati."
-            : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
-        progress(aggregate);
-        return aggregate;
     }
 
     private static async Task<UpdateRunStatus> RunBatchAsync(
         IReadOnlyList<UpdateItem> selectedItems,
         AppSettings settings,
+        UpdatePauseController pauseController,
         bool requireAdministrator,
         int completedBeforeBatch,
         UpdateRunStatus aggregate,
@@ -296,6 +366,8 @@ public sealed class UpdateCoordinator
             CreateRestorePoint = PreflightService.ShouldCreateRestorePoint(selectedItems, settings),
             SilentSoftwareInstall = settings.SilentSoftwareInstall,
             StatusFile = statusPath,
+            PauseFile = pauseController.SignalPath,
+            PauseOwnerProcessId = Environment.ProcessId,
             Items = selectedItems.Select(x => new PlanItem
             {
                 Id = x.Id,
@@ -304,6 +376,7 @@ public sealed class UpdateCoordinator
                 Source = x.Source,
                 InstalledVersion = x.InstalledVersion,
                 AvailableVersion = x.AvailableVersion,
+                PackageOperation = x.PackageOperation,
                 WindowsUpdateId = x.WindowsUpdateId,
                 WindowsUpdateRevision = x.WindowsUpdateRevision,
                 WindowsUpdateServerSelection = x.WindowsUpdateServerSelection,
@@ -414,5 +487,37 @@ public sealed class UpdateCoordinator
     private static void TryDelete(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+}
+
+public sealed class UpdatePauseController
+{
+    public UpdatePauseController() : this(AppPaths.DataDirectory)
+    {
+        AppPaths.EnsureCreated();
+    }
+
+    internal UpdatePauseController(string signalDirectory) =>
+        SignalPath = Path.Combine(signalDirectory, $"update-pause-{Guid.NewGuid():N}.signal");
+
+    public string SignalPath { get; }
+    public bool IsPauseRequested => File.Exists(SignalPath);
+
+    public void RequestPause()
+    {
+        var temporary = SignalPath + ".tmp";
+        File.WriteAllText(temporary, $"{Environment.ProcessId}|{DateTime.UtcNow:O}");
+        File.Move(temporary, SignalPath, true);
+    }
+
+    public void Resume()
+    {
+        try { if (File.Exists(SignalPath)) File.Delete(SignalPath); } catch { }
+    }
+
+    public void Cleanup()
+    {
+        Resume();
+        try { if (File.Exists(SignalPath + ".tmp")) File.Delete(SignalPath + ".tmp"); } catch { }
     }
 }

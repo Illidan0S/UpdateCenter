@@ -28,7 +28,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.5"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.6"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -303,7 +303,7 @@ public partial class MainWindow : Window
         ContentHost.Margin = iconOnly ? new Thickness(8, 0, 8, 8) :
             narrow ? new Thickness(10, 0, 10, 10) : new Thickness(18, 0, 18, 18);
         HomeStatusColumn.Width = new GridLength(iconOnly ? 210d : narrow ? 220d : compact ? 255d : 300d);
-        UpdateFilterColumn.Width = new GridLength(iconOnly ? 135d : narrow ? 145d : 170d);
+        UpdateFilterColumn.Width = new GridLength(iconOnly ? 130d : narrow ? 145d : 165d);
         DriverFilterColumn.Width = new GridLength(iconOnly ? 145d : narrow ? 160d : 190d);
         UpdatesFooterSecondRow.Height = stackedUpdatesFooter ? GridLength.Auto : new GridLength(0);
         Grid.SetRow(UpdatesFooterRight, stackedUpdatesFooter ? 1 : 0);
@@ -414,10 +414,15 @@ public partial class MainWindow : Window
     private void DriverVendorScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         => ScrollHardwarePage(e);
 
-    private void ScrollHardwarePage(MouseWheelEventArgs e)
+    private void StorageHealthCard_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+        => ScrollPage(SystemInfoPage, e);
+
+    private void ScrollHardwarePage(MouseWheelEventArgs e) => ScrollPage(HardwarePage, e);
+
+    private static void ScrollPage(ScrollViewer page, MouseWheelEventArgs e)
     {
-        if (HardwarePage.Visibility != Visibility.Visible || HardwarePage.ScrollableHeight <= 0) return;
-        HardwarePage.ScrollToVerticalOffset(HardwarePage.VerticalOffset - (e.Delta / 3d));
+        if (page.Visibility != Visibility.Visible || page.ScrollableHeight <= 0) return;
+        page.ScrollToVerticalOffset(page.VerticalOffset - (e.Delta / 3d));
         e.Handled = true;
     }
 
@@ -491,10 +496,24 @@ public partial class MainWindow : Window
 
     private void OpenVendorSupport_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not FrameworkElement { Tag: string target } ||
-            !(target.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-              target.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase)))
+        if (sender is not FrameworkElement { Tag: string target } element)
             return;
+
+        if (element.DataContext is VendorSupportItem { IsInstalledApplication: true } support)
+        {
+            if (!target.Equals(support.ApplicationPath, StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(target) ||
+                !Path.GetFileName(target).Equals("NVIDIA App.exe", StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFullPath(target).Contains(
+                    $"{Path.DirectorySeparatorChar}NVIDIA Corporation{Path.DirectorySeparatorChar}NVIDIA app{Path.DirectorySeparatorChar}",
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+        else if (!(target.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                   target.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
 
         try
         {
@@ -522,7 +541,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            Clipboard.SetText(_viewModel.HardwareInfo.BuildClipboardText());
+            Clipboard.SetText(HardwareClipboardService.Build(
+                _viewModel.HardwareInfo,
+                _viewModel.DriverInventory,
+                _viewModel.StorageDevices));
             _viewModel.HardwareInfo.MonitoringStatus = "Riepilogo hardware copiato negli appunti.";
         }
         catch (Exception ex)

@@ -63,7 +63,7 @@
                     <Border x:Name="VersionBadge" Margin="8,0,0,0" Padding="7,3" VerticalAlignment="Center"
                             Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
                             BorderThickness="1" CornerRadius="7">
-                        <TextBlock x:Name="VersionText" Text="v1.0.5" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock x:Name="VersionText" Text="v1.0.6" Foreground="{DynamicResource AccentBrush}"
                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
                     </Border>
                 </StackPanel>
@@ -214,7 +214,7 @@
                         <Grid Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition x:Name="UpdateFilterColumn" Width="170" />
+                                <ColumnDefinition x:Name="UpdateFilterColumn" Width="165" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <Grid Margin="0,0,10,0">
@@ -235,15 +235,12 @@
                                     </TextBlock.Style>
                                 </TextBlock>
                             </Grid>
-                            <ComboBox Grid.Column="1" SelectedValue="{Binding Filter}" SelectedValuePath="Tag" Margin="0,0,10,0">
+                            <ComboBox Grid.Column="1" SelectedValue="{Binding UpdateTypeFilter}" SelectedValuePath="Tag"
+                                      Margin="0,0,10,0" ToolTip="Filtra gli aggiornamenti">
                                 <ComboBoxItem Content="Tutti" Tag="Tutti" />
                                 <ComboBoxItem Content="Software" Tag="Software" />
                                 <ComboBoxItem Content="Driver" Tag="Driver" />
-                                <ComboBoxItem Content="Importanti" Tag="Importanti" />
-                                <ComboBoxItem Content="Standard" Tag="Standard" />
-                                <ComboBoxItem Content="Facoltativi" Tag="Facoltativi" />
-                                <ComboBoxItem Content="Selezionati" Tag="Selezionati" />
-                                <ComboBoxItem Content="Riavvio richiesto" Tag="Riavvio richiesto" />
+                                <ComboBoxItem Content="Runtime" Tag="Runtime" />
                                 <ComboBoxItem Content="Errori" Tag="Errori" />
                             </ComboBox>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -293,7 +290,10 @@
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <Border x:Name="PriorityBadge" CornerRadius="8" Padding="9,5" HorizontalAlignment="Left"
-                                                        VerticalAlignment="Center" Background="{DynamicResource AccentSoftBrush}" ToolTip="{Binding PriorityDescription}">
+                                                        VerticalAlignment="Center" Background="{DynamicResource AccentSoftBrush}">
+                                                    <Border.ToolTip>
+                                                        <ToolTip Content="{Binding PriorityDescription}" Style="{StaticResource WrappedToolTip}" />
+                                                    </Border.ToolTip>
                                                     <StackPanel Orientation="Horizontal">
                                                         <TextBlock x:Name="PriorityText" Text="{Binding PriorityLabel}" Foreground="{DynamicResource AccentBrush}"
                                                                    FontSize="{DynamicResource FontSize11}" FontWeight="SemiBold" />
@@ -353,7 +353,10 @@
                                     <DataGridTemplateColumn Header="Stato" Width="1.2*" IsReadOnly="True">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
-                                                <StackPanel VerticalAlignment="Center" ToolTip="{Binding ResultDetails}">
+                                                <StackPanel VerticalAlignment="Center">
+                                                    <StackPanel.ToolTip>
+                                                        <ToolTip Content="{Binding ResultDetails}" Style="{StaticResource WrappedToolTip}" />
+                                                    </StackPanel.ToolTip>
                                                     <TextBlock Text="{Binding Status}" FontWeight="SemiBold" />
                                                     <TextBlock Text="{Binding ResultDetails}" Foreground="{DynamicResource MutedTextBrush}"
                                                                FontSize="{DynamicResource FontSize9}" Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
@@ -473,9 +476,21 @@
                                                 <TextBlock Text="{Binding HardwareInfo.CpuUsageLabel}" HorizontalAlignment="Right" FontWeight="SemiBold" />
                                             </Grid>
                                             <ProgressBar Value="{Binding HardwareInfo.CpuUsage, Mode=OneWay}" Maximum="100" Margin="0,8,0,14" />
-                                            <TextBlock Text="TEMPERATURA CPU (CORE)" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
-                                            <TextBox Text="{Binding HardwareInfo.CpuTemperature, Mode=OneWay}" Style="{StaticResource SelectableValue}"
-                                                     FontWeight="SemiBold" Margin="0,5,0,0" />
+                                            <StackPanel Margin="0,0,0,0">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HardwareInfo.HasCpuTemperature}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <TextBlock Text="TEMPERATURA CPU (CORE)" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                                <TextBox Text="{Binding HardwareInfo.CpuTemperature, Mode=OneWay}" Style="{StaticResource SelectableValue}"
+                                                         FontWeight="SemiBold" Margin="0,5,0,0" />
+                                            </StackPanel>
                                         </StackPanel>
                                     </Border>
 
@@ -531,9 +546,21 @@
                                                 <TextBlock Text="{Binding HardwareInfo.GpuUsageLabel}" HorizontalAlignment="Right" FontWeight="SemiBold" />
                                             </Grid>
                                             <ProgressBar Value="{Binding HardwareInfo.GpuUsage, Mode=OneWay}" Maximum="100" Margin="0,8,0,14" />
-                                            <TextBlock Text="TEMPERATURA GPU" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
-                                            <TextBox Text="{Binding HardwareInfo.GpuTemperature, Mode=OneWay}" Style="{StaticResource SelectableValue}"
-                                                     FontWeight="SemiBold" Margin="0,5,0,0" />
+                                            <StackPanel>
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HardwareInfo.HasGpuTemperature}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </StackPanel.Style>
+                                                <TextBlock Text="TEMPERATURA GPU" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                                <TextBox Text="{Binding HardwareInfo.GpuTemperature, Mode=OneWay}" Style="{StaticResource SelectableValue}"
+                                                         FontWeight="SemiBold" Margin="0,5,0,0" />
+                                            </StackPanel>
                                         </StackPanel>
                                     </Border>
 
@@ -559,15 +586,104 @@
                                 </StackPanel>
                             </Grid>
 
+                            <Border x:Name="StorageHealthCard" Style="{StaticResource Card}" Margin="0,14,0,0" Padding="0"
+                                    ClipToBounds="True" PreviewMouseWheel="StorageHealthCard_PreviewMouseWheel">
+                                <StackPanel>
+                                    <Grid Margin="18,15,18,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Salute dello storage" FontWeight="SemiBold" FontSize="{DynamicResource FontSize16}" />
+                                            <TextBlock Text="{Binding StorageHealthStatus}" Foreground="{DynamicResource MutedTextBrush}"
+                                                       FontSize="{DynamicResource FontSize11}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}"
+                                                   FontWeight="SemiBold" Margin="16,0,0,0">
+                                            <Run Text="{Binding StorageDeviceCount, Mode=OneWay}" /><Run Text=" unità fisiche · " />
+                                            <Run Text="{Binding StorageVolumeCount, Mode=OneWay}" /><Run Text=" volumi" />
+                                        </TextBlock>
+                                    </Grid>
+                                    <DataGrid ItemsSource="{Binding StorageRows}" IsReadOnly="True" SelectionUnit="FullRow"
+                                              ScrollViewer.VerticalScrollBarVisibility="Disabled" Margin="0"
+                                              VerticalContentAlignment="Center">
+                                        <DataGrid.Columns>
+                                            <DataGridTemplateColumn Header="Unità" Width="1.45*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                                            <TextBlock Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}">
+                                                                <Run Text="{Binding KindLabel, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding Detail, Mode=OneWay}" />
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="Volumi" Width="1.35*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel VerticalAlignment="Center" Margin="8,0">
+                                                            <TextBlock Text="{Binding VolumesLabel}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                            <TextBlock Text="{Binding VolumesDetail}" Foreground="{DynamicResource MutedTextBrush}"
+                                                                       FontSize="{DynamicResource FontSize9}" TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTextColumn Header="Capacità" Binding="{Binding CapacityLabel}" Width="0.7*" />
+                                            <DataGridTemplateColumn Header="Salute" Width="1.35*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <StackPanel VerticalAlignment="Center" Margin="8,0">
+                                                            <TextBlock x:Name="StorageHealthText" Text="{Binding HealthLabel}" FontWeight="SemiBold"
+                                                                       Foreground="{DynamicResource SuccessBrush}" />
+                                                            <TextBlock Text="{Binding HealthDetail}" Foreground="{DynamicResource MutedTextBrush}"
+                                                                       FontSize="{DynamicResource FontSize9}" TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+                                                        <DataTemplate.Triggers>
+                                                            <DataTrigger Binding="{Binding IsHealthUnknown}" Value="True">
+                                                                <Setter TargetName="StorageHealthText" Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+                                                            </DataTrigger>
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding IsHealthy}" Value="False" />
+                                                                    <Condition Binding="{Binding IsHealthUnknown}" Value="False" />
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter TargetName="StorageHealthText" Property="Foreground" Value="{DynamicResource DangerBrush}" />
+                                                            </MultiDataTrigger>
+                                                        </DataTemplate.Triggers>
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                            <DataGridTemplateColumn Header="Temperatura" Width="110">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding TemperatureLabel}" VerticalAlignment="Center" HorizontalAlignment="Center" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </StackPanel>
+                            </Border>
+
                             <Border Style="{StaticResource Card}" Margin="0,14,0,0">
                                 <Grid>
-                                    <StackPanel>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                         <TextBlock Text="Riepilogo completo" FontWeight="SemiBold" FontSize="{DynamicResource FontSize16}" />
-                                        <TextBlock Text="Copia CPU, GPU, temperature, utilizzo, RAM, schermo e versione di Windows in un formato leggibile."
-                                                   Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}" Margin="0,5,220,0" TextWrapping="Wrap" />
+                                        <TextBlock Text="Copia CPU, GPU, VRAM, RAM, Windows, versioni dei driver CPU/GPU e unità interne, escludendo i dispositivi USB."
+                                                   Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}"
+                                                   Margin="0,5,0,0" TextWrapping="Wrap" />
                                     </StackPanel>
-                                    <Button Content="Copia informazioni hardware" Style="{StaticResource RoundedButton}"
-                                            HorizontalAlignment="Right" VerticalAlignment="Center" Click="CopyHardwareInfo_Click" />
+                                    <Button Grid.Column="1" Content="Copia informazioni hardware" Style="{StaticResource RoundedButton}"
+                                            HorizontalAlignment="Right" VerticalAlignment="Center" Margin="24,0,0,0"
+                                            Click="CopyHardwareInfo_Click" />
                                 </Grid>
                             </Border>
                         </StackPanel>
@@ -612,6 +728,62 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Grid>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}" Padding="0" Margin="0,0,0,10" ClipToBounds="True">
+                            <StackPanel>
+                                <Grid Margin="18,15,18,10">
+                                    <StackPanel>
+                                        <TextBlock Text="Diagnosi driver problematici" FontWeight="SemiBold" FontSize="{DynamicResource FontSize15}" />
+                                        <TextBlock Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" Margin="0,4,0,0">
+                                            <Run Text="{Binding DriverProblemCount, Mode=OneWay}" /><Run Text=" problemi attivi segnalati da Gestione dispositivi" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                                <DataGrid ItemsSource="{Binding DriverProblems}" IsReadOnly="True" SelectionUnit="FullRow"
+                                          ScrollViewer.VerticalScrollBarVisibility="Disabled" Margin="0">
+                                    <DataGrid.Columns>
+                                        <DataGridTemplateColumn Header="Dispositivo" Width="1.7*">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding DeviceName}" FontWeight="SemiBold" />
+                                                        <TextBlock Text="{Binding DeviceDetail}" Foreground="{DynamicResource MutedTextBrush}"
+                                                                   FontSize="{DynamicResource FontSize10}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Problema" Width="1.35*">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="ProblemTitleText" Text="{Binding ErrorTitle}" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource WarningBrush}" />
+                                                        <TextBlock Text="{Binding ErrorCodeLabel}" Foreground="{DynamicResource MutedTextBrush}"
+                                                                   FontSize="{DynamicResource FontSize9}" />
+                                                    </StackPanel>
+                                                    <DataTemplate.Triggers>
+                                                        <DataTrigger Binding="{Binding Severity}" Value="Critico">
+                                                            <Setter TargetName="ProblemTitleText" Property="Foreground" Value="{DynamicResource DangerBrush}" />
+                                                        </DataTrigger>
+                                                    </DataTemplate.Triggers>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Azione consigliata" Width="2*">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding SuggestedAction}" TextWrapping="Wrap" ToolTip="{Binding DeviceId}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <TextBlock Text="Nessuna riparazione viene eseguita automaticamente: questa sezione mostra soltanto problemi confermati da Windows."
+                                           Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
+                                           Margin="18,10,18,15" TextWrapping="Wrap" />
+                            </StackPanel>
                         </Border>
 
                         <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" Margin="0,0,0,10" ClipToBounds="True">
@@ -662,7 +834,7 @@
                                                         <TextBlock Grid.Row="2" Text="{Binding Description}" Foreground="{DynamicResource MutedTextBrush}"
                                                                    FontSize="{DynamicResource FontSize9}" TextWrapping="Wrap"
                                                                    MaxHeight="30" TextTrimming="CharacterEllipsis" />
-                                                        <Button Grid.Row="3" Content="{Binding ActionLabel}" Tag="{Binding Url}"
+                                                        <Button Grid.Row="3" Content="{Binding ActionLabel}" Tag="{Binding LaunchTarget}"
                                                                 Style="{StaticResource SecondaryButton}" HorizontalAlignment="Left"
                                                                 Padding="10,5" FontSize="{DynamicResource FontSize10}" Click="OpenVendorSupport_Click" />
                                                     </Grid>

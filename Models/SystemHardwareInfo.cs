@@ -23,6 +23,8 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     private string _gpuMetricsSource = "Contatori GPU di Windows";
     private string _cpuTemperature = "Non disponibile";
     private string _gpuTemperature = "Non disponibile";
+    private bool _hasCpuTemperature;
+    private bool _hasGpuTemperature;
     private string _monitoringStatus = "Preparazione del monitoraggio…";
 
     public string CpuName { get => _cpuName; private set => Set(ref _cpuName, value); }
@@ -43,6 +45,8 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     public string GpuMetricsSource { get => _gpuMetricsSource; private set => Set(ref _gpuMetricsSource, value); }
     public string CpuTemperature { get => _cpuTemperature; private set => Set(ref _cpuTemperature, value); }
     public string GpuTemperature { get => _gpuTemperature; private set => Set(ref _gpuTemperature, value); }
+    public bool HasCpuTemperature { get => _hasCpuTemperature; private set => Set(ref _hasCpuTemperature, value); }
+    public bool HasGpuTemperature { get => _hasGpuTemperature; private set => Set(ref _hasGpuTemperature, value); }
     public string MonitoringStatus { get => _monitoringStatus; set => Set(ref _monitoringStatus, value); }
     public string CpuUsageLabel => $"{CpuUsage:0}%";
     public string RamUsageLabel => $"{RamUsage:0}%";
@@ -70,38 +74,18 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         RamUsed = metrics.RamUsed;
         VramUsed = metrics.VramUsed;
         GpuMetricsSource = metrics.GpuMetricsSource;
+        HasCpuTemperature = IsValidTemperature(metrics.CpuTemperature);
+        HasGpuTemperature = IsValidTemperature(metrics.GpuTemperature);
         CpuTemperature = FormatTemperature(metrics.CpuTemperature, "Non esposta da Windows/firmware");
         GpuTemperature = FormatTemperature(metrics.GpuTemperature, "Non esposta dal driver video");
         MonitoringStatus = metrics.Status;
     }
 
-    public string BuildClipboardText() => string.Join(Environment.NewLine,
-    [
-        $"CPU: {CpuName}",
-        $"Core e thread: {CpuCores}",
-        $"Temperatura CPU: {CpuTemperature}",
-        $"Utilizzo CPU: {CpuUsageLabel}",
-        "",
-        $"GPU: {GpuName}",
-        $"Memoria video principale: {VramTotal}",
-        $"Memoria per GPU: {VramDetails}",
-        $"Memoria video in uso: {VramUsed}",
-        $"Dati in tempo reale riferiti a: {GpuMetricsSource}",
-        $"Temperatura GPU: {GpuTemperature}",
-        $"Utilizzo GPU: {GpuUsageLabel}",
-        "",
-        $"RAM: {RamTotal}",
-        $"RAM in uso: {RamUsed}",
-        $"Utilizzo RAM: {RamUsageLabel}",
-        "",
-        $"Schermo: {Resolution} a {RefreshRate}",
-        $"Sistema operativo: {OperatingSystem}",
-        $"Computer: {ComputerModel}"
-    ]);
-
     private static string FormatTemperature(double? value, string unavailableText) => value.HasValue && value.Value is >= 1 and <= 125
         ? $"{value.Value:0.#} °C"
         : unavailableText;
+
+    private static bool IsValidTemperature(double? value) => value is >= 1 and <= 125;
 
     private static double Clamp(double? value) => Math.Clamp(value ?? 0, 0, 100);
 

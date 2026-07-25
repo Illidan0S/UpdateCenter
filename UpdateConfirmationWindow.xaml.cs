@@ -26,7 +26,7 @@ public partial class UpdateConfirmationWindow : Window
             ? $"1 aggiornamento selezionato"
             : $"{items.Count} aggiornamenti selezionati";
         ImportantCountText.Text = items.Count(x => x.IsImportant).ToString();
-        SoftwareCountText.Text = items.Count(x => x.Kind == UpdateKind.Software).ToString();
+        SoftwareCountText.Text = items.Count(x => x.Kind is UpdateKind.Software or UpdateKind.Runtime).ToString();
         DriverCountText.Text = items.Count(x => x.Kind == UpdateKind.Driver).ToString();
         PowerStatusText.Text = preflight.PowerStatus;
         DiskStatusText.Text = preflight.DiskStatus;

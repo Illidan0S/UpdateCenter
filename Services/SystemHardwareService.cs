@@ -271,6 +271,7 @@ public sealed class SystemHardwareService
             if (cpu.HasValue || gpu.HasValue) break;
         }
 
+        cpu ??= CpuTemperatureFallbackService.TryRead();
         return (cpu, gpu);
     }
 
@@ -527,9 +528,15 @@ public sealed class SystemHardwareService
                right.Contains(left, StringComparison.CurrentCultureIgnoreCase);
     }
 
-    private static string CleanHardwareText(string value) => string.Join(" · ", value
+    private static string CleanHardwareText(string value)
+    {
+        var sanitized = new string(value
+            .Where(character => !char.IsControl(character))
+            .ToArray());
+        return string.Join(" · ", sanitized
         .Split('·', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Where(part => !part.Equals("System.Byte[]", StringComparison.OrdinalIgnoreCase)));
+    }
 
     private static long ReadRegistryByteSize(object? value)
     {
@@ -560,7 +567,7 @@ public sealed class SystemHardwareService
                 byte[] bytes when bytes.Length > 1 => DecodeRegistryText(bytes),
                 _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""
             };
-            text = text.Trim().TrimEnd('\0').Trim();
+            text = CleanHardwareText(text);
             return text.Equals("System.Byte[]", StringComparison.OrdinalIgnoreCase) ? "" : text;
         }
         catch { return ""; }
@@ -581,7 +588,7 @@ public sealed class SystemHardwareService
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(path);
-            return Convert.ToString(key?.GetValue(valueName))?.Trim() ?? "";
+            return CleanHardwareText(Convert.ToString(key?.GetValue(valueName)) ?? "");
         }
         catch { return ""; }
     }

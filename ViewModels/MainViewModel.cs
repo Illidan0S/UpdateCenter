@@ -14,6 +14,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly OfficialDriverCatalogService _officialDriverCatalog = new();
     private readonly HardwareInventoryService _hardwareInventory = new();
     private readonly SystemHardwareService _systemHardware = new();
+    private readonly GameDependencyService _gameDependencies = new();
+    private readonly StorageHealthService _storageHealth = new();
     private readonly UpdateCoordinator _coordinator = new();
     private readonly AppUpdateService _appUpdateService = new();
     private CancellationTokenSource? _scanCancellation;
@@ -23,18 +25,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _statusText = LocalizationService.Text("Pronto per la scansione", "Ready to scan");
     private string _currentItemText = LocalizationService.Text("Premi Avvia scansione per iniziare.", "Select Start scan to begin.");
     private string _searchText = "";
-    private string _filter = "Tutti";
+    private string _updateTypeFilter = "Tutti";
     private string _driverSearchText = "";
     private string _driverInventoryFilter = "Tutti";
     private int _scannedCount;
     private string _cpuName = "Processore non ancora rilevato";
     private string _computerName = "";
     private string _hardwareCheckStatus = "Esegui una scansione per controllare automaticamente i driver.";
+    private string _gameDependencyStatus = "Esegui una scansione per controllare i runtime condivisi.";
+    private string _storageHealthStatus = "Esegui una scansione per controllare la salute dello storage.";
     private bool _hasCurrentScan;
     private bool _hardwareOverviewLoaded;
     private bool _hardwareOverviewLoading;
     private bool _hardwareMetricsLoading;
     private bool _isAppUpdateCheckBusy;
+    private UpdatePauseController? _activePauseController;
+    private bool _isUpdatePaused;
+    private bool _isUpdatePauseRequested;
     private string _appUpdateStatus = LocalizationService.Text(
         "Controllo aggiornamenti dell'app non ancora eseguito.",
         "The app update check has not run yet.");
@@ -61,6 +68,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<UpdateItem> Updates { get; } = [];
     public ObservableCollection<HistoryEntry> History { get; } = [];
     public ObservableCollection<DriverInventoryItem> DriverInventory { get; } = [];
+    public ObservableCollection<DriverProblemItem> DriverProblems { get; } = [];
+    public ObservableCollection<GameDependencyItem> GameDependencies { get; } = [];
+    public ObservableCollection<StorageDeviceItem> StorageDevices { get; } = [];
+    public ObservableCollection<StorageVolumeItem> StorageVolumes { get; } = [];
+    public ObservableCollection<StorageTableRow> StorageRows { get; } = [];
     public ObservableCollection<VendorSupportItem> VendorTools { get; } = [];
     public SystemHardwareInfo HardwareInfo { get; } = new();
     public ICollectionView UpdatesView { get; }
@@ -71,7 +83,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public bool IsBusy
     {
         get => _isBusy;
-        private set { _isBusy = value; OnPropertyChanged(); OnPropertyChanged(nameof(CanScan)); OnPropertyChanged(nameof(CanUpdate)); }
+        private set
+        {
+            _isBusy = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(CanScan));
+            OnPropertyChanged(nameof(CanUpdate));
+            OnPropertyChanged(nameof(CanPauseUpdates));
+        }
     }
 
     public bool CanScan => !IsBusy;
@@ -111,7 +130,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int SelectedCount => Updates.Count(x => x.CanInstall && x.IsSelected);
     public int VisibleUpdateCount => UpdatesView.Cast<object>().Count();
     public int SoftwareUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Software);
+    public int RuntimeUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Runtime);
     public int DriverCount => DriverInventory.Count;
+    public int DriverProblemCount => DriverProblems.Count;
+    public int MissingGameDependencyCount => GameDependencies.Count(x => !x.IsAvailable && !x.IsOptional);
+    public int OptionalGameDependencyCount => GameDependencies.Count(x => !x.IsAvailable && x.IsOptional);
+    public int StorageDeviceCount => StorageDevices.Count;
+    public int StorageVolumeCount => StorageVolumes.Count;
     public int VisibleDriverCount => DriverInventoryView.Cast<object>().Count();
     public int ChipsetCount => DriverInventory.Count(x => x.IsProcessorOrChipset);
     public int DriverUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Driver);
@@ -126,8 +151,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         : AvailableCount == 0
             ? LocalizationService.Text("Nessun aggiornamento disponibile al momento.", "No updates are currently available.")
             : LocalizationService.IsEnglish
-                ? $"{SoftwareUpdateCount} software and {DriverUpdateCount} driver updates to review."
-                : $"{SoftwareUpdateCount} software e {DriverUpdateCount} driver da controllare.";
+                ? $"{SoftwareUpdateCount} software, {DriverUpdateCount} driver and {RuntimeUpdateCount} runtime updates to review."
+                : $"{SoftwareUpdateCount} software, {DriverUpdateCount} driver e {RuntimeUpdateCount} runtime da controllare.";
     public IReadOnlyList<UpdateItem> SelectedItems => Updates.Where(x => x.CanInstall && x.IsSelected).ToList();
     public bool IsAppUpdateCheckBusy
     {
@@ -140,6 +165,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
     public bool CanCheckAppUpdates => !IsAppUpdateCheckBusy;
+    public bool CanPauseUpdates => _activePauseController is not null && IsBusy;
+    public bool IsUpdatePaused
+    {
+        get => _isUpdatePaused;
+        private set
+        {
+            _isUpdatePaused = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PauseButtonText));
+            OnPropertyChanged(nameof(UpdatePauseHint));
+        }
+    }
+    public bool IsUpdatePauseRequested
+    {
+        get => _isUpdatePauseRequested;
+        private set
+        {
+            _isUpdatePauseRequested = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PauseButtonText));
+            OnPropertyChanged(nameof(UpdatePauseHint));
+        }
+    }
+    public string PauseButtonText => IsUpdatePauseRequested || IsUpdatePaused
+        ? T("Riprendi", "Resume")
+        : T("Pausa dopo questo elemento", "Pause after this item");
+    public string UpdatePauseHint => IsUpdatePaused
+        ? T("Installazione in pausa tra due elementi. Nessun driver è stato interrotto a metà.", "Installation is paused between items. No driver was interrupted midway.")
+        : IsUpdatePauseRequested
+            ? T("Pausa richiesta: l'elemento corrente terminerà in sicurezza.", "Pause requested: the current item will finish safely.")
+            : T("La pausa viene applicata dopo l'elemento corrente.", "Pause takes effect after the current item.");
     public string AppUpdateStatus
     {
         get => _appUpdateStatus;
@@ -184,16 +240,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
         private set { _hardwareCheckStatus = value; OnPropertyChanged(); }
     }
 
+    public string GameDependencyStatus
+    {
+        get => _gameDependencyStatus;
+        private set { _gameDependencyStatus = value; OnPropertyChanged(); }
+    }
+
+    public string StorageHealthStatus
+    {
+        get => _storageHealthStatus;
+        private set { _storageHealthStatus = value; OnPropertyChanged(); }
+    }
+
     public string SearchText
     {
         get => _searchText;
         set { _searchText = value ?? ""; OnPropertyChanged(); RefreshUpdatesView(); }
     }
 
-    public string Filter
+    public string UpdateTypeFilter
     {
-        get => _filter;
-        set { _filter = value ?? "Tutti"; OnPropertyChanged(); RefreshUpdatesView(); }
+        get => _updateTypeFilter;
+        set { _updateTypeFilter = value ?? "Tutti"; OnPropertyChanged(); RefreshUpdatesView(); }
     }
 
     public string DriverSearchText
@@ -313,6 +381,72 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     : verifiedCount > 0
                         ? $"{verifiedCount} aggiornamenti driver verificati ({microsoftDriverCount} Microsoft, {catalogDriverCount} produttori). Fonti: {sourceLabel}."
                         : $"Nessun driver installabile verificato. Controllate {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} fonti automatiche; disponibili {hardwareScan.VendorTools.Count} controlli manuali ufficiali senza app aggiuntive.";
+            }
+
+            Progress = 90;
+            CurrentItemText = T("Controllo runtime condivisi e salute dello storage…", "Checking shared runtimes and storage health…");
+            try
+            {
+                var dependencies = await _gameDependencies.ScanAsync(_scanCancellation.Token);
+                foreach (var dependency in dependencies)
+                {
+                    if (!dependency.IsAvailable && !string.IsNullOrWhiteSpace(dependency.PackageId))
+                    {
+                        var package = await _winGet.ResolveInstallablePackageAsync(
+                            dependency.PackageId, _scanCancellation.Token);
+                        if (package is null)
+                        {
+                            dependency.PackageId = "";
+                        }
+                        else
+                        {
+                            dependency.AvailableVersion = package.Version;
+                            var runtimeUpdate = new UpdateItem
+                            {
+                                Id = package.Id,
+                                Name = dependency.Name,
+                                Kind = UpdateKind.Runtime,
+                                InstalledVersion = T("Non installato", "Not installed"),
+                                AvailableVersion = package.Version,
+                                Source = "winget",
+                                PackageOperation = PackageOperations.Install,
+                                IsOptional = dependency.IsOptional,
+                                IsSelected = !dependency.IsOptional,
+                                Publisher = dependency.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase)
+                                    ? "NVIDIA"
+                                    : "Microsoft/WinGet"
+                            };
+                            await _winGet.PreparePackageMetadataAsync([runtimeUpdate], _scanCancellation.Token);
+                            AddUpdates([runtimeUpdate]);
+                        }
+                    }
+                    GameDependencies.Add(dependency);
+                }
+                var requiredMissing = GameDependencies.Count(x => !x.IsAvailable && !x.IsOptional);
+                var optionalMissing = GameDependencies.Count(x => !x.IsAvailable && x.IsOptional);
+                GameDependencyStatus = requiredMissing == 0
+                    ? optionalMissing == 0
+                        ? T("Tutti i runtime controllati risultano disponibili.", "All checked runtimes are available.")
+                        : T($"Dipendenze principali disponibili; {optionalMissing} componenti opzionali non rilevati.", $"Core dependencies are available; {optionalMissing} optional components were not detected.")
+                    : T($"{requiredMissing} dipendenze principali non rilevate.", $"{requiredMissing} core dependencies were not detected.");
+                ScannedCount += dependencies.Count;
+            }
+            catch (Exception ex)
+            {
+                warnings.Add(ex.Message);
+                GameDependencyStatus = T("Controllo dei runtime non completato.", "Runtime check did not complete.");
+                LogService.Write("Scansione runtime fallita.", ex);
+            }
+
+            try
+            {
+                ScannedCount += await RefreshStorageHealthAsync(_scanCancellation.Token);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add(ex.Message);
+                StorageHealthStatus = T("Controllo della salute dello storage non completato.", "Storage health check did not complete.");
+                LogService.Write("Controllo salute storage fallito.", ex);
             }
 
             Progress = 100;
@@ -478,6 +612,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (IsBusy || selected.Count == 0) return null;
 
         IsBusy = true;
+        _activePauseController = new UpdatePauseController();
+        IsUpdatePaused = false;
+        IsUpdatePauseRequested = false;
+        OnPropertyChanged(nameof(CanPauseUpdates));
         Progress = 2;
         StatusText = T("Aggiornamento in corso", "Update in progress");
         CurrentItemText = T("Conferma la richiesta di Controllo account utente di Windows.", "Confirm the Windows User Account Control prompt if requested.");
@@ -489,10 +627,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var result = await _coordinator.RunAsync(selected, Settings, status =>
+            var result = await _coordinator.RunAsync(selected, Settings, _activePauseController, status =>
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
                 {
+                    IsUpdatePaused = status.State.Equals("Paused", StringComparison.OrdinalIgnoreCase);
+                    IsUpdatePauseRequested = IsUpdatePaused || _activePauseController?.IsPauseRequested == true;
                     var itemFraction = status.CurrentIndex < status.Total
                         ? Math.Clamp(status.CurrentItemProgress, 0, 100) / 100d
                         : 0;
@@ -501,7 +641,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         : (status.CurrentIndex + itemFraction) * 100d / status.Total;
                     Progress = Math.Max(Progress, completedPercentage);
                     CurrentItemText = status.Message;
-                    StatusText = string.IsNullOrWhiteSpace(status.CurrentName)
+                    StatusText = IsUpdatePaused
+                        ? T("Aggiornamenti in pausa", "Updates paused")
+                        : string.IsNullOrWhiteSpace(status.CurrentName)
                         ? T("Aggiornamento in corso", "Update in progress")
                         : LocalizationService.IsEnglish ? $"Updating: {status.CurrentName}" : $"Aggiornamento: {status.CurrentName}";
 
@@ -545,8 +687,47 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
         finally
         {
+            _activePauseController?.Cleanup();
+            _activePauseController = null;
+            IsUpdatePaused = false;
+            IsUpdatePauseRequested = false;
             IsBusy = false;
+            OnPropertyChanged(nameof(CanPauseUpdates));
             NotifyCounts();
+        }
+    }
+
+    private async Task<int> RefreshStorageHealthAsync(CancellationToken cancellationToken)
+    {
+        var storage = await _storageHealth.ScanAsync(cancellationToken);
+        StorageDevices.Clear();
+        StorageVolumes.Clear();
+        StorageRows.Clear();
+        foreach (var device in storage.Devices) StorageDevices.Add(device);
+        foreach (var volume in storage.Volumes) StorageVolumes.Add(volume);
+        foreach (var row in StorageTableRowFactory.CreateRows(storage.Devices)) StorageRows.Add(row);
+        StorageHealthStatus = storage.Status;
+        NotifyCounts();
+        return storage.Devices.Count;
+    }
+
+    public void ToggleUpdatePause()
+    {
+        if (_activePauseController is null) return;
+        if (_activePauseController.IsPauseRequested)
+        {
+            _activePauseController.Resume();
+            IsUpdatePauseRequested = false;
+            IsUpdatePaused = false;
+            CurrentItemText = T("Ripresa richiesta…", "Resume requested…");
+        }
+        else
+        {
+            _activePauseController.RequestPause();
+            IsUpdatePauseRequested = true;
+            CurrentItemText = T(
+                "Pausa richiesta: l'elemento corrente terminerà prima di fermarsi.",
+                "Pause requested: the current item will finish before stopping.");
         }
     }
 
@@ -599,7 +780,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(SelectedCount));
         OnPropertyChanged(nameof(VisibleUpdateCount));
         OnPropertyChanged(nameof(SoftwareUpdateCount));
+        OnPropertyChanged(nameof(RuntimeUpdateCount));
         OnPropertyChanged(nameof(DriverCount));
+        OnPropertyChanged(nameof(DriverProblemCount));
+        OnPropertyChanged(nameof(MissingGameDependencyCount));
+        OnPropertyChanged(nameof(OptionalGameDependencyCount));
+        OnPropertyChanged(nameof(StorageDeviceCount));
+        OnPropertyChanged(nameof(StorageVolumeCount));
         OnPropertyChanged(nameof(VisibleDriverCount));
         OnPropertyChanged(nameof(ChipsetCount));
         OnPropertyChanged(nameof(DriverUpdateCount));
@@ -664,6 +851,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ComputerName = string.Join(" ", new[] { scan.ComputerManufacturer, scan.ComputerModel }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
         foreach (var driver in scan.Drivers) DriverInventory.Add(driver);
+        foreach (var problem in scan.Problems) DriverProblems.Add(problem);
         foreach (var tool in scan.VendorTools) VendorTools.Add(tool);
         RefreshDriverInventoryView();
         NotifyCounts();
@@ -672,12 +860,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void ClearHardware()
     {
         DriverInventory.Clear();
+        DriverProblems.Clear();
+        GameDependencies.Clear();
+        StorageDevices.Clear();
+        StorageVolumes.Clear();
+        StorageRows.Clear();
         VendorTools.Clear();
         DriverSearchText = "";
         DriverInventoryFilter = "Tutti";
         CpuName = "Processore non ancora rilevato";
         ComputerName = "";
         HardwareCheckStatus = "Esegui una scansione per controllare automaticamente i driver.";
+        GameDependencyStatus = "Esegui una scansione per controllare i runtime condivisi.";
+        StorageHealthStatus = "Esegui una scansione per controllare la salute dello storage.";
         NotifyCounts();
     }
 
@@ -686,9 +881,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (e.PropertyName == nameof(UpdateItem.IsSelected))
         {
             NotifyCounts();
-            if (Filter == "Selezionati") RefreshUpdatesView();
         }
-        else if (e.PropertyName == nameof(UpdateItem.Status) && Filter == "Errori")
+        else if (e.PropertyName == nameof(UpdateItem.Status) && UpdateTypeFilter == "Errori")
         {
             RefreshUpdatesView();
         }
@@ -697,15 +891,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool FilterUpdate(object value)
     {
         if (value is not UpdateItem item) return false;
-        var typeMatches = Filter switch
+        var typeMatches = UpdateTypeFilter switch
         {
             "Software" => item.Kind == UpdateKind.Software,
             "Driver" => item.Kind == UpdateKind.Driver,
-            "Importanti" => item.IsImportant,
-            "Standard" => !item.IsImportant && !item.IsOptional,
-            "Facoltativi" => item.IsOptional,
-            "Selezionati" => item.IsSelected,
-            "Riavvio richiesto" => item.RequiresRestart,
+            "Runtime" => item.Kind == UpdateKind.Runtime,
             "Errori" => item.Status.Equals("Errore", StringComparison.OrdinalIgnoreCase) ||
                         item.Status.Equals("Error", StringComparison.OrdinalIgnoreCase),
             _ => true

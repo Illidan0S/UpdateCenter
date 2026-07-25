@@ -60,6 +60,8 @@ public partial class UpdateProgressWindow : Window
         SucceededCountText.Text = succeeded.ToString();
         FailedCountText.Text = failed.ToString();
         ResultCards.Visibility = Visibility.Visible;
+        PauseButton.Visibility = Visibility.Collapsed;
+        PauseHintText.Visibility = Visibility.Collapsed;
         CloseButton.Visibility = Visibility.Visible;
         FooterText.Text = LocalizationService.Text(
             "Puoi chiudere questa finestra e continuare a usare Update Center.",
@@ -100,6 +102,8 @@ public partial class UpdateProgressWindow : Window
             "Nessuna ulteriore operazione è in corso.",
             "No further operation is running.");
         FooterText.Text = LocalizationService.Text("Puoi chiudere questa finestra.", "You can close this window.");
+        PauseButton.Visibility = Visibility.Collapsed;
+        PauseHintText.Visibility = Visibility.Collapsed;
         CloseButton.Visibility = Visibility.Visible;
         BringToFront();
     }
@@ -137,6 +141,12 @@ public partial class UpdateProgressWindow : Window
     }
 
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void Pause_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+            viewModel.ToggleUpdatePause();
+    }
 
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {

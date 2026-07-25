@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Win32;
 using UpdateCenter.Models;
 
 namespace UpdateCenter.Services;
@@ -20,14 +21,18 @@ public sealed class HardwareInventoryService
         const string script = "$ErrorActionPreference='Stop';" +
             "$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1 Name,Manufacturer;" +
             "$pc=Get-CimInstance Win32_ComputerSystem | Select-Object -First 1 Manufacturer,Model;" +
-            "$pnp=@{};Get-CimInstance Win32_PnPEntity | Where-Object {$_.PNPDeviceID} | ForEach-Object {" +
-            "$pnp[$_.PNPDeviceID]=[pscustomobject]@{HardwareIds=@($_.HardwareID);CompatibleIds=@($_.CompatibleID)}};" +
+            "$pnpRows=@(Get-CimInstance Win32_PnPEntity | Where-Object {$_.PNPDeviceID});$pnp=@{};" +
+            "$pnpRows | ForEach-Object {$pnp[$_.PNPDeviceID]=[pscustomobject]@{" +
+            "HardwareIds=@($_.HardwareID);CompatibleIds=@($_.CompatibleID)}};" +
             "$drivers=@(Get-CimInstance Win32_PnPSignedDriver | Where-Object {$_.DeviceName} | ForEach-Object {" +
             "$ids=$pnp[$_.DeviceID];[pscustomobject]@{DeviceName=$_.DeviceName;Manufacturer=$_.Manufacturer;" +
             "DriverProviderName=$_.DriverProviderName;DriverVersion=$_.DriverVersion;DriverDate=$_.DriverDate;" +
             "DeviceClass=$_.DeviceClass;DeviceID=$_.DeviceID;InfName=$_.InfName;" +
             "HardwareIds=@($ids.HardwareIds);CompatibleIds=@($ids.CompatibleIds)}});" +
-            "[pscustomobject]@{Computer=$pc;Cpu=$cpu;Drivers=$drivers}|ConvertTo-Json -Depth 4 -Compress";
+            "$problems=@($pnpRows | Where-Object {$_.ConfigManagerErrorCode -ne 0 -and $_.ConfigManagerErrorCode -ne 45} | " +
+            "ForEach-Object {[pscustomobject]@{DeviceName=$_.Name;Manufacturer=$_.Manufacturer;" +
+            "DeviceClass=$_.PNPClass;DeviceID=$_.PNPDeviceID;ErrorCode=[int]$_.ConfigManagerErrorCode;Status=$_.Status}});" +
+            "[pscustomobject]@{Computer=$pc;Cpu=$cpu;Drivers=$drivers;Problems=$problems}|ConvertTo-Json -Depth 4 -Compress";
 
         var result = await ProcessRunner.RunAsync(
             "powershell.exe",
@@ -63,6 +68,19 @@ public sealed class HardwareInventoryService
                 }
             }
 
+            if (root.TryGetProperty("Problems", out var problemsElement))
+            {
+                if (problemsElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var problem in problemsElement.EnumerateArray())
+                        AddProblem(scan.Problems, problem);
+                }
+                else if (problemsElement.ValueKind == JsonValueKind.Object)
+                {
+                    AddProblem(scan.Problems, problemsElement);
+                }
+            }
+
             scan.Drivers = scan.Drivers
                 .GroupBy(x => $"{x.DeviceName}\u001f{x.InstalledVersion}\u001f{x.Provider}", StringComparer.OrdinalIgnoreCase)
                 .Select(group =>
@@ -75,7 +93,13 @@ public sealed class HardwareInventoryService
                 .ThenBy(x => x.DeviceName, StringComparer.CurrentCultureIgnoreCase)
                 .ToList();
             scan.VendorTools = BuildVendorTools(scan);
-            LogService.Write($"Inventario hardware completato: {scan.Drivers.Count} driver installati.");
+            scan.Problems = scan.Problems
+                .GroupBy(x => x.DeviceId, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.First())
+                .OrderByDescending(x => x.Severity.Equals("Critico", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(x => x.DeviceName, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+            LogService.Write($"Inventario hardware completato: {scan.Drivers.Count} driver installati, {scan.Problems.Count} problemi PnP.");
             return scan;
         }
         catch (JsonException ex)
@@ -109,6 +133,42 @@ public sealed class HardwareInventoryService
         });
     }
 
+    private static void AddProblem(List<DriverProblemItem> list, JsonElement element)
+    {
+        var errorCode = ReadInt(element, "ErrorCode");
+        if (errorCode == 0 || errorCode == 45) return;
+        var (title, action, severity) = DescribeDeviceError(errorCode);
+        list.Add(new DriverProblemItem
+        {
+            DeviceName = ReadProperty(element, "DeviceName", "Dispositivo sconosciuto"),
+            Manufacturer = ReadProperty(element, "Manufacturer"),
+            DeviceClass = ReadProperty(element, "DeviceClass"),
+            DeviceId = ReadProperty(element, "DeviceID"),
+            ErrorCode = errorCode,
+            ErrorTitle = title,
+            SuggestedAction = action,
+            Severity = severity
+        });
+    }
+
+    internal static (string Title, string Action, string Severity) DescribeDeviceError(int code) => code switch
+    {
+        10 => ("Il dispositivo non può essere avviato", "Riavvia il PC; se persiste, reinstalla o aggiorna il driver ufficiale.", "Critico"),
+        12 => ("Risorse hardware insufficienti", "Disabilita il dispositivo in conflitto o verifica BIOS e configurazione hardware.", "Critico"),
+        14 => ("Riavvio richiesto", "Riavvia Windows per completare la configurazione del dispositivo.", "Attenzione"),
+        18 => ("Driver da reinstallare", "Reinstalla il driver dalla fonte ufficiale del produttore.", "Critico"),
+        22 => ("Dispositivo disabilitato", "Riabilita il dispositivo da Gestione dispositivi dopo aver verificato che sia desiderato.", "Attenzione"),
+        24 => ("Dispositivo non presente o configurato male", "Ricollega il dispositivo e avvia una nuova ricerca hardware.", "Attenzione"),
+        28 => ("Driver mancante", "Installa un driver compatibile da Windows Update o dal produttore ufficiale.", "Critico"),
+        31 => ("Windows non riesce a caricare il driver", "Aggiorna o reinstalla il driver; verifica eventuali aggiornamenti Windows.", "Critico"),
+        32 => ("Driver disabilitato nel registro", "Verifica il servizio del driver e reinstalla il pacchetto ufficiale.", "Critico"),
+        37 or 39 or 40 => ("Driver non caricabile o danneggiato", "Reinstalla il driver ufficiale e riavvia Windows.", "Critico"),
+        43 => ("Il dispositivo ha segnalato un problema", "Spegni e ricollega il dispositivo; poi aggiorna o reinstalla il driver.", "Critico"),
+        48 => ("Driver bloccato per incompatibilità", "Cerca una versione compatibile e firmata tramite Windows Update o il produttore.", "Critico"),
+        52 => ("Firma digitale non verificabile", "Usa soltanto un driver firmato proveniente da una fonte ufficiale.", "Critico"),
+        _ => ($"Problema di configurazione del dispositivo (codice {code})", "Apri Gestione dispositivi per controllare dettagli e azioni consigliate da Windows.", "Attenzione")
+    };
+
     private static List<VendorSupportItem> BuildVendorTools(HardwareScanResult scan)
     {
         var tools = new List<VendorSupportItem>();
@@ -141,11 +201,18 @@ public sealed class HardwareInventoryService
 
         if (HasHardware(scan, ["NVIDIA"], ["PCI\\VEN_10DE"]))
         {
+            var nvidiaAppPath = FindNvidiaAppExecutable();
             tools.Add(new VendorSupportItem
             {
-                Name = "Supporto driver NVIDIA",
-                Description = "Ricerca manuale dei driver ufficiali Game Ready o Studio; NVIDIA App non viene installata.",
-                Url = "https://www.nvidia.com/it-it/drivers/",
+                Name = "Controllo driver GPU NVIDIA",
+                Description = string.IsNullOrWhiteSpace(nvidiaAppPath)
+                    ? "NVIDIA App non è installata: apre la pagina ufficiale per scaricarla e gestire i driver Game Ready o Studio."
+                    : "NVIDIA App è installata: il pulsante la apre direttamente per controllare e installare i driver Game Ready o Studio.",
+                Url = "https://www.nvidia.com/it-it/software/nvidia-app/",
+                ApplicationPath = nvidiaAppPath,
+                ActionLabel = string.IsNullOrWhiteSpace(nvidiaAppPath)
+                    ? "Installa NVIDIA App"
+                    : "Apri NVIDIA App",
                 CompatibilityLabel = "GPU NVIDIA rilevata tramite ID PCI"
             });
         }
@@ -229,6 +296,59 @@ public sealed class HardwareInventoryService
         return tools;
     }
 
+    private static string FindNvidiaAppExecutable()
+    {
+        var knownPaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "NVIDIA Corporation", "NVIDIA app", "CEF", "NVIDIA App.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                "NVIDIA Corporation", "NVIDIA app", "CEF", "NVIDIA App.exe")
+        };
+        var known = knownPaths.FirstOrDefault(IsTrustedNvidiaAppExecutable);
+        if (!string.IsNullOrWhiteSpace(known)) return known;
+
+        foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+        foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+                using var uninstall = baseKey.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall");
+                if (uninstall is null) continue;
+                foreach (var subKeyName in uninstall.GetSubKeyNames())
+                {
+                    using var key = uninstall.OpenSubKey(subKeyName);
+                    var displayName = Convert.ToString(key?.GetValue("DisplayName"))?.Trim() ?? "";
+                    if (!displayName.Equals("NVIDIA App", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var displayIcon = Convert.ToString(key?.GetValue("DisplayIcon"))?.Trim() ?? "";
+                    var commaIndex = displayIcon.LastIndexOf(',');
+                    if (commaIndex > 1) displayIcon = displayIcon[..commaIndex];
+                    displayIcon = displayIcon.Trim().Trim('"');
+                    if (IsTrustedNvidiaAppExecutable(displayIcon)) return displayIcon;
+
+                    var installLocation = Convert.ToString(key?.GetValue("InstallLocation"))?.Trim() ?? "";
+                    var candidate = Path.Combine(installLocation, "CEF", "NVIDIA App.exe");
+                    if (IsTrustedNvidiaAppExecutable(candidate)) return candidate;
+                }
+            }
+            catch { }
+        }
+        return "";
+    }
+
+    private static bool IsTrustedNvidiaAppExecutable(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
+            !Path.GetFileName(path).Equals("NVIDIA App.exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var fullPath = Path.GetFullPath(path);
+        return fullPath.Contains(
+            $"{Path.DirectorySeparatorChar}NVIDIA Corporation{Path.DirectorySeparatorChar}NVIDIA app{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     private static VendorSupportItem? BuildOemSupport(string manufacturer, string model)
     {
         var identity = $"{manufacturer} {model}";
@@ -305,6 +425,12 @@ public sealed class HardwareInventoryService
         if (!element.TryGetProperty(name, out var value) || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
             return fallback;
         return value.ToString().Trim();
+    }
+
+    private static int ReadInt(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value)) return 0;
+        return value.TryGetInt32(out var number) ? number : int.TryParse(value.ToString(), out number) ? number : 0;
     }
 
     private static List<string> ReadStringArray(JsonElement element, string name)

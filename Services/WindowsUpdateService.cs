@@ -146,6 +146,7 @@ public sealed class WindowsUpdateService
                     AvailableVersion = availableVersion,
                     Source = $"{source.Label} · {className}",
                     Size = FormatBytes(size),
+                    DownloadSizeBytes = Math.Max(size, 0),
                     RequiresRestart = reboot,
                     IsImportant = isImportant,
                     IsOptional = !isImportant && (browseOnly || autoSelected == false),

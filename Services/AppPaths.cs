@@ -26,7 +26,8 @@ public static class AppPaths
         try
         {
             var staleTemporaryLimit = DateTime.UtcNow.AddDays(-1);
-            foreach (var pattern in new[] { "update-plan-*.json", "update-status-*.json" })
+            foreach (var pattern in new[]
+                     { "update-plan-*.json", "update-status-*.json", "update-pause-*.signal", "update-pause-*.signal.tmp" })
             {
                 foreach (var path in Directory.EnumerateFiles(DataDirectory, pattern, SearchOption.TopDirectoryOnly))
                 {

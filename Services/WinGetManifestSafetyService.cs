@@ -18,6 +18,9 @@ internal sealed class WinGetManifestSafetyService
     private static readonly Regex UpgradeBehaviorLine = new(
         "^\\s*UpgradeBehavior\\s*:\\s*([^\\s#]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
+    private static readonly Regex InstallerUrlLine = new(
+        "^\\s*InstallerUrl\\s*:\\s*['\\\"]?([^'\\\"\\r\\n#]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
     public async Task ApplyAsync(IReadOnlyList<UpdateItem> items, CancellationToken cancellationToken)
     {
@@ -29,7 +32,13 @@ internal sealed class WinGetManifestSafetyService
                 await concurrency.WaitAsync(cancellationToken);
                 try
                 {
-                    var safety = await InspectAsync(item.Id, item.AvailableVersion, cancellationToken);
+                    var inspection = await InspectAsync(item.Id, item.AvailableVersion, cancellationToken);
+                    if (inspection.DownloadSizeBytes > 0)
+                    {
+                        item.DownloadSizeBytes = inspection.DownloadSizeBytes;
+                        item.Size = FormatBytes(inspection.DownloadSizeBytes);
+                    }
+                    var safety = inspection.Safety;
                     if (safety == WinGetUpgradeSafety.Safe) return;
 
                     item.RequiresRiskConfirmation = true;
@@ -37,11 +46,11 @@ internal sealed class WinGetManifestSafetyService
                     item.Status = LocalizationService.Text("Conferma richiesta", "Confirmation required");
                     item.ResultDetails = safety == WinGetUpgradeSafety.RemovesPreviousVersion
                         ? LocalizationService.Text(
-                            "Il manifest prevede la rimozione della versione funzionante prima dell'installazione. Puoi procedere solo dopo un avviso di rischio separato.",
-                            "The manifest removes the working version before installation. You may proceed only after a separate risk warning.")
+                            "Il pacchetto è configurato per rimuovere la versione attuale prima di installare quella nuova. È richiesta una conferma aggiuntiva prima di procedere.",
+                            "The package is configured to remove the current version before installing the new one. Additional confirmation is required before proceeding.")
                         : LocalizationService.Text(
-                            "Update Center non è riuscito a verificare in modo certo il comportamento dell'installer. Puoi procedere solo dopo un avviso di rischio separato.",
-                            "Update Center could not reliably verify the installer behavior. You may proceed only after a separate risk warning.");
+                            "Il comportamento dell'installer non è dichiarato in modo verificabile dalla fonte. È richiesta una conferma aggiuntiva prima di procedere.",
+                            "The installer behavior is not declared by the source in a verifiable way. Additional confirmation is required before proceeding.");
                 }
                 finally
                 {
@@ -51,7 +60,7 @@ internal sealed class WinGetManifestSafetyService
         await Task.WhenAll(checks);
     }
 
-    private static async Task<WinGetUpgradeSafety> InspectAsync(
+    private static async Task<ManifestInspection> InspectAsync(
         string packageId, string version, CancellationToken cancellationToken)
     {
         foreach (var uri in BuildManifestUris(packageId, version))
@@ -60,20 +69,61 @@ internal sealed class WinGetManifestSafetyService
             {
                 using var response = await Client.GetAsync(uri, cancellationToken);
                 if (response.StatusCode == HttpStatusCode.NotFound) continue;
-                if (!response.IsSuccessStatusCode) return WinGetUpgradeSafety.Unknown;
-                return ParseUpgradeSafety(await response.Content.ReadAsStringAsync(cancellationToken));
+                if (!response.IsSuccessStatusCode) return new(WinGetUpgradeSafety.Unknown, 0);
+                var manifest = await response.Content.ReadAsStringAsync(cancellationToken);
+                var size = await ResolveDownloadSizeAsync(ParseInstallerUrls(manifest), cancellationToken);
+                return new(ParseUpgradeSafety(manifest), size);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return WinGetUpgradeSafety.Unknown;
+                return new(WinGetUpgradeSafety.Unknown, 0);
             }
             catch (HttpRequestException)
             {
-                return WinGetUpgradeSafety.Unknown;
+                return new(WinGetUpgradeSafety.Unknown, 0);
             }
         }
 
-        return WinGetUpgradeSafety.Unknown;
+        return new(WinGetUpgradeSafety.Unknown, 0);
+    }
+
+    internal static IReadOnlyList<Uri> ParseInstallerUrls(string manifest) =>
+        InstallerUrlLine.Matches(manifest)
+            .Select(x => x.Groups[1].Value.Trim())
+            .Select(x => Uri.TryCreate(x, UriKind.Absolute, out var uri) ? uri : null)
+            .Where(x => x is { Scheme: "https" })
+            .Cast<Uri>()
+            .DistinctBy(x => x.AbsoluteUri, StringComparer.OrdinalIgnoreCase)
+            .Take(4)
+            .ToList();
+
+    private static async Task<long> ResolveDownloadSizeAsync(
+        IReadOnlyList<Uri> installerUris, CancellationToken cancellationToken)
+    {
+        var lengths = await Task.WhenAll(installerUris.Select(uri =>
+            ReadDownloadSizeAsync(uri, cancellationToken)));
+        return lengths.DefaultIfEmpty(0).Max();
+    }
+
+    private static async Task<long> ReadDownloadSizeAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var head = new HttpRequestMessage(HttpMethod.Head, uri);
+            using var headResponse = await Client.SendAsync(
+                head, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var length = headResponse.Content.Headers.ContentLength ?? 0;
+            if (length <= 0)
+            {
+                using var get = new HttpRequestMessage(HttpMethod.Get, uri);
+                using var getResponse = await Client.SendAsync(
+                    get, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                length = getResponse.Content.Headers.ContentLength ?? 0;
+            }
+            return Math.Max(length, 0);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return 0; }
+        catch (HttpRequestException) { return 0; }
     }
 
     internal static WinGetUpgradeSafety ParseUpgradeSafety(string manifest)
@@ -87,6 +137,15 @@ internal sealed class WinGetManifestSafetyService
         return values.Any(x => x.Equals("install", StringComparison.OrdinalIgnoreCase))
             ? WinGetUpgradeSafety.Safe
             : WinGetUpgradeSafety.Unknown;
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = (double)Math.Max(0, bytes);
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
+        return $"{value:0.#} {units[unit]}";
     }
 
     internal static IReadOnlyList<Uri> BuildManifestUris(string packageId, string version)
@@ -108,7 +167,9 @@ internal sealed class WinGetManifestSafetyService
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.5");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.6");
         return client;
     }
+
+    private sealed record ManifestInspection(WinGetUpgradeSafety Safety, long DownloadSizeBytes);
 }

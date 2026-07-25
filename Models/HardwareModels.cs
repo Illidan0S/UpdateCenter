@@ -35,6 +35,9 @@ public sealed class VendorSupportItem
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
     public string Url { get; set; } = "";
+    public string ApplicationPath { get; set; } = "";
+    public bool IsInstalledApplication => !string.IsNullOrWhiteSpace(ApplicationPath);
+    public string LaunchTarget => IsInstalledApplication ? ApplicationPath : Url;
     public string ActionLabel { get; set; } = "Apri controllo ufficiale";
     public string SourceLabel { get; set; } = "Produttore ufficiale";
     public string ConfidenceLabel { get; set; } = "Fonte ufficiale";
@@ -48,5 +51,6 @@ public sealed class HardwareScanResult
     public string CpuName { get; set; } = "Processore non rilevato";
     public string CpuManufacturer { get; set; } = "";
     public List<DriverInventoryItem> Drivers { get; set; } = [];
+    public List<DriverProblemItem> Problems { get; set; } = [];
     public List<VendorSupportItem> VendorTools { get; set; } = [];
 }

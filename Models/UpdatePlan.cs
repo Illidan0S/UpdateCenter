@@ -13,6 +13,8 @@ public sealed class UpdatePlan
     public bool CreateRestorePoint { get; set; }
     public bool SilentSoftwareInstall { get; set; }
     public string StatusFile { get; set; } = "";
+    public string PauseFile { get; set; } = "";
+    public int PauseOwnerProcessId { get; set; }
     public List<PlanItem> Items { get; set; } = [];
 }
 
@@ -24,6 +26,7 @@ public sealed class PlanItem
     public string Source { get; set; } = "";
     public string InstalledVersion { get; set; } = "";
     public string AvailableVersion { get; set; } = "";
+    public string PackageOperation { get; set; } = PackageOperations.Upgrade;
     public string? WindowsUpdateId { get; set; }
     public int WindowsUpdateRevision { get; set; }
     public int WindowsUpdateServerSelection { get; set; }

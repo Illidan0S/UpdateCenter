@@ -27,7 +27,7 @@ public sealed class WinGetService
         var parsed = ParseUpgradeTable(output);
         if (parsed.Count > 0)
         {
-            await _manifestSafety.ApplyAsync(parsed, cancellationToken);
+            await PreparePackageMetadataAsync(parsed, cancellationToken);
             return parsed;
         }
 
@@ -35,6 +35,41 @@ public sealed class WinGetService
             throw new InvalidOperationException(SummarizeError(output, "WinGet non ha completato la scansione."));
 
         return [];
+    }
+
+    public Task PreparePackageMetadataAsync(
+        IReadOnlyList<UpdateItem> items, CancellationToken cancellationToken) =>
+        _manifestSafety.ApplyAsync(items, cancellationToken);
+
+    public async Task<WinGetPackageAvailability?> ResolveInstallablePackageAsync(
+        string packageId, CancellationToken cancellationToken)
+    {
+        if (!IsSafePackageId(packageId)) return null;
+        var result = await ProcessRunner.RunAsync("winget.exe",
+            ["show", "--id", packageId, "--exact", "--source", "winget",
+                "--accept-source-agreements", "--disable-interactivity", "--nowarn"],
+            cancellationToken, TimeSpan.FromMinutes(2));
+        if (!result.Success) return null;
+
+        var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
+        var match = Regex.Match(output,
+            @"(?im)^\s*(?:Version|Versione)\s*:\s*(?<version>[^\r\n]+?)\s*$");
+        var version = match.Success ? match.Groups["version"].Value.Trim() : "Più recente";
+        return new WinGetPackageAvailability(packageId, version);
+    }
+
+    public static ProcessResult Install(PlanItem item, bool silent)
+    {
+        if (!IsSafePackageId(item.Id))
+            return new ProcessResult(1, "", "Identificativo WinGet non valido.", "winget install");
+        var arguments = new List<string>
+        {
+            "install", "--id", item.Id, "--exact", "--source", "winget",
+            "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--nowarn"
+        };
+        if (silent) arguments.Add("--silent");
+        return ProcessRunner.RunAsync(
+            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(45)).GetAwaiter().GetResult();
     }
 
     public static ProcessResult Upgrade(PlanItem item, bool silent)
@@ -122,7 +157,9 @@ public sealed class WinGetService
             {
                 Id = x.Id,
                 Name = string.IsNullOrWhiteSpace(x.Name) ? x.Id : x.Name,
-                Kind = UpdateKind.Software,
+                Kind = RuntimePackageCatalog.IsRuntimePackageId(x.Id)
+                    ? UpdateKind.Runtime
+                    : UpdateKind.Software,
                 InstalledVersion = string.IsNullOrWhiteSpace(x.InstalledVersion) ? "Sconosciuta" : x.InstalledVersion,
                 AvailableVersion = string.IsNullOrWhiteSpace(x.AvailableVersion) ? "Più recente" : x.AvailableVersion,
                 Source = string.IsNullOrWhiteSpace(x.Source) ? "WinGet" : x.Source,
@@ -233,6 +270,10 @@ public sealed class WinGetService
     private static bool IsSafeSource(string source) =>
         !string.IsNullOrWhiteSpace(source) && source.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.');
 
+    private static bool IsSafePackageId(string packageId) =>
+        !string.IsNullOrWhiteSpace(packageId) && packageId.Length <= 160 &&
+        packageId.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' or '+');
+
     private static bool IsInstalledPackageMatchFailure(ProcessResult result)
     {
         var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
@@ -335,3 +376,5 @@ internal sealed record WinGetPackageRow(
     string InstalledVersion,
     string AvailableVersion,
     string Source);
+
+public sealed record WinGetPackageAvailability(string Id, string Version);

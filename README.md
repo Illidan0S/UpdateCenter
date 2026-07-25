@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.3** (`v1.0.3`).
+Versione pubblica attuale: **1.0.5** (`v1.0.5`).
 
 Applicazione desktop per Windows 10 e Windows 11 che cerca aggiornamenti software tramite **WinGet** e driver tramite **Windows Update Agent** più un catalogo incorporato e trasparente di metadati verificati dei produttori. L'utente sceglie singolarmente cosa installare.
 
@@ -64,6 +64,14 @@ La pagina **Aggiornamenti** permette di cercare per nome, produttore, versione, 
 Prima dell'elevazione amministratore viene mostrato un riepilogo completo con software, driver, aggiornamenti importanti, riavvii, avvisi preliminari e stato del punto di ripristino. La Home conserva inoltre data e ora dell'ultima scansione completata.
 
 La schermata **Hardware** mostra CPU, core/thread, GPU, VRAM, RAM, risoluzione, frequenza dello schermo, modello del PC e versione di Windows. I dati statici vengono letti separatamente tramite WMI, API Windows e registro, con fallback indipendenti: un componente non disponibile non nasconde più tutti gli altri. Utilizzo CPU, RAM e GPU vengono aggiornati ogni tre secondi mentre la schermata è aperta. Le temperature vengono mostrate soltanto se il firmware, il driver NVIDIA oppure un provider sensori già presente le espone a Windows; l'app non installa driver di monitoraggio. Tutti i valori principali sono selezionabili e il riepilogo completo può essere copiato negli appunti. È incluso un collegamento rapido a Gestione attività.
+
+La scansione controlla inoltre i problemi attivi segnalati da Gestione dispositivi, spiegando i codici PnP senza applicare riparazioni automatiche. Nella schermata Hardware sono disponibili la salute delle unità comunicata da Windows e lo spazio dei volumi. DirectX, Visual C++ x86/x64, OpenAL, Vulkan, .NET Desktop Runtime, PhysX, WebView2, Java, XNA e Mono vengono classificati come **Runtime** e gli elementi installabili compaiono direttamente negli Aggiornamenti. Quando un runtime mancante corrisponde a un pacchetto esatto disponibile nella fonte ufficiale WinGet, può essere installato con la normale selezione, conferma e cronologia; i componenti opzionali non sono preselezionati. Steam e Discord non vengono gestiti perché dispongono già del proprio aggiornamento automatico.
+
+La scansione principale controlla anche la salute dello storage. Nella scheda Hardware, ogni unità fisica occupa una sola riga e mostra nella colonna Volumi le lettere e le etichette associate; il riepilogo copiabile comprende CPU, GPU, VRAM, RAM, Windows, versioni dei driver CPU/chipset e GPU e le unità fisiche non USB. Le temperature vengono mostrate soltanto quando Windows, il firmware o un provider hardware già presente espongono un sensore attendibile. Prima dell'installazione, lo spazio disco mostra la somma delle dimensioni realmente pubblicate dalle fonti e segnala separatamente i pacchetti per cui il peso non è disponibile.
+
+Per le GPU NVIDIA Update Center non scarica né installa direttamente i driver: se NVIDIA App è presente la apre direttamente, altrimenti apre la pagina ufficiale per installarla. Vulkan resta collegato al driver grafico e non viene trattato come pacchetto indipendente se la fonte non è verificabile.
+
+Durante un gruppo di aggiornamenti è possibile richiedere una pausa. Per sicurezza l'elemento corrente termina e la pausa viene applicata prima del successivo: un'installazione driver non viene mai interrotta a metà. Il pulsante **Riprendi** continua lo stesso gruppo.
 
 Il tema può essere impostato su **Sistema**, **Chiaro** o **Scuro**; alla prima installazione sono preselezionati **Chiaro** e testo **Medio**. In modalità Sistema l'app segue il tema delle applicazioni Windows anche quando cambia durante l'esecuzione. La dimensione del testo può essere impostata su **Piccola**, **Media** o **Grande**. La finestra è ridimensionabile da bordi e angoli; sotto gli 820 pixel la navigazione passa automaticamente alla modalità compatta a icone.
 

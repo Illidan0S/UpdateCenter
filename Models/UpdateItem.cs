@@ -6,7 +6,14 @@ namespace UpdateCenter.Models;
 public enum UpdateKind
 {
     Software,
-    Driver
+    Driver,
+    Runtime
+}
+
+public static class PackageOperations
+{
+    public const string Upgrade = "Upgrade";
+    public const string Install = "Install";
 }
 
 public static class DriverInstallModes
@@ -39,14 +46,19 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public required string Id { get; init; }
     public required string Name { get; init; }
     public required UpdateKind Kind { get; init; }
-    public string KindLabel => Kind == UpdateKind.Software
-        ? "Software"
-        : UpdateCenter.Services.LocalizationService.Text("Driver", "Driver");
+    public string KindLabel => Kind switch
+    {
+        UpdateKind.Software => "Software",
+        UpdateKind.Runtime => "Runtime",
+        _ => UpdateCenter.Services.LocalizationService.Text("Driver", "Driver")
+    };
     public string Publisher { get; init; } = "";
     public string InstalledVersion { get; init; } = "—";
     public string AvailableVersion { get; init; } = "—";
     public string Source { get; init; } = "";
-    public string Size { get; init; } = "—";
+    public string PackageOperation { get; init; } = PackageOperations.Upgrade;
+    public string Size { get; set; } = "—";
+    public long DownloadSizeBytes { get; set; }
     public bool RequiresRestart { get; init; }
     public bool IsImportant { get; init; }
     public bool IsOptional { get; init; }
@@ -109,10 +121,14 @@ public sealed class UpdateItem : INotifyPropertyChanged
             ? UpdateCenter.Services.LocalizationService.Text(
                 "Driver non selezionato automaticamente da Windows Update.",
                 "Driver not automatically selected by Windows Update.")
-            : Kind == UpdateKind.Software
+            : Kind is UpdateKind.Software or UpdateKind.Runtime
                 ? UpdateCenter.Services.LocalizationService.Text(
-                    "Aggiornamento software standard disponibile tramite WinGet; non costituisce una raccomandazione.",
-                    "Standard software update available through WinGet; this is not a recommendation.")
+                    Kind == UpdateKind.Runtime
+                        ? "Runtime disponibile tramite WinGet; verrà installato solo dopo la conferma."
+                        : "Aggiornamento software standard disponibile tramite WinGet; non costituisce una raccomandazione.",
+                    Kind == UpdateKind.Runtime
+                        ? "Runtime available through WinGet; it will be installed only after confirmation."
+                        : "Standard software update available through WinGet; this is not a recommendation.")
                 : UpdateCenter.Services.LocalizationService.Text(
                     "Driver selezionato automaticamente da Windows Update, senza priorità di sicurezza dichiarata.",
                     "Driver automatically selected by Windows Update, with no declared security priority.");

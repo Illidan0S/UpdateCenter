@@ -40,16 +40,26 @@ public static class PreflightService
             {
                 var drive = new DriveInfo(root);
                 const long oneGb = 1024L * 1024 * 1024;
-                var knownDownloadSize = selectedItems.Sum(x => ParseSize(x.Size));
-                var estimatedRequired = Math.Max(oneGb, knownDownloadSize * 2 + 512L * 1024 * 1024);
-                result.DiskStatus = $"{FormatBytes(drive.AvailableFreeSpace)} liberi · minimo stimato {FormatBytes(estimatedRequired)}";
-                if (drive.AvailableFreeSpace < estimatedRequired)
+                var (knownDownloadSize, knownCount, unknownCount) = CalculatePackageSize(selectedItems);
+                result.DiskStatus = unknownCount == 0
+                    ? $"{FormatBytes(drive.AvailableFreeSpace)} liberi · pacchetti selezionati: {FormatBytes(knownDownloadSize)}"
+                    : knownCount > 0
+                        ? $"{FormatBytes(drive.AvailableFreeSpace)} liberi · peso noto {FormatBytes(knownDownloadSize)}; {unknownCount} senza dimensione dichiarata"
+                        : $"{FormatBytes(drive.AvailableFreeSpace)} liberi · dimensione non dichiarata per {unknownCount} pacchetti";
+
+                // Oltre al download noto, conserva margine per estrazione e rollback senza inventare
+                // una dimensione per i pacchetti la cui fonte non la pubblica.
+                var workingMargin = knownDownloadSize > 0
+                    ? Math.Max(256L * 1024 * 1024, knownDownloadSize)
+                    : 0;
+                var estimatedRequired = knownDownloadSize + workingMargin;
+                if (estimatedRequired > 0 && drive.AvailableFreeSpace < estimatedRequired)
                 {
                     result.DiskSafe = false;
-                    result.BlockingIssues.Add($"Spazio insufficiente: servono circa {FormatBytes(estimatedRequired)}, " +
+                    result.BlockingIssues.Add($"Spazio insufficiente: i pacchetti noti e lo spazio temporaneo richiedono circa {FormatBytes(estimatedRequired)}, " +
                                               $"ma sono disponibili {FormatBytes(drive.AvailableFreeSpace)}.");
                 }
-                else if (drive.AvailableFreeSpace < estimatedRequired + 3 * oneGb)
+                else if (estimatedRequired > 0 && drive.AvailableFreeSpace < estimatedRequired + 3 * oneGb)
                 {
                     result.Warnings.Add("Lo spazio sul disco di sistema è sufficiente ma ridotto.");
                 }
@@ -94,6 +104,21 @@ public static class PreflightService
         }
 
         return result;
+    }
+
+    internal static (long TotalBytes, int KnownCount, int UnknownCount) CalculatePackageSize(
+        IReadOnlyList<UpdateItem> selectedItems)
+    {
+        long total = 0;
+        var known = 0;
+        foreach (var item in selectedItems)
+        {
+            var bytes = item.DownloadSizeBytes > 0 ? item.DownloadSizeBytes : ParseSize(item.Size);
+            if (bytes <= 0) continue;
+            total += bytes;
+            known++;
+        }
+        return (total, known, selectedItems.Count - known);
     }
 
     private static bool TryGetPowerStatus(out SystemPowerStatus status)
