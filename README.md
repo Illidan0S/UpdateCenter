@@ -12,6 +12,7 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 - Controllo e installazione dei runtime condivisi: DirectX, Visual C++, .NET, Vulkan, PhysX, WebView2 e altri.
 - Filtri per software, driver, runtime ed errori.
 - Riepilogo prima dell’installazione con spazio richiesto, alimentazione, riavvio e avvisi di sicurezza.
+- Classificazione precisa degli aggiornamenti WinGet: la conferma aggiuntiva viene richiesta solo quando l’installer compatibile dichiara la rimozione della versione precedente; errori temporanei e metadati non verificabili restano stati separati.
 - Pausa e ripresa di un gruppo di aggiornamenti, senza interrompere l’elemento già in installazione.
 - Inventario hardware con CPU, GPU, VRAM, RAM, Windows, driver principali e copia rapida delle informazioni.
 - Salute dello storage con unità fisiche, volumi associati, capacità, stato e temperatura quando disponibile.
