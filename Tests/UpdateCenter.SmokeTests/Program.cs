@@ -199,9 +199,11 @@ if (packageSize.TotalBytes != 150L * 1024 * 1024 || packageSize.KnownCount != 1 
 var clipboardHardware = new SystemHardwareInfo();
 clipboardHardware.ApplyOverview(new HardwareOverviewSnapshot(
     "CPU test", "8 / 16", "GPU test · A\0M\0D GPU", "GPU dedicata rilevata", "12 GB",
-    "GPU test: 12 GB", "Non esposta dal driver o da Windows", "32 GB", "1920x1080", "60 Hz", "Windows 11", "PC test"));
+    "GPU test: 12 GB", "Non esposta dal driver o da Windows", "VRAM DEDICATA IN USO",
+    GpuMemoryDisplayMode.Discrete, "32 GB", "1920x1080", "60 Hz", "Windows 11", "PC test"));
 clipboardHardware.ApplyMetrics(new HardwareMetricsSnapshot(
-    10, 20, 30, "6 GB", "2 GB", "GPU test", 55, null, "Test"));
+    10, 20, 30, "6 GB", 2L * 1024 * 1024 * 1024, 0, 16L * 1024 * 1024 * 1024,
+    "GPU test", 55, null, "Test"));
 if (!clipboardHardware.HasCpuTemperature || clipboardHardware.HasGpuTemperature)
     throw new InvalidOperationException("La visibilità condizionale delle temperature hardware non è valida.");
 var clipboardText = HardwareClipboardService.Build(
@@ -241,8 +243,22 @@ if (!hybridGpuPresentation.ConfigurationLabel.Contains("ibrida", StringCompariso
     !hybridGpuPresentation.AdaptersLabel.Contains("GPU integrata", StringComparison.Ordinal) ||
     !hybridGpuPresentation.AdaptersLabel.Contains("GPU dedicata", StringComparison.Ordinal) ||
     !hybridGpuPresentation.MemoryDetails.Contains("RAM condivisa", StringComparison.Ordinal) ||
-    !hybridGpuPresentation.PrimaryMemoryLabel.Contains("16 GB dedicati", StringComparison.Ordinal))
+    !hybridGpuPresentation.PrimaryMemoryLabel.Contains("16 GB dedicati", StringComparison.Ordinal) ||
+    hybridGpuPresentation.MemoryDisplayMode != GpuMemoryDisplayMode.Hybrid)
     throw new InvalidOperationException("La presentazione delle configurazioni GPU ibride non è valida.");
+
+var integratedGpuInfo = new SystemHardwareInfo();
+integratedGpuInfo.ApplyOverview(new HardwareOverviewSnapshot(
+    "CPU test", "4 / 8", "Intel Iris Xe — GPU integrata", "GPU integrata rilevata", "1 GB riservati",
+    "Intel Iris Xe — 1 GB riservati; usa anche RAM condivisa dinamicamente",
+    "Non esposta dal driver per questa GPU integrata", "MEMORIA GPU CONDIVISA IN USO",
+    GpuMemoryDisplayMode.Integrated, "8 GB", "1920x1080", "60 Hz", "Windows 11", "Notebook test"));
+integratedGpuInfo.ApplyMetrics(new HardwareMetricsSnapshot(
+    10, 20, 1, "2 GB", 64L * 1024 * 1024, 1L * 1024 * 1024 * 1024,
+    4L * 1024 * 1024 * 1024, "Windows", null, null, "Test"));
+if (integratedGpuInfo.GpuMemoryUsageHeading != "MEMORIA GPU CONDIVISA IN USO" ||
+    !integratedGpuInfo.VramUsed.Contains("1 GB di 4 GB condivisi", StringComparison.Ordinal))
+    throw new InvalidOperationException("La memoria condivisa delle GPU integrate non viene presentata correttamente.");
 
 var nvidiaAppKnownPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
     "NVIDIA Corporation", "NVIDIA app", "CEF", "NVIDIA App.exe");

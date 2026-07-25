@@ -12,6 +12,8 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     private string _vramTotal = "—";
     private string _vramDetails = "—";
     private string _vramUnavailableReason = "Non esposta dal driver o da Windows";
+    private string _gpuMemoryUsageHeading = "MEMORIA GPU IN USO";
+    private GpuMemoryDisplayMode _gpuMemoryDisplayMode = GpuMemoryDisplayMode.Unknown;
     private string _ramTotal = "—";
     private string _resolution = "—";
     private string _refreshRate = "—";
@@ -35,6 +37,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     public string GpuConfiguration { get => _gpuConfiguration; private set => Set(ref _gpuConfiguration, value); }
     public string VramTotal { get => _vramTotal; private set => Set(ref _vramTotal, value); }
     public string VramDetails { get => _vramDetails; private set => Set(ref _vramDetails, value); }
+    public string GpuMemoryUsageHeading { get => _gpuMemoryUsageHeading; private set => Set(ref _gpuMemoryUsageHeading, value); }
     public string RamTotal { get => _ramTotal; private set => Set(ref _ramTotal, value); }
     public string Resolution { get => _resolution; private set => Set(ref _resolution, value); }
     public string RefreshRate { get => _refreshRate; private set => Set(ref _refreshRate, value); }
@@ -64,6 +67,8 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         VramTotal = snapshot.VramTotal;
         VramDetails = snapshot.VramDetails;
         _vramUnavailableReason = snapshot.VramUnavailableReason;
+        GpuMemoryUsageHeading = snapshot.GpuMemoryUsageHeading;
+        _gpuMemoryDisplayMode = snapshot.GpuMemoryDisplayMode;
         RamTotal = snapshot.RamTotal;
         Resolution = snapshot.Resolution;
         RefreshRate = snapshot.RefreshRate;
@@ -77,7 +82,7 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         RamUsage = Clamp(metrics.RamUsage);
         GpuUsage = Clamp(metrics.GpuUsage);
         RamUsed = metrics.RamUsed;
-        VramUsed = IsUnavailable(metrics.VramUsed) ? _vramUnavailableReason : metrics.VramUsed;
+        VramUsed = FormatGpuMemoryUsage(metrics);
         GpuMetricsSource = metrics.GpuMetricsSource;
         HasCpuTemperature = IsValidTemperature(metrics.CpuTemperature);
         HasGpuTemperature = IsValidTemperature(metrics.GpuTemperature);
@@ -92,8 +97,41 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
 
     private static bool IsValidTemperature(double? value) => value is >= 1 and <= 125;
 
-    private static bool IsUnavailable(string value) =>
-        string.IsNullOrWhiteSpace(value) || value.Equals("Non disponibile", StringComparison.OrdinalIgnoreCase);
+    private string FormatGpuMemoryUsage(HardwareMetricsSnapshot metrics)
+    {
+        var dedicated = metrics.DedicatedGpuMemoryUsedBytes;
+        var shared = metrics.SharedGpuMemoryUsedBytes;
+        var sharedLimit = metrics.SharedGpuMemoryLimitBytes;
+        var sharedLabel = shared > 0
+            ? sharedLimit > 0
+                ? $"{FormatBytes(shared)} di {FormatBytes(sharedLimit)} condivisi"
+                : $"{FormatBytes(shared)} condivisi"
+            : "";
+
+        return _gpuMemoryDisplayMode switch
+        {
+            GpuMemoryDisplayMode.Integrated => !string.IsNullOrWhiteSpace(sharedLabel)
+                ? sharedLabel
+                : _vramUnavailableReason,
+            GpuMemoryDisplayMode.Discrete => dedicated > 0
+                ? FormatBytes(dedicated)
+                : !string.IsNullOrWhiteSpace(sharedLabel) ? sharedLabel : _vramUnavailableReason,
+            _ when dedicated > 0 && !string.IsNullOrWhiteSpace(sharedLabel) =>
+                $"Dedicata: {FormatBytes(dedicated)} · Condivisa: {sharedLabel}",
+            _ when dedicated > 0 => FormatBytes(dedicated),
+            _ when !string.IsNullOrWhiteSpace(sharedLabel) => sharedLabel,
+            _ => _vramUnavailableReason
+        };
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes >= 1024L * 1024 * 1024)
+            return $"{bytes / (1024d * 1024 * 1024):0.#} GB";
+        if (bytes >= 1024L * 1024)
+            return $"{bytes / (1024d * 1024):0.#} MB";
+        return $"{Math.Max(bytes, 0) / 1024d:0.#} KB";
+    }
 
     private static double Clamp(double? value) => Math.Clamp(value ?? 0, 0, 100);
 
@@ -118,6 +156,8 @@ public sealed record HardwareOverviewSnapshot(
     string VramTotal,
     string VramDetails,
     string VramUnavailableReason,
+    string GpuMemoryUsageHeading,
+    GpuMemoryDisplayMode GpuMemoryDisplayMode,
     string RamTotal,
     string Resolution,
     string RefreshRate,
@@ -129,7 +169,9 @@ public sealed record HardwareMetricsSnapshot(
     double? RamUsage,
     double? GpuUsage,
     string RamUsed,
-    string VramUsed,
+    long DedicatedGpuMemoryUsedBytes,
+    long SharedGpuMemoryUsedBytes,
+    long SharedGpuMemoryLimitBytes,
     string GpuMetricsSource,
     double? CpuTemperature,
     double? GpuTemperature,

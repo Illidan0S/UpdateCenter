@@ -536,7 +536,8 @@
                                             <TextBlock Text="DETTAGLIO MEMORIA PER GPU" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
                                             <TextBox Text="{Binding HardwareInfo.VramDetails, Mode=OneWay}" Style="{StaticResource SelectableValue}"
                                                      TextWrapping="Wrap" Margin="0,5,0,10" />
-                                            <TextBlock Text="MEMORIA VIDEO IN USO" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
+                                            <TextBlock Text="{Binding HardwareInfo.GpuMemoryUsageHeading, Mode=OneWay}"
+                                                       Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
                                             <TextBox Text="{Binding HardwareInfo.VramUsed, Mode=OneWay}"
                                                      Style="{StaticResource SelectableValue}" Foreground="{DynamicResource MutedTextBrush}"
                                                      FontSize="{DynamicResource FontSize11}" Margin="0,4,0,4" />

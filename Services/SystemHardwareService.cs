@@ -134,6 +134,8 @@ public sealed class SystemHardwareService
             gpuPresentation.PrimaryMemoryLabel,
             gpuPresentation.MemoryDetails,
             gpuPresentation.UnavailableUsageMessage,
+            gpuPresentation.MemoryUsageHeading,
+            gpuPresentation.MemoryDisplayMode,
             ramBytes > 0 ? FormatBytes(ramBytes) : "Non rilevata",
             width > 0 && height > 0 ? $"{width} × {height}" : "Non rilevata",
             frequency > 1 ? $"{frequency} Hz" : "Non rilevata",
@@ -149,7 +151,10 @@ public sealed class SystemHardwareService
         cancellationToken.ThrowIfCancellationRequested();
         var cpuUsage = ReadCpuUsage();
         var (ramUsage, ramUsed) = ReadMemoryUsage();
-        var (gpuUsage, vramUsed) = ReadGpuPerformanceCounters();
+        var gpuMetrics = ReadGpuPerformanceCounters();
+        var gpuUsage = gpuMetrics.Usage;
+        var dedicatedGpuMemoryUsed = gpuMetrics.DedicatedUsageBytes;
+        var sharedGpuMemoryUsed = gpuMetrics.SharedUsageBytes;
         var gpuMetricsSource = "Rilevata tramite Windows";
         var (cpuTemperature, gpuTemperature) = ReadTemperatures();
         var nvidia = TryReadNvidiaMetrics();
@@ -157,7 +162,8 @@ public sealed class SystemHardwareService
         {
             gpuUsage = nvidia.Usage ?? gpuUsage;
             gpuTemperature = nvidia.Temperature ?? gpuTemperature;
-            if (!string.IsNullOrWhiteSpace(nvidia.MemoryUsed)) vramUsed = nvidia.MemoryUsed;
+            if (nvidia.MemoryUsedBytes.HasValue)
+                dedicatedGpuMemoryUsed = Math.Max(dedicatedGpuMemoryUsed, nvidia.MemoryUsedBytes.Value);
             if (!string.IsNullOrWhiteSpace(nvidia.Name)) gpuMetricsSource = $"{nvidia.Name} · driver NVIDIA";
         }
 
@@ -171,7 +177,9 @@ public sealed class SystemHardwareService
             ramUsage,
             gpuUsage,
             ramUsed,
-            vramUsed,
+            dedicatedGpuMemoryUsed,
+            sharedGpuMemoryUsed,
+            ReadSharedGpuMemoryLimit(),
             gpuMetricsSource,
             cpuTemperature,
             gpuTemperature,
@@ -216,10 +224,11 @@ public sealed class SystemHardwareService
         return (usage, $"{FormatBytes((long)used)} di {FormatBytes((long)status.TotalPhysical)}");
     }
 
-    private static (double? Usage, string VramUsed) ReadGpuPerformanceCounters()
+    private static GpuPerformanceMetrics ReadGpuPerformanceCounters()
     {
         double? usage = null;
         long dedicatedUsage = 0;
+        long sharedUsage = 0;
         TryQueryWmi("root\\cimv2",
             "SELECT UtilizationPercentage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine",
             row =>
@@ -228,13 +237,22 @@ public sealed class SystemHardwareService
                 if (value.HasValue) usage = Math.Max(usage ?? 0, value.Value);
             });
         TryQueryWmi("root\\cimv2",
-            "SELECT DedicatedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory",
+            "SELECT DedicatedUsage,SharedUsage FROM Win32_PerfFormattedData_GPUPerformanceCounters_GPUAdapterMemory",
             row =>
             {
-                var value = SafeLong(() => Convert.ToInt64(row.DedicatedUsage, CultureInfo.InvariantCulture));
-                if (value.HasValue) dedicatedUsage = Math.Max(dedicatedUsage, value.Value);
+                var dedicated = SafeLong(() => Convert.ToInt64(row.DedicatedUsage, CultureInfo.InvariantCulture));
+                var shared = SafeLong(() => Convert.ToInt64(row.SharedUsage, CultureInfo.InvariantCulture));
+                if (dedicated.HasValue) dedicatedUsage = Math.Max(dedicatedUsage, dedicated.Value);
+                if (shared.HasValue) sharedUsage = Math.Max(sharedUsage, shared.Value);
             });
-        return (usage, dedicatedUsage > 0 ? FormatBytes(dedicatedUsage) : "Non disponibile");
+        return new GpuPerformanceMetrics(usage, dedicatedUsage, sharedUsage);
+    }
+
+    private static long ReadSharedGpuMemoryLimit()
+    {
+        var memory = new MemoryStatusEx();
+        if (!GlobalMemoryStatusEx(memory)) return 0;
+        return (long)Math.Min(memory.TotalPhysical / 2, (ulong)long.MaxValue);
     }
 
     private static (double? Cpu, double? Gpu) ReadTemperatures()
@@ -298,8 +316,8 @@ public sealed class SystemHardwareService
                 var temperature = double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var temp) ? temp : (double?)null;
                 var usage = double.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var load) ? load : (double?)null;
                 var memory = double.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var usedMb)
-                    ? $"{usedMb:0.#} MB"
-                    : "";
+                    ? (long?)Math.Max(usedMb * 1024d * 1024d, 0)
+                    : null;
                 return new NvidiaMetrics(parts[0], temperature, usage, memory);
             }
             catch { }
@@ -676,5 +694,6 @@ public sealed class SystemHardwareService
     }
 
     private sealed record GpuInfo(string Name, long AdapterRam, long Width, long Height, long RefreshRate);
-    private sealed record NvidiaMetrics(string Name, double? Temperature, double? Usage, string MemoryUsed);
+    private sealed record GpuPerformanceMetrics(double? Usage, long DedicatedUsageBytes, long SharedUsageBytes);
+    private sealed record NvidiaMetrics(string Name, double? Temperature, double? Usage, long? MemoryUsedBytes);
 }

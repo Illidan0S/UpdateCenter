@@ -8,6 +8,14 @@ public enum GpuAdapterKind
     Unknown
 }
 
+public enum GpuMemoryDisplayMode
+{
+    Integrated,
+    Discrete,
+    Hybrid,
+    Unknown
+}
+
 public sealed record GpuAdapterDescriptor(string Name, long MemoryBytes);
 
 public sealed record GpuPresentation(
@@ -15,4 +23,6 @@ public sealed record GpuPresentation(
     string ConfigurationLabel,
     string PrimaryMemoryLabel,
     string MemoryDetails,
-    string UnavailableUsageMessage);
+    string UnavailableUsageMessage,
+    string MemoryUsageHeading,
+    GpuMemoryDisplayMode MemoryDisplayMode);

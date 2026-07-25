@@ -51,7 +51,9 @@ public static class GpuPresentationService
                 "Identificazione non disponibile",
                 "Non esposta dal sistema",
                 "Windows e il driver video non hanno fornito informazioni sulla memoria.",
-                "Non esposta dal driver o da Windows");
+                "Non esposta dal driver o da Windows",
+                "MEMORIA GPU IN USO",
+                GpuMemoryDisplayMode.Unknown);
         }
 
         var classified = detected
@@ -83,13 +85,28 @@ public static class GpuPresentationService
             : hasIntegrated && hasDiscrete
                 ? "Non esposta per la GPU attualmente attiva"
                 : "Non esposta dal driver o da Windows";
+        var memoryDisplayMode = hasIntegrated && hasDiscrete
+            ? GpuMemoryDisplayMode.Hybrid
+            : hasIntegrated
+                ? GpuMemoryDisplayMode.Integrated
+                : hasDiscrete
+                    ? GpuMemoryDisplayMode.Discrete
+                    : GpuMemoryDisplayMode.Unknown;
+        var memoryUsageHeading = memoryDisplayMode switch
+        {
+            GpuMemoryDisplayMode.Integrated => "MEMORIA GPU CONDIVISA IN USO",
+            GpuMemoryDisplayMode.Discrete => "VRAM DEDICATA IN USO",
+            _ => "MEMORIA GPU IN USO"
+        };
 
         return new GpuPresentation(
             adaptersLabel,
             configurationLabel,
             primaryMemoryLabel,
             memoryDetails,
-            unavailableUsageMessage);
+            unavailableUsageMessage,
+            memoryUsageHeading,
+            memoryDisplayMode);
     }
 
     private static string ConfigurationDetail(IEnumerable<(GpuAdapterDescriptor Adapter, GpuAdapterKind Kind)> adapters)
