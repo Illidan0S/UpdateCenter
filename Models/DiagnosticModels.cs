@@ -24,15 +24,14 @@ public sealed class GameDependencyItem
     public bool IsOptional { get; set; }
     public string PackageId { get; set; } = "";
     public string AvailableVersion { get; set; } = "";
-    public bool CanAutoInstall => !IsAvailable && !string.IsNullOrWhiteSpace(PackageId);
+    public bool AllowMissingInstallation { get; set; }
+    public bool CanAutoInstall => AllowMissingInstallation && !IsAvailable && !string.IsNullOrWhiteSpace(PackageId);
     public string OfficialActionUrl { get; set; } = "";
     public bool CanOpenOfficialAction => Uri.TryCreate(OfficialActionUrl, UriKind.Absolute, out var uri) &&
                                          uri.Scheme == Uri.UriSchemeHttps;
     public string Status => IsAvailable
         ? "Disponibile"
-        : CanAutoInstall
-            ? "Installazione disponibile"
-            : IsOptional ? "Opzionale non rilevato" : "Non rilevato";
+        : IsOptional ? "Opzionale non rilevato" : "Non rilevato";
     public string ActionLabel => CanAutoInstall
         ? "Selezionabile negli aggiornamenti"
         : CanOpenOfficialAction ? "Controllo ufficiale" : "Solo diagnosi";

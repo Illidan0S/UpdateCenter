@@ -400,36 +400,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var dependencies = await _gameDependencies.ScanAsync(_scanCancellation.Token);
                 foreach (var dependency in dependencies)
                 {
-                    if (!dependency.IsAvailable && !string.IsNullOrWhiteSpace(dependency.PackageId))
-                    {
-                        var package = await _winGet.ResolveInstallablePackageAsync(
-                            dependency.PackageId, _scanCancellation.Token);
-                        if (package is null)
-                        {
-                            dependency.PackageId = "";
-                        }
-                        else
-                        {
-                            dependency.AvailableVersion = package.Version;
-                            var runtimeUpdate = new UpdateItem
-                            {
-                                Id = package.Id,
-                                Name = dependency.Name,
-                                Kind = UpdateKind.Runtime,
-                                InstalledVersion = T("Non installato", "Not installed"),
-                                AvailableVersion = package.Version,
-                                Source = "winget",
-                                PackageOperation = PackageOperations.Install,
-                                IsOptional = dependency.IsOptional,
-                                IsSelected = !dependency.IsOptional,
-                                Publisher = dependency.Name.StartsWith("NVIDIA", StringComparison.OrdinalIgnoreCase)
-                                    ? "NVIDIA"
-                                    : "Microsoft/WinGet"
-                            };
-                            await _winGet.PreparePackageMetadataAsync([runtimeUpdate], _scanCancellation.Token);
-                            AddUpdates([runtimeUpdate]);
-                        }
-                    }
                     GameDependencies.Add(dependency);
                 }
                 var requiredMissing = GameDependencies.Count(x => !x.IsAvailable && !x.IsOptional);

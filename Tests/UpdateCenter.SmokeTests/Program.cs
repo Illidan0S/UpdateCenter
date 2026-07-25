@@ -120,9 +120,15 @@ if (WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15002B), 
 
 var safeManifest = "PackageIdentifier: Example.Safe\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: install";
 var destructiveManifest = "PackageIdentifier: Example.Risky\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: uninstallPrevious";
+var deniedManifest = "PackageIdentifier: Example.Denied\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: deny";
 var unknownManifest = "PackageIdentifier: Example.Unknown\nInstallerType: exe";
-if (WinGetManifestSafetyService.ParseUpgradeSafety(safeManifest) != WinGetUpgradeSafety.Safe ||
-    WinGetManifestSafetyService.ParseUpgradeSafety(destructiveManifest) != WinGetUpgradeSafety.RemovesPreviousVersion ||
+var mixedArchitectureManifest = "PackageIdentifier: Example.Mixed\nInstallers:\n" +
+    "- Architecture: x64\n  UpgradeBehavior: install\n" +
+    "- Architecture: x86\n  UpgradeBehavior: uninstallPrevious";
+if (WinGetManifestSafetyService.ParseUpgradeSafety(safeManifest, "x64") != WinGetUpgradeSafety.Safe ||
+    WinGetManifestSafetyService.ParseUpgradeSafety(destructiveManifest, "x64") != WinGetUpgradeSafety.RemovesPreviousVersion ||
+    WinGetManifestSafetyService.ParseUpgradeSafety(deniedManifest, "x64") != WinGetUpgradeSafety.UpgradeUnsupported ||
+    WinGetManifestSafetyService.ParseUpgradeSafety(mixedArchitectureManifest, "x64") != WinGetUpgradeSafety.Safe ||
     WinGetManifestSafetyService.ParseUpgradeSafety(unknownManifest) != WinGetUpgradeSafety.Unknown)
     throw new InvalidOperationException("Classificazione di sicurezza dei manifest WinGet non valida.");
 var installerUris = WinGetManifestSafetyService.ParseInstallerUrls(
@@ -198,17 +204,26 @@ if (!runtimeDependencies.Any(x => x.Name.Contains("DirectX", StringComparison.Or
     !runtimeDependencies.Any(x => x.Name.Contains("XNA", StringComparison.OrdinalIgnoreCase)) ||
     !runtimeDependencies.Any(x => x.Name.Contains("Mono", StringComparison.OrdinalIgnoreCase)))
     throw new InvalidOperationException("Catalogo dei runtime incompleto.");
-var runtimeInstall = new UpdateItem
+var missingRuntime = new GameDependencyItem
+{
+    Name = "Runtime non installato",
+    PackageId = "Example.Runtime",
+    IsAvailable = false
+};
+var installedRuntimeUpdate = new UpdateItem
 {
     Id = "Microsoft.VCRedist.2015+.x64",
     Name = "Microsoft Visual C++ 2015–2022",
     Kind = UpdateKind.Runtime,
-    PackageOperation = PackageOperations.Install
+    PackageOperation = PackageOperations.Upgrade
 };
-if (runtimeInstall.KindLabel != "Runtime" || runtimeInstall.PackageOperation != PackageOperations.Install ||
+if (missingRuntime.CanAutoInstall ||
+    runtimeDependencies.Where(x => !x.IsAvailable).Any(x => x.CanAutoInstall) ||
+    installedRuntimeUpdate.KindLabel != "Runtime" ||
+    installedRuntimeUpdate.PackageOperation != PackageOperations.Upgrade ||
     !RuntimePackageCatalog.IsRuntimePackageId("Microsoft.VCRedist.2015+.x64") ||
     !RuntimePackageCatalog.IsRuntimePackageId("Microsoft.DotNet.DesktopRuntime.9"))
-    throw new InvalidOperationException("Il flusso di installazione dei runtime non è configurato.");
+    throw new InvalidOperationException("I runtime mancanti non devono essere proposti come aggiornamenti installabili.");
 
 var packageSize = PreflightService.CalculatePackageSize(
 [

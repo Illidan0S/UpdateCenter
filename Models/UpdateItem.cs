@@ -63,6 +63,7 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public bool IsImportant { get; init; }
     public bool IsOptional { get; init; }
     public bool RequiresRiskConfirmation { get; set; }
+    public bool HasUnverifiedInstallerMetadata { get; set; }
     public bool CanInstall
     {
         get => _canInstall;
@@ -98,6 +99,8 @@ public sealed class UpdateItem : INotifyPropertyChanged
         : $"{Source} · {SourceConfidence}";
     public string PriorityLabel => RequiresRiskConfirmation
         ? UpdateCenter.Services.LocalizationService.Text("Conferma", "Confirm")
+        : HasUnverifiedInstallerMetadata
+        ? UpdateCenter.Services.LocalizationService.Text("Verifica", "Review")
         : !CanInstall
         ? UpdateCenter.Services.LocalizationService.Text("Solo verifica", "Review only")
         : IsImportant
@@ -109,6 +112,10 @@ public sealed class UpdateItem : INotifyPropertyChanged
         ? UpdateCenter.Services.LocalizationService.Text(
             "Questo installer può rimuovere la versione funzionante prima di installare quella nuova. È richiesta una conferma separata.",
             "This installer may remove the working version before installing the new one. Separate confirmation is required.")
+        : HasUnverifiedInstallerMetadata
+        ? UpdateCenter.Services.LocalizationService.Text(
+            "I metadati dell'installer non sono disponibili o non sono stati verificati. L'aggiornamento non è preselezionato, ma può essere selezionato senza conferma aggiuntiva.",
+            "Installer metadata is unavailable or could not be verified. The update is not preselected, but it can be selected without additional confirmation.")
         : !CanInstall
         ? UpdateCenter.Services.LocalizationService.Text(
             "Questo elemento richiede un aggiornamento manuale dalla fonte ufficiale.",
