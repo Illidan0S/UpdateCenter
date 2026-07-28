@@ -392,9 +392,11 @@ var windowsSizedRow = StorageTableRowFactory.CreateRows(
         ]
     }
 ]).Single();
-if (windowsSizedRow.CapacityLabel != "1,81 TB" ||
-    !windowsSizedRow.VolumesDetail.Contains("73,7 GB liberi di 1,66 TB", StringComparison.Ordinal) ||
-    !windowsSizedRow.VolumesDetail.Contains("58,4 MB liberi di 96,0 MB", StringComparison.Ordinal))
+var normalizedCapacity = windowsSizedRow.CapacityLabel.Replace('.', ',');
+var normalizedVolumeDetail = windowsSizedRow.VolumesDetail.Replace('.', ',');
+if (normalizedCapacity != "1,81 TB" ||
+    !normalizedVolumeDetail.Contains("73,7 GB liberi di 1,66 TB", StringComparison.Ordinal) ||
+    !normalizedVolumeDetail.Contains("58,4 MB liberi di 96,0 MB", StringComparison.Ordinal))
     throw new InvalidOperationException("Le capacità storage devono usare la precisione a tre cifre di Esplora file.");
 
 var systemFat32Volume = new StorageVolumeItem
