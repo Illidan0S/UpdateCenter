@@ -262,7 +262,7 @@ internal sealed class WinGetManifestSafetyService
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.7");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.8");
         return client;
     }
 

@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.7**.
+Versione pubblica attuale: **1.0.8**.
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 

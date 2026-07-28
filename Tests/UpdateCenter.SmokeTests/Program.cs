@@ -27,8 +27,8 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.7")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.7.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.8")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.8.");
 
 var supportedUpdateTargetMethod = typeof(AppUpdateService).GetMethod(
     "IsSupportedUpdateTargetName", BindingFlags.Static | BindingFlags.NonPublic)
@@ -346,8 +346,78 @@ var mappedRow = StorageTableRowFactory.CreateRows(
 ]).Single();
 if (!mappedRow.VolumesLabel.Contains("E:", StringComparison.Ordinal) ||
     !mappedRow.VolumesLabel.Contains("FAST Disk", StringComparison.Ordinal) ||
+    !mappedRow.VolumesDetail.StartsWith("E:", StringComparison.Ordinal) ||
     mappedRow.CapacityLabel == "—")
     throw new InvalidOperationException("L'associazione tra unità fisica e volume non è valida.");
+
+var multiVolumeRow = StorageTableRowFactory.CreateRows(
+[
+    new StorageDeviceItem
+    {
+        Name = "SSD multivolume",
+        SizeBytes = 2_000_000_000_000,
+        Volumes =
+        [
+            new StorageVolumeItem { DriveLetter = "Z", FileSystem = "FAT32", SizeBytes = 100_000_000, FreeBytes = 50_000_000 },
+            new StorageVolumeItem { DriveLetter = "C", FileSystem = "NTFS", SizeBytes = 1_999_000_000_000, FreeBytes = 500_000_000_000 }
+        ]
+    }
+]).Single();
+if (!multiVolumeRow.VolumesLabel.StartsWith("C:", StringComparison.Ordinal) ||
+    !multiVolumeRow.VolumesDetail.StartsWith("C: · NTFS", StringComparison.Ordinal) ||
+    !multiVolumeRow.VolumesDetail.Contains("Z: · FAT32", StringComparison.Ordinal))
+    throw new InvalidOperationException("Il volume principale deve precedere le piccole partizioni nella tabella storage.");
+
+var windowsSizedRow = StorageTableRowFactory.CreateRows(
+[
+    new StorageDeviceItem
+    {
+        SizeBytes = 2_000_398_934_016,
+        Volumes =
+        [
+            new StorageVolumeItem
+            {
+                DriveLetter = "C",
+                FileSystem = "NTFS",
+                SizeBytes = 1_825_364_418_560,
+                FreeBytes = 79_135_057_920
+            },
+            new StorageVolumeItem
+            {
+                DriveLetter = "Z",
+                FileSystem = "FAT32",
+                SizeBytes = 100_663_296,
+                FreeBytes = 61_236_900
+            }
+        ]
+    }
+]).Single();
+if (windowsSizedRow.CapacityLabel != "1,81 TB" ||
+    !windowsSizedRow.VolumesDetail.Contains("73,7 GB liberi di 1,66 TB", StringComparison.Ordinal) ||
+    !windowsSizedRow.VolumesDetail.Contains("58,4 MB liberi di 96,0 MB", StringComparison.Ordinal))
+    throw new InvalidOperationException("Le capacità storage devono usare la precisione a tre cifre di Esplora file.");
+
+var systemFat32Volume = new StorageVolumeItem
+{
+    DriveLetter = "Z",
+    FileSystem = "FAT32",
+    SizeBytes = 100_663_296,
+    FreeBytes = 61_271_040
+};
+var labeledFat32Volume = new StorageVolumeItem
+{
+    DriveLetter = "F",
+    Label = "DATI",
+    FileSystem = "FAT32",
+    SizeBytes = 536_870_912
+};
+if (StorageHealthService.IsUserVisibleVolume(systemFat32Volume) ||
+    !StorageHealthService.IsUserVisibleVolume(labeledFat32Volume))
+    throw new InvalidOperationException("Le partizioni FAT32 di sistema non devono essere mostrate come volumi dati.");
+
+var repairedHistoryText = JsonStorage.RepairLegacyEncoding("Hytale Launcher non ÃƒÂ¨ applicabile: versione piÃ¹ recente");
+if (repairedHistoryText != "Hytale Launcher non è applicabile: versione più recente")
+    throw new InvalidOperationException("La riparazione della codifica nella cronologia non è valida.");
 
 var pauseController = new UpdatePauseController(Path.GetTempPath());
 pauseController.RequestPause();

@@ -63,10 +63,18 @@ public sealed class StorageHealthService
                     BusType = ReadString(element, "BusType"),
                     TemperatureCelsius = ReadNullableDouble(element, "Temperature")
                 };
-                ReadElements(element, "Volumes", volume => device.Volumes.Add(ReadVolume(volume)));
+                ReadElements(element, "Volumes", volume =>
+                {
+                    var parsedVolume = ReadVolume(volume);
+                    if (IsUserVisibleVolume(parsedVolume)) device.Volumes.Add(parsedVolume);
+                });
                 scan.Devices.Add(device);
             });
-            ReadElements(document.RootElement, "Volumes", element => scan.Volumes.Add(ReadVolume(element)));
+            ReadElements(document.RootElement, "Volumes", element =>
+            {
+                var parsedVolume = ReadVolume(element);
+                if (IsUserVisibleVolume(parsedVolume)) scan.Volumes.Add(parsedVolume);
+            });
             if (scan.Volumes.Count == 0)
                 AddDriveInfoFallback(scan.Volumes);
 
@@ -118,6 +126,11 @@ public sealed class StorageHealthService
         SizeBytes = ReadLong(element, "Size"),
         FreeBytes = ReadLong(element, "Free")
     };
+
+    internal static bool IsUserVisibleVolume(StorageVolumeItem volume) =>
+        !(volume.SizeBytes is > 0 and <= 1_073_741_824 &&
+          volume.FileSystem.Equals("FAT32", StringComparison.OrdinalIgnoreCase) &&
+          string.IsNullOrWhiteSpace(volume.Label));
 
     private static double? ReadNullableDouble(JsonElement element, string name)
     {

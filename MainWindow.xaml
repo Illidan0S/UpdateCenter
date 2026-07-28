@@ -63,7 +63,7 @@
                     <Border x:Name="VersionBadge" Margin="8,0,0,0" Padding="7,3" VerticalAlignment="Center"
                             Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
                             BorderThickness="1" CornerRadius="7">
-                        <TextBlock x:Name="VersionText" Text="v1.0.6" Foreground="{DynamicResource AccentBrush}"
+                        <TextBlock x:Name="VersionText" Text="v1.0.8" Foreground="{DynamicResource AccentBrush}"
                                    FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
                     </Border>
                 </StackPanel>
@@ -629,7 +629,13 @@
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
-                                            <DataGridTextColumn Header="Capacità" Binding="{Binding CapacityLabel}" Width="0.7*" />
+                                            <DataGridTemplateColumn Header="Capacità" Width="0.7*">
+                                                <DataGridTemplateColumn.CellTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock Text="{Binding CapacityLabel}" VerticalAlignment="Center" Margin="8,0" />
+                                                    </DataTemplate>
+                                                </DataGridTemplateColumn.CellTemplate>
+                                            </DataGridTemplateColumn>
                                             <DataGridTemplateColumn Header="Salute" Width="1.35*">
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
@@ -1047,7 +1053,7 @@
                                 <DataGrid.Columns>
                                     <DataGridTextColumn Header="Data" Binding="{Binding DisplayDate}" Width="135"
                                                         ElementStyle="{StaticResource HistoryDateText}" />
-                                    <DataGridTemplateColumn Header="Nome" Width="2*">
+                                    <DataGridTemplateColumn Header="Nome" Width="1.25*">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel VerticalAlignment="Center">
@@ -1058,9 +1064,9 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTextColumn Header="Da" Binding="{Binding FromVersion}" Width="120" ElementStyle="{StaticResource DataGridText}" />
-                                    <DataGridTextColumn Header="A" Binding="{Binding ToVersion}" Width="120" ElementStyle="{StaticResource DataGridText}" />
-                                    <DataGridTemplateColumn Header="Esito" Width="105">
+                                    <DataGridTextColumn Header="Da" Binding="{Binding FromVersion}" Width="150" ElementStyle="{StaticResource DataGridText}" />
+                                    <DataGridTextColumn Header="A" Binding="{Binding ToVersion}" Width="150" ElementStyle="{StaticResource DataGridText}" />
+                                    <DataGridTemplateColumn Header="Esito" Width="120">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <Border x:Name="HistoryResultBadge" Padding="9,5" CornerRadius="8"
@@ -1079,7 +1085,7 @@
                                             </DataTemplate>
                                         </DataGridTemplateColumn.CellTemplate>
                                     </DataGridTemplateColumn>
-                                    <DataGridTemplateColumn Header="Dettagli" Width="2.2*">
+                                    <DataGridTemplateColumn Header="Dettagli" Width="2.5*">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <Border Background="Transparent" Cursor="Hand"

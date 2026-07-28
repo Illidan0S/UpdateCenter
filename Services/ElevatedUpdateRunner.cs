@@ -141,7 +141,7 @@ public static class ElevatedUpdateRunner
                     UpdateOutcomes.Completed => alreadyCurrentMessage ?? (isFreshInstall
                         ? "Runtime installato con WinGet."
                         : "Software aggiornato con WinGet."),
-                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non Ã¨ applicabile a questo PC. La voce verrÃ  rimossa fino alla prossima scansione.",
+                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non è applicabile a questo PC. La voce verrà rimossa fino alla prossima scansione.",
                     UpdateOutcomes.ManualRequired => "Questo pacchetto non supporta l'aggiornamento automatico con la tecnologia di installazione corrente. Usa l'installer ufficiale del produttore.",
                     _ => string.IsNullOrWhiteSpace(output)
                         ? $"WinGet ha restituito il codice {result.ExitCode}."
@@ -433,7 +433,7 @@ public sealed class UpdateCoordinator
                     {
                         try { process.Kill(true); } catch { }
                         throw new TimeoutException(
-                            $"L'aggiornamento di {current.CurrentName} non ha comunicato progressi per 12 minuti ed Ã¨ stato interrotto.");
+                            $"L'aggiornamento di {current.CurrentName} non ha comunicato progressi per 12 minuti ed è stato interrotto.");
                     }
                 }
                 await Task.Delay(350, cancellationToken);
@@ -445,7 +445,7 @@ public sealed class UpdateCoordinator
             if (final.State.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
                 final.State.Equals("Starting", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(
-                    $"Il processo di aggiornamento di {final.CurrentName} si Ã¨ chiuso prima di restituire un risultato.");
+                    $"Il processo di aggiornamento di {final.CurrentName} si è chiuso prima di restituire un risultato.");
             progress(BuildAggregateProgress(aggregate, final, completedBeforeBatch));
             return final;
         }

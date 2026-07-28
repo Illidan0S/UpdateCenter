@@ -1017,11 +1017,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         var technicalDetail = string.IsNullOrWhiteSpace(runResult.Message) ? "Nessun dettaglio tecnico aggiuntivo." : runResult.Message.Trim();
 
         if (runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
-            return $"{runResult.Name} non Ã¨ applicabile a questo PC secondo WinGet. " +
-                   $"La segnalazione da {fromVersion} a {toVersion} Ã¨ stata rimossa. Dettaglio: {technicalDetail}";
+            return $"{runResult.Name} non è applicabile a questo PC secondo WinGet. " +
+                   $"La segnalazione da {fromVersion} a {toVersion} è stata rimossa. Dettaglio: {technicalDetail}";
 
         if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
-            return $"{runResult.Name} richiede un aggiornamento manuale perchÃ© il pacchetto installato e quello nuovo " +
+            return $"{runResult.Name} richiede un aggiornamento manuale perché il pacchetto installato e quello nuovo " +
                    $"non supportano un upgrade automatico compatibile. Dettaglio: {technicalDetail}";
 
         if (runResult.Success)

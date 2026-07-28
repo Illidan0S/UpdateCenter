@@ -67,17 +67,21 @@ public sealed class StorageDeviceItem
         string.IsNullOrWhiteSpace(FirmwareVersion) ? null : $"Firmware: {FirmwareVersion}",
         string.IsNullOrWhiteSpace(BusType) ? null : $"Bus: {BusType}"
     }.Where(x => !string.IsNullOrWhiteSpace(x)));
+    private IEnumerable<StorageVolumeItem> DisplayVolumes => Volumes
+        .OrderByDescending(volume => volume.SizeBytes)
+        .ThenBy(volume => volume.DriveLetter, StringComparer.OrdinalIgnoreCase);
     public string VolumesLabel => Volumes.Count == 0
         ? "Nessun volume con lettera"
-        : string.Join(" · ", Volumes.Select(volume => string.Join(" ", new[]
+        : string.Join(" · ", DisplayVolumes.Select(volume => string.Join(" ", new[]
         {
             volume.DisplayName,
             volume.Label
         }.Where(value => !string.IsNullOrWhiteSpace(value)))));
     public string VolumesDetail => Volumes.Count == 0
         ? "—"
-        : string.Join(" | ", Volumes.Select(volume => string.Join(" · ", new[]
+        : string.Join(" | ", DisplayVolumes.Select(volume => string.Join(" · ", new[]
         {
+            volume.DisplayName,
             volume.FileSystem,
             volume.SpaceLabel
         }.Where(value => !string.IsNullOrWhiteSpace(value)))));
@@ -89,7 +93,15 @@ public sealed class StorageDeviceItem
         var value = (double)bytes;
         var unit = 0;
         while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
-        return $"{value:0.#} {units[unit]}";
+        return $"{FormatWindowsValue(value)} {units[unit]}";
+    }
+
+    private static string FormatWindowsValue(double value)
+    {
+        var decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+        var factor = Math.Pow(10, decimals);
+        var truncated = Math.Floor(value * factor) / factor;
+        return truncated.ToString($"F{decimals}");
     }
 }
 
@@ -110,7 +122,10 @@ public sealed class StorageVolumeItem
         var value = (double)Math.Max(bytes, 0);
         var unit = 0;
         while (value >= 1024 && unit < units.Length - 1) { value /= 1024; unit++; }
-        return $"{value:0.#} {units[unit]}";
+        var decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+        var factor = Math.Pow(10, decimals);
+        var truncated = Math.Floor(value * factor) / factor;
+        return $"{truncated.ToString($"F{decimals}")} {units[unit]}";
     }
 }
 
