@@ -144,8 +144,8 @@ jobs:
           ASSET_DIRECTORY: artifacts
         run: |
           $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
-          if ($assets.Count -ne 3) {
-            throw "Sono attesi tre asset di Release, trovati: $($assets.Count)."
+          if ($assets.Count -ne 4) {
+            throw "Sono attesi quattro asset di Release, trovati: $($assets.Count)."
           }
           gh release create $env:GITHUB_REF_NAME @assets `
             --repo "$env:GITHUB_REPOSITORY" `
