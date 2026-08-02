@@ -23,6 +23,9 @@ internal sealed class WinGetManifestSafetyService
     private static readonly Regex InstallerUrlLine = new(
         "^\\s*InstallerUrl\\s*:\\s*['\\\"]?([^'\\\"\\r\\n#]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
+    private static readonly Regex ScopeLine = new(
+        "^\\s*Scope\\s*:\\s*['\\\"]?([^'\\\"\\s#]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
     private static readonly Regex InstallerEntryStart = new(
         "^(?<indent>\\s*)-\\s+Architecture\\s*:\\s*['\\\"]?(?<architecture>[^'\\\"\\s#]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
@@ -45,6 +48,10 @@ internal sealed class WinGetManifestSafetyService
                     }
 
                     ApplySafetyClassification(item, inspection.Safety);
+                    ApplyScopeCompatibility(
+                        item,
+                        WinGetInstalledScopeService.Detect(item.Name, item.InstalledVersion),
+                        inspection.Scope);
                 }
                 finally
                 {
@@ -105,7 +112,7 @@ internal sealed class WinGetManifestSafetyService
 
                     var manifest = await response.Content.ReadAsStringAsync(cancellationToken);
                     var size = await ResolveDownloadSizeAsync(ParseInstallerUrls(manifest), cancellationToken);
-                    return new(ParseUpgradeSafety(manifest), size);
+                    return new(ParseUpgradeSafety(manifest), size, ParseInstallerScope(manifest));
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -118,8 +125,33 @@ internal sealed class WinGetManifestSafetyService
             }
         }
 
-        return new(WinGetUpgradeSafety.Unknown, 0);
+        return new(WinGetUpgradeSafety.Unknown, 0, "");
     }
+
+    internal static string ParseInstallerScope(string manifest) =>
+        ScopeLine.Match(manifest) is { Success: true } match
+            ? match.Groups[1].Value.Trim().ToLowerInvariant()
+            : "";
+
+    internal static void ApplyScopeCompatibility(UpdateItem item, string installedScope, string availableScope)
+    {
+        if (string.IsNullOrWhiteSpace(installedScope) || string.IsNullOrWhiteSpace(availableScope) ||
+            installedScope.Equals(availableScope, StringComparison.OrdinalIgnoreCase)) return;
+
+        item.CanInstall = false;
+        item.IsSelected = false;
+        item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
+        item.ResultDetails = LocalizationService.Text(
+            $"WinGet ha rilevato un cambio di ambito: la copia installata è {ScopeLabel(installedScope)}, " +
+            $"mentre il nuovo installer è {ScopeLabel(availableScope)}. L'installazione automatica potrebbe creare " +
+            "una seconda copia; usa l'aggiornamento interno del programma o il sito ufficiale.",
+            $"WinGet detected a scope change: the installed copy is {installedScope}, while the new installer is " +
+            $"{availableScope}. Automatic installation could create a second copy; use the application's built-in updater or official website.");
+    }
+
+    private static string ScopeLabel(string scope) => scope.Equals("machine", StringComparison.OrdinalIgnoreCase)
+        ? "per l'intero computer"
+        : scope.Equals("user", StringComparison.OrdinalIgnoreCase) ? "per il singolo utente" : scope;
 
     internal static IReadOnlyList<Uri> ParseInstallerUrls(string manifest) =>
         InstallerUrlLine.Matches(manifest)
@@ -266,6 +298,6 @@ internal sealed class WinGetManifestSafetyService
         return client;
     }
 
-    private sealed record ManifestInspection(WinGetUpgradeSafety Safety, long DownloadSizeBytes);
+    private sealed record ManifestInspection(WinGetUpgradeSafety Safety, long DownloadSizeBytes, string Scope);
     private sealed record InstallerManifestSection(string Architecture, string Content);
 }

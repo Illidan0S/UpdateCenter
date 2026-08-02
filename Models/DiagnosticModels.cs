@@ -10,6 +10,25 @@ public sealed class DriverProblemItem
     public string ErrorTitle { get; set; } = "Problema rilevato";
     public string SuggestedAction { get; set; } = "Apri Gestione dispositivi per verificare il dispositivo.";
     public string Severity { get; set; } = "Attenzione";
+    public string InstalledInfName { get; set; } = "";
+    public bool InstalledDriverSigned { get; set; }
+    public bool CanManageDriverProblem => ErrorCode is 10 or 18 or 28 or 31 or 37 or 39 or 40 or 43;
+    public bool CanRepairWithInstalledDriver
+    {
+        get
+        {
+            if (!InstalledDriverSigned || ErrorCode is not (10 or 18 or 28 or 31 or 37 or 39 or 40 or 43)) return false;
+            var name = Path.GetFileName(InstalledInfName);
+            if (!name.Equals(InstalledInfName, StringComparison.OrdinalIgnoreCase) ||
+                !name.StartsWith("oem", StringComparison.OrdinalIgnoreCase) ||
+                !name.EndsWith(".inf", StringComparison.OrdinalIgnoreCase)) return false;
+            return name[3..^4].Length is > 0 and <= 6 && name[3..^4].All(char.IsDigit);
+        }
+    }
+    public string RepairAvailabilityText => CanRepairWithInstalledDriver
+        ? $"Pacchetto Windows: {InstalledInfName}"
+        : "Ricerca tramite fonti verificate";
+    public string RepairActionText => CanRepairWithInstalledDriver ? "Reinstalla driver" : "Cerca driver";
     public string ErrorCodeLabel => $"Codice Gestione dispositivi {ErrorCode}";
     public string DeviceDetail => string.Join(" · ", new[] { DeviceClass, Manufacturer }
         .Where(x => !string.IsNullOrWhiteSpace(x)));

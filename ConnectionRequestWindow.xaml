@@ -1,0 +1,79 @@
+<Window x:Class="UpdateCenter.ConnectionRequestWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Richiesta di collegamento · Update Center" Icon="Assets/UpdateCenter.ico"
+        Width="570" SizeToContent="Height" MinHeight="500" MaxHeight="700"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        Background="{DynamicResource BackgroundBrush}" Topmost="True">
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="Richiesta di collegamento" FontSize="{DynamicResource FontSize23}"
+                       FontWeight="SemiBold" />
+            <TextBlock Text="Un altro computer vuole gestire gli aggiornamenti di questo PC."
+                       Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,0" />
+        </StackPanel>
+
+        <Border Grid.Row="1" Background="{DynamicResource SurfaceBrush}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                CornerRadius="14" Padding="17" Margin="0,18,0,0">
+            <StackPanel>
+                <TextBlock Text="PC PRINCIPALE" Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="{DynamicResource FontSize9}" FontWeight="SemiBold" />
+                <TextBlock x:Name="ControllerNameText" Text="Caricamento..."
+                           FontSize="{DynamicResource FontSize18}" FontWeight="SemiBold" Margin="0,6,0,0" />
+                <TextBlock x:Name="ControllerAddressText" Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="{DynamicResource FontSize10}" Margin="0,5,0,0" />
+                <TextBlock x:Name="ControllerFingerprintText" Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="{DynamicResource FontSize9}" Margin="0,3,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2" Background="{DynamicResource AccentSoftBrush}"
+                BorderBrush="{DynamicResource AccentSoftBorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="15" Margin="0,14,0,0">
+            <StackPanel>
+                <TextBlock Text="Se accetti, il PC principale potrà:" FontWeight="SemiBold" />
+                <TextBlock Text="• controllare lo stato di Update Center" Margin="0,8,0,0" />
+                <TextBlock Text="• eseguire scansioni di software e driver" Margin="0,4,0,0" />
+                <TextBlock Text="• installare gli aggiornamenti selezionati e seguirne l'avanzamento"
+                           Margin="0,4,0,0" TextWrapping="Wrap" />
+                <TextBlock Text="Puoi revocare il collegamento in qualsiasi momento da Configura questo PC."
+                           Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
+                           Margin="0,10,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="3" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="10"
+                Padding="12,9" Margin="0,14,0,0">
+            <StackPanel>
+                <TextBlock x:Name="ExpiryText" Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="{DynamicResource FontSize10}" />
+                <TextBlock x:Name="StatusText" Foreground="{DynamicResource MutedTextBrush}"
+                           FontSize="{DynamicResource FontSize10}" Margin="0,3,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="4" Margin="0,18,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ProgressBar x:Name="BusyProgress" Width="120" Height="5" IsIndeterminate="True"
+                         Visibility="Collapsed" VerticalAlignment="Center" />
+            <Button x:Name="RejectButton" Grid.Column="1" Content="Rifiuta"
+                    Style="{StaticResource SecondaryButton}" Padding="18,9" Margin="0,0,8,0"
+                    Click="Reject_Click" />
+            <Button x:Name="AcceptButton" Grid.Column="2" Content="Consenti"
+                    Style="{StaticResource RoundedButton}" Padding="20,9" Click="Accept_Click" />
+        </Grid>
+    </Grid>
+</Window>

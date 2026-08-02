@@ -1,0 +1,220 @@
+<Window x:Class="UpdateCenter.AgentSetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Configura questo PC · Update Center" Icon="Assets/UpdateCenter.ico"
+        Width="720" Height="620" MinWidth="620" MinHeight="540"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
+        Background="{DynamicResource BackgroundBrush}">
+    <Window.Resources>
+        <Style x:Key="SetupCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="20" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Margin="0,0,0,18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="Configura questo PC" FontSize="{DynamicResource FontSize24}" FontWeight="SemiBold" />
+                <TextBlock Text="Controlla il collegamento e scegli chi può gestire gli aggiornamenti"
+                           Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,0" />
+            </StackPanel>
+            <Border Grid.Column="1" Padding="10,6" CornerRadius="9" VerticalAlignment="Center"
+                    Background="{DynamicResource WarningSoftBrush}">
+                <TextBlock Text="Amministratore" Foreground="{DynamicResource WarningBrush}"
+                           FontSize="{DynamicResource FontSize10}" FontWeight="SemiBold" />
+            </Border>
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Border Style="{StaticResource SetupCard}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,16,0">
+                            <TextBlock Text="Stato di questo PC" FontSize="{DynamicResource FontSize16}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding ConnectionStatusText}"
+                                       FontSize="{DynamicResource FontSize13}" FontWeight="SemiBold" Margin="0,7,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasController}" Value="True">
+                                                <Setter Property="Foreground" Value="{DynamicResource SuccessBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="{DynamicResource FontSize11}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                        <WrapPanel Grid.Column="1" VerticalAlignment="Center">
+                            <Button Content="Aggiorna stato" Style="{StaticResource SecondaryButton}"
+                                    Padding="13,8" IsEnabled="{Binding CanRefresh}" Click="Refresh_Click" />
+                            <Button Content="Installa / aggiorna componente" Style="{StaticResource RoundedButton}"
+                                    Padding="13,8" Margin="8,0,0,0" IsEnabled="{Binding CanSetup}" Click="Setup_Click" />
+                        </WrapPanel>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource SetupCard}"
+                        Background="{DynamicResource AccentSoftBrush}"
+                        BorderBrush="{DynamicResource AccentSoftBorderBrush}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,16,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Collegamento rapido" FontSize="{DynamicResource FontSize16}"
+                                           FontWeight="SemiBold" />
+                                <Border Background="{DynamicResource AccentBrush}" CornerRadius="6"
+                                        Padding="7,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="CONSIGLIATO" Foreground="White" FontWeight="SemiBold"
+                                               FontSize="{DynamicResource FontSize8}" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock Text="1. Il PC principale cerca i dispositivi.  2. Invia la richiesta ai PC selezionati.  3. Approva la notifica che comparirà qui."
+                                       Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize11}"
+                                       TextWrapping="Wrap" Margin="0,5,0,0" />
+                            <TextBlock Text="{Binding ConnectionRequestStatusText}" FontWeight="SemiBold"
+                                       Margin="0,10,0,0" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <Button Content="Consenti richieste" Style="{StaticResource RoundedButton}"
+                                    Padding="14,8" IsEnabled="{Binding CanEnableConnectionRequests}"
+                                    Click="EnableRequests_Click" />
+                            <Button Content="Interrompi richieste" Style="{StaticResource SecondaryButton}"
+                                    Padding="14,8" Margin="0,8,0,0"
+                                    IsEnabled="{Binding CanDisableConnectionRequests}"
+                                    Click="DisableRequests_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border Style="{StaticResource SetupCard}">
+                    <StackPanel>
+                        <TextBlock Text="Dettagli della rete" FontSize="{DynamicResource FontSize16}" FontWeight="SemiBold" />
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="130" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Gestione LAN" Foreground="{DynamicResource MutedTextBrush}" />
+                            <TextBlock Grid.Column="1" Text="{Binding NetworkStateText}" FontWeight="SemiBold" />
+                            <TextBlock Grid.Row="1" Text="Rete autorizzata" Foreground="{DynamicResource MutedTextBrush}" Margin="0,10,0,0" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding NetworkScopeName}" FontWeight="SemiBold" Margin="0,10,0,0" />
+                            <TextBlock Grid.Row="2" Text="Area locale" Foreground="{DynamicResource MutedTextBrush}" Margin="0,10,0,0" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding AllowedSubnets}" FontWeight="SemiBold" Margin="0,10,0,0" />
+                            <TextBlock Grid.Row="3" Text="PC principale" Foreground="{DynamicResource MutedTextBrush}" Margin="0,10,0,0" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding ControllerName}" FontWeight="SemiBold" Margin="0,10,0,0" />
+                            <TextBlock Grid.Row="4" Text="ID componente" Foreground="{DynamicResource MutedTextBrush}" Margin="0,10,0,0" />
+                            <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding AgentId, Mode=OneWay}" Style="{StaticResource SelectableValue}"
+                                     Margin="0,10,0,0" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SetupCard}">
+                    <Expander IsExpanded="False" HorizontalContentAlignment="Stretch">
+                        <Expander.Header>
+                            <StackPanel>
+                                <TextBlock Text="Metodo alternativo: codice manuale" FontSize="{DynamicResource FontSize14}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Usalo soltanto se la richiesta di collegamento non è disponibile."
+                                           Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="{DynamicResource FontSize10}" Margin="0,3,0,0" />
+                            </StackPanel>
+                        </Expander.Header>
+                        <Grid Margin="0,16,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Codice monouso a 8 cifre" FontWeight="SemiBold" />
+                                <TextBox Text="{Binding PairingCode, Mode=OneWay}" Style="{StaticResource SelectableValue}"
+                                         FontSize="{DynamicResource FontSize30}" FontWeight="SemiBold"
+                                         Foreground="{DynamicResource AccentBrush}" Margin="0,10,0,0" />
+                                <TextBlock Text="{Binding PairingExpiry}" Foreground="{DynamicResource MutedTextBrush}"
+                                           FontSize="{DynamicResource FontSize11}" Margin="0,5,0,0" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0">
+                                <Button Content="Genera codice" Style="{StaticResource SecondaryButton}"
+                                        IsEnabled="{Binding CanGenerateCode}" Click="GenerateCode_Click" />
+                                <Button Content="Copia codice" Style="{StaticResource SecondaryButton}" Margin="0,8,0,0"
+                                        IsEnabled="{Binding CanCopyCode}" Click="CopyCode_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Expander>
+                </Border>
+
+                <Border Style="{StaticResource SetupCard}">
+                    <StackPanel>
+                        <TextBlock Text="Gestione e rimozione" FontSize="{DynamicResource FontSize16}"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="Queste azioni interrompono o rimuovono la gestione remota di questo PC."
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   FontSize="{DynamicResource FontSize10}" Margin="0,5,0,12" />
+                        <WrapPanel>
+                            <Button Content="Revoca il PC principale" Style="{StaticResource SecondaryButton}"
+                                    Padding="13,8" IsEnabled="{Binding CanRevoke}" Click="Revoke_Click" />
+                            <Button Content="Disabilita gestione remota" Style="{StaticResource SecondaryButton}"
+                                    Padding="13,8" Margin="8,0,0,0" IsEnabled="{Binding CanDisable}" Click="Disable_Click" />
+                            <Button Content="Disinstalla componente di rete" Style="{StaticResource SecondaryButton}"
+                                    Foreground="{DynamicResource DangerBrush}" Padding="13,8" Margin="8,0,0,0"
+                                    IsEnabled="{Binding CanUninstall}" Click="Uninstall_Click" />
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Update Center non modifica il profilo di rete di Windows. Il componente accetta richieste solo dalla rete locale autorizzata e limita automaticamente le regole firewall al programma, alla sottorete e alle interfacce correnti."
+                           Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
+                           TextWrapping="Wrap" Margin="4,0,4,8" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" Margin="0,14,0,0">
+            <ProgressBar Width="180" Height="5" HorizontalAlignment="Left" IsIndeterminate="True">
+                <ProgressBar.Style>
+                    <Style TargetType="ProgressBar" BasedOn="{StaticResource {x:Type ProgressBar}}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ProgressBar.Style>
+            </ProgressBar>
+            <Button Content="Chiudi" Style="{StaticResource SecondaryButton}" HorizontalAlignment="Right"
+                    Padding="18,8" Click="Close_Click" />
+        </Grid>
+    </Grid>
+</Window>
