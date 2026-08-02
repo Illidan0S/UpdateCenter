@@ -11,6 +11,7 @@ public static class AppPaths
     public static string UpdatesDirectory { get; } = Path.Combine(DataDirectory, "Updates");
     public static string SettingsFile { get; } = Path.Combine(DataDirectory, "settings.json");
     public static string HistoryFile { get; } = Path.Combine(DataDirectory, "history.json");
+    public static string WinGetApplicabilityFile { get; } = Path.Combine(DataDirectory, "winget-not-applicable.json");
 
     public static void EnsureCreated()
     {
@@ -27,7 +28,8 @@ public static class AppPaths
         {
             var staleTemporaryLimit = DateTime.UtcNow.AddDays(-1);
             foreach (var pattern in new[]
-                     { "update-plan-*.json", "update-status-*.json", "update-pause-*.signal", "update-pause-*.signal.tmp" })
+                     { "update-plan-*.json", "update-status-*.json", "update-pause-*.signal", "update-pause-*.signal.tmp",
+                       "driver-repair-*.json", "driver-repair-status-*.json" })
             {
                 foreach (var path in Directory.EnumerateFiles(DataDirectory, pattern, SearchOption.TopDirectoryOnly))
                 {
