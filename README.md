@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.8**.
+Versione pubblica attuale: **1.1.0**.
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
@@ -19,6 +19,8 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 - Collegamento diretto a NVIDIA App o alla pagina ufficiale per i driver GPU NVIDIA.
 - Cronologia degli aggiornamenti, log locali e nessuna telemetria.
 - Controllo automatico delle nuove versioni di Update Center con verifica SHA-256 e autosostituzione sicura anche della portable.
+- Gestione dei computer nella rete locale tramite modalità Controller e Agent, con autorizzazione dei dispositivi e revoca immediata dell’accesso.
+- Scansione e gestione remota degli aggiornamenti, con avanzamento e riepilogo separati per ciascun computer collegato.
 
 ## Download
 
