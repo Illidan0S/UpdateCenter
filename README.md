@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.0.8**.
+Versione pubblica attuale: **1.1.1**.
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
@@ -19,6 +19,8 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 - Collegamento diretto a NVIDIA App o alla pagina ufficiale per i driver GPU NVIDIA.
 - Cronologia degli aggiornamenti, log locali e nessuna telemetria.
 - Controllo automatico delle nuove versioni di Update Center con verifica SHA-256 e autosostituzione sicura anche della portable.
+- Gestione rete opzionale per rilevare i PC autorizzati, ricevere richieste di collegamento e gestire scansioni e aggiornamenti remoti dal Controller.
+- Agent disattivabile o disinstallabile direttamente da Update Center; il collegamento usa richieste approvate dall'utente e supporta più PC nella stessa LAN.
 
 ## Download
 
@@ -36,6 +38,15 @@ I file **`.sha256`** sono i checksum di sicurezza usati per verificare i downloa
 3. Apri **Aggiornamenti** e controlla gli elementi trovati.
 4. Seleziona solo quelli desiderati.
 5. Premi **Aggiorna elementi selezionati** e conferma il riepilogo.
+
+### Gestione rete
+
+1. Sul PC da controllare apri **Configura questo PC** e abilita la gestione rete.
+2. Dal PC Controller apri **Gestione rete**, cerca i dispositivi e invia le richieste di collegamento.
+3. Approva la richiesta sul PC interessato.
+4. Seleziona uno o più PC collegati, avvia la scansione remota e gestisci gli aggiornamenti dal riepilogo.
+
+La funzione è opzionale e non modifica le impostazioni della rete Windows. Tutti i PC devono essere sulla stessa rete locale (Ethernet o Wi-Fi).
 
 L’app non riavvia il computer senza chiedere conferma.
 
