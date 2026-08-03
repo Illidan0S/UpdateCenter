@@ -12,6 +12,7 @@ public sealed class DriverInventoryItem
     public List<string> HardwareIds { get; set; } = [];
     public List<string> CompatibleIds { get; set; } = [];
     public string InfName { get; set; } = "";
+    public bool IsSigned { get; set; }
     public int Quantity { get; set; } = 1;
     public bool IsProcessorOrChipset { get; set; }
     public bool HasUpdate { get; set; }

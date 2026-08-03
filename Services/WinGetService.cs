@@ -32,8 +32,12 @@ public sealed class WinGetService
             var rejectedCount = parsed.Count - verified.Count;
             if (rejectedCount > 0)
                 LogService.Write($"Esclusi {rejectedCount} candidati WinGet senza un'installazione locale verificata.");
-            await PreparePackageMetadataAsync(verified, cancellationToken);
-            return verified;
+            var applicable = WinGetApplicabilityStore.ExcludeSuppressed(verified).ToList();
+            var suppressedCount = verified.Count - applicable.Count;
+            if (suppressedCount > 0)
+                LogService.Write($"Esclusi {suppressedCount} aggiornamenti WinGet già verificati come non applicabili per le stesse versioni.");
+            await PreparePackageMetadataAsync(applicable, cancellationToken);
+            return applicable;
         }
 
         if (!result.Success && !ContainsNoUpdatesMessage(output))

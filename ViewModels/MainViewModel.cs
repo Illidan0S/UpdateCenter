@@ -70,6 +70,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             new SortDescription(nameof(DriverInventoryItem.HasUpdate), ListSortDirection.Descending));
         DriverInventoryView.SortDescriptions.Add(
             new SortDescription(nameof(DriverInventoryItem.DisplayName), ListSortDirection.Ascending));
+        Network = new NetworkManagementViewModel();
     }
 
     public ObservableCollection<UpdateItem> Updates { get; } = [];
@@ -86,6 +87,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ICollectionView DriverInventoryView { get; }
     public AppSettings Settings { get; }
     public AppUpdateService AppUpdateService => _appUpdateService;
+    public NetworkManagementViewModel Network { get; }
 
     public bool IsBusy
     {
@@ -698,6 +700,32 @@ public sealed class MainViewModel : INotifyPropertyChanged
         NotifyCounts();
     }
 
+    public async Task RefreshDriverDiagnosticsAsync()
+    {
+        if (IsBusy) return;
+        IsBusy = true;
+        HardwareCheckStatus = "Verifica del driver riparato in corso…";
+        try
+        {
+            var scan = await _hardwareInventory.ScanAsync(CancellationToken.None);
+            ClearDriverInventory();
+            ApplyHardware(scan);
+            HardwareCheckStatus = scan.Problems.Count == 0
+                ? "Windows non segnala problemi attivi nei dispositivi."
+                : $"Windows segnala ancora {scan.Problems.Count} problemi nei dispositivi.";
+        }
+        catch (Exception ex)
+        {
+            HardwareCheckStatus = $"Verifica dei driver non riuscita: {ex.Message}";
+            LogService.Write("Verifica successiva alla riparazione driver non riuscita.", ex);
+        }
+        finally
+        {
+            IsBusy = false;
+            NotifyCounts();
+        }
+    }
+
     private Task<QuickHardwareSnapshot> GetOrStartQuickHardwareData()
     {
         lock (_quickHardwareGate)
@@ -781,11 +809,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             };
             item.ResultDetails = runResult.Message;
             item.Diagnostics = runResult.Diagnostics;
-            if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
+            if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) ||
+                runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
                 item.CanInstall = false;
 
             var shouldRemove = runResult.Success &&
-                               !runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal);
+                               !runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) &&
+                               !runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal);
             if (shouldRemove && Updates.Remove(item))
             {
                 item.PropertyChanged -= UpdateItemOnPropertyChanged;
@@ -875,7 +905,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ComputerName = string.Join(" ", new[] { scan.ComputerManufacturer, scan.ComputerModel }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
         foreach (var driver in scan.Drivers) DriverInventory.Add(driver);
-        foreach (var problem in scan.Problems) DriverProblems.Add(problem);
+        foreach (var problem in scan.Problems)
+        {
+            var installed = scan.Drivers.FirstOrDefault(x =>
+                x.DeviceId.Equals(problem.DeviceId, StringComparison.OrdinalIgnoreCase));
+            problem.InstalledInfName = installed?.InfName ?? "";
+            problem.InstalledDriverSigned = installed?.IsSigned == true;
+            DriverProblems.Add(problem);
+        }
         foreach (var tool in scan.VendorTools) VendorTools.Add(tool);
         RefreshDriverInventoryView();
         NotifyCounts();
@@ -1018,7 +1055,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         if (runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
             return $"{runResult.Name} non è applicabile a questo PC secondo WinGet. " +
-                   $"La segnalazione da {fromVersion} a {toVersion} è stata rimossa. Dettaglio: {technicalDetail}";
+                   $"La segnalazione da {fromVersion} a {toVersion} resterà esclusa finché una delle due versioni non cambia. " +
+                   $"Dettaglio: {technicalDetail}";
 
         if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
             return $"{runResult.Name} richiede un aggiornamento manuale perché il pacchetto installato e quello nuovo " +

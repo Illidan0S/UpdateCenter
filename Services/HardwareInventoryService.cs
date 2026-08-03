@@ -27,7 +27,7 @@ public sealed class HardwareInventoryService
             "$drivers=@(Get-CimInstance Win32_PnPSignedDriver | Where-Object {$_.DeviceName} | ForEach-Object {" +
             "$ids=$pnp[$_.DeviceID];[pscustomobject]@{DeviceName=$_.DeviceName;Manufacturer=$_.Manufacturer;" +
             "DriverProviderName=$_.DriverProviderName;DriverVersion=$_.DriverVersion;DriverDate=$_.DriverDate;" +
-            "DeviceClass=$_.DeviceClass;DeviceID=$_.DeviceID;InfName=$_.InfName;" +
+            "DeviceClass=$_.DeviceClass;DeviceID=$_.DeviceID;InfName=$_.InfName;IsSigned=[bool]$_.IsSigned;" +
             "HardwareIds=@($ids.HardwareIds);CompatibleIds=@($ids.CompatibleIds)}});" +
             "$problems=@($pnpRows | Where-Object {$_.ConfigManagerErrorCode -ne 0 -and $_.ConfigManagerErrorCode -ne 45} | " +
             "ForEach-Object {[pscustomobject]@{DeviceName=$_.Name;Manufacturer=$_.Manufacturer;" +
@@ -38,7 +38,7 @@ public sealed class HardwareInventoryService
             "powershell.exe",
             ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
             cancellationToken,
-            TimeSpan.FromMinutes(3));
+            TimeSpan.FromMinutes(3)).ConfigureAwait(false);
 
         if (!result.Success || string.IsNullOrWhiteSpace(result.StandardOutput))
             throw new InvalidOperationException("Impossibile leggere l'inventario dei driver installati.");
@@ -129,6 +129,7 @@ public sealed class HardwareInventoryService
             HardwareIds = ReadStringArray(element, "HardwareIds"),
             CompatibleIds = ReadStringArray(element, "CompatibleIds"),
             InfName = ReadProperty(element, "InfName"),
+            IsSigned = ReadBool(element, "IsSigned"),
             IsProcessorOrChipset = ChipsetTerms.Any(term => combined.Contains(term, StringComparison.OrdinalIgnoreCase))
         });
     }
@@ -431,6 +432,13 @@ public sealed class HardwareInventoryService
     {
         if (!element.TryGetProperty(name, out var value)) return 0;
         return value.TryGetInt32(out var number) ? number : int.TryParse(value.ToString(), out number) ? number : 0;
+    }
+
+    private static bool ReadBool(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value)) return false;
+        return value.ValueKind == JsonValueKind.True ||
+               bool.TryParse(value.ToString(), out var parsed) && parsed;
     }
 
     private static List<string> ReadStringArray(JsonElement element, string name)

@@ -117,6 +117,8 @@ public static class ElevatedUpdateRunner
                 ? WinGetService.Install(item, silent)
                 : WinGetService.Upgrade(item, silent);
             var outcome = WinGetService.ClassifyOutcome(result);
+            if (outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
+                WinGetApplicabilityStore.RecordNotApplicable(item);
             var output = string.Join(" ", (result.StandardOutput + "\n" + result.StandardError)
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
@@ -141,7 +143,10 @@ public static class ElevatedUpdateRunner
                     UpdateOutcomes.Completed => alreadyCurrentMessage ?? (isFreshInstall
                         ? "Runtime installato con WinGet."
                         : "Software aggiornato con WinGet."),
-                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non è applicabile a questo PC. La voce verrà rimossa fino alla prossima scansione.",
+                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non è applicabile a questo PC. " +
+                                                    "L'elemento resta visibile come aggiornamento manuale in questa scansione e verrà escluso dalle successive " +
+                                                    "finché non cambia la versione installata o quella proposta. Usa l'aggiornamento interno del programma " +
+                                                    "o il sito ufficiale del produttore.",
                     UpdateOutcomes.ManualRequired => "Questo pacchetto non supporta l'aggiornamento automatico con la tecnologia di installazione corrente. Usa l'installer ufficiale del produttore.",
                     _ => string.IsNullOrWhiteSpace(output)
                         ? $"WinGet ha restituito il codice {result.ExitCode}."
