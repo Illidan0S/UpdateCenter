@@ -51,6 +51,10 @@ if (!settings.CheckAppUpdatesAutomatically)
     throw new InvalidOperationException("Il controllo automatico deve essere attivo per impostazione predefinita.");
 if (!settings.NotifyWhenUpdatesAreAvailable || settings.LanguageMode != "it" || settings.AutomaticScanInterval != "Off")
     throw new InvalidOperationException("Le nuove preferenze predefinite non sono valide.");
+var legacyIntervalSettings = new AppSettings { AutomaticScanInterval = "Ogni giorno" };
+if (!legacyIntervalSettings.ApplyMigrations() || legacyIntervalSettings.AutomaticScanInterval != "Daily" ||
+    AppSettings.NormalizeAutomaticScanInterval("Weekly") != "Weekly")
+    throw new InvalidOperationException("La frequenza delle scansioni automatiche non viene normalizzata correttamente.");
 
 var smallScale = TypographyOptions.ScaleFor("Piccola");
 var mediumScale = TypographyOptions.ScaleFor("Media");

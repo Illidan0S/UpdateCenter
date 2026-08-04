@@ -400,6 +400,12 @@ public partial class MainWindow : Window
         ApplyResponsiveLayout();
     }
 
+    private void AutomaticScanInterval_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded || e.AddedItems.Count == 0) return;
+        _viewModel.SaveSettings();
+    }
+
     private void UpdateFontSizeChoices()
     {
         var mode = TypographyService.Normalize(_viewModel.Settings.FontSizeMode);

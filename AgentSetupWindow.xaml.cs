@@ -1,4 +1,5 @@
 using System.Windows;
+using UpdateCenter.Services;
 using UpdateCenter.ViewModels;
 
 namespace UpdateCenter;
@@ -11,7 +12,12 @@ public partial class AgentSetupWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel;
-        Loaded += async (_, _) => await _viewModel.RefreshAsync();
+        Loaded += async (_, _) =>
+        {
+            Title = $"{LocalizationService.Translate("Configura questo PC")} · Update Center";
+            LocalizationService.ApplyTo(this);
+            await _viewModel.RefreshAsync();
+        };
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await _viewModel.RefreshAsync();
@@ -24,8 +30,8 @@ public partial class AgentSetupWindow : Window
     private async void Disable_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(
-                "Disabilitare la gestione di rete su questo PC? Le regole firewall private verranno rimosse.",
-                "Disabilita gestione rete",
+                LocalizationService.Text("Disabilitare la gestione di rete su questo PC? Le regole firewall private verranno rimosse.", "Disable network management on this PC? Private firewall rules will be removed."),
+                LocalizationService.Text("Disabilita gestione rete", "Disable network management"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question) == MessageBoxResult.Yes)
             await _viewModel.DisableAsync();
@@ -34,8 +40,8 @@ public partial class AgentSetupWindow : Window
     private async void Revoke_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(
-                "Revocare il PC principale attuale? Non potrà più controllare questo dispositivo.",
-                "Revoca PC principale",
+                LocalizationService.Text("Revocare il PC principale attuale? Non potrà più controllare questo dispositivo.", "Revoke the current controller PC? It will no longer be able to control this device."),
+                LocalizationService.Text("Revoca PC principale", "Revoke controller PC"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) == MessageBoxResult.Yes)
             await _viewModel.RevokeControllerAsync();
@@ -44,8 +50,8 @@ public partial class AgentSetupWindow : Window
     private async void Uninstall_Click(object sender, RoutedEventArgs e)
     {
         if (MessageBox.Show(
-                "Disinstallare completamente il componente di rete?\n\nVerranno rimossi servizio, autorizzazioni, regole firewall, file e dati del componente. L'app Update Center resterà installata.",
-                "Disinstalla componente di rete",
+                LocalizationService.Text("Disinstallare completamente il componente di rete?\n\nVerranno rimossi servizio, autorizzazioni, regole firewall, file e dati del componente. L'app Update Center resterà installata.", "Uninstall the network component completely?\n\nThe service, authorizations, firewall rules, files, and component data will be removed. The Update Center app will remain installed."),
+                LocalizationService.Text("Disinstalla componente di rete", "Uninstall network component"),
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning) == MessageBoxResult.Yes)
             await _viewModel.UninstallAsync();

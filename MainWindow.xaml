@@ -2068,7 +2068,8 @@
                                     <TextBlock Text="Avvio e scansioni automatiche" FontSize="{DynamicResource FontSize17}" FontWeight="SemiBold" Margin="0,0,0,16" />
                                     <CheckBox IsChecked="{Binding Settings.ScanAtStartup}" Content="Avvia automaticamente la scansione all'apertura" />
                                     <TextBlock Text="Frequenza scansione" FontWeight="SemiBold" Margin="0,17,0,8" />
-                                    <ComboBox SelectedValue="{Binding Settings.AutomaticScanInterval, Mode=TwoWay}"
+                                    <ComboBox SelectedValue="{Binding Settings.AutomaticScanInterval, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                              SelectionChanged="AutomaticScanInterval_SelectionChanged"
                                               SelectedValuePath="Tag" Width="220" HorizontalAlignment="Left">
                                         <ComboBoxItem Content="Disattivata" Tag="Off" />
                                         <ComboBoxItem Content="Ogni giorno" Tag="Daily" />
