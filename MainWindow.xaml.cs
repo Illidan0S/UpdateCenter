@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -18,17 +19,19 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _hardwareTimer;
     private readonly DispatcherTimer _historyHoverTimer;
     private readonly DispatcherTimer _scheduledScanTimer;
+    private readonly DispatcherTimer _networkStatusTimer;
     private System.Windows.Forms.NotifyIcon? _notifyIcon;
     private HistoryEntry? _pendingHistoryEntry;
     private FrameworkElement? _pendingHistoryElement;
     private bool _appUpdateDialogOpen;
     private bool _scheduledScanRunning;
+    private bool _driverRepairInProgress;
     private UpdateProgressWindow? _activeProgressWindow;
 
     public MainWindow()
     {
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.0.8"}";
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.1.0"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -37,6 +40,8 @@ public partial class MainWindow : Window
         _historyHoverTimer.Tick += HistoryHoverTimer_Tick;
         _scheduledScanTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         _scheduledScanTimer.Tick += ScheduledScanTimer_Tick;
+        _networkStatusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _networkStatusTimer.Tick += async (_, _) => await _viewModel.Network.RefreshNetworkPageStatusAsync();
         HistoryDetailPopup.CustomPopupPlacementCallback = PlaceHistoryDetailPopup;
         StateChanged += (_, _) => WindowBorder.CornerRadius = WindowState == WindowState.Maximized
             ? new CornerRadius(0)
@@ -48,6 +53,8 @@ public partial class MainWindow : Window
             _hardwareTimer.Stop();
             _historyHoverTimer.Stop();
             _scheduledScanTimer.Stop();
+            _networkStatusTimer.Stop();
+            _viewModel.Network.Dispose();
             if (_notifyIcon is not null)
             {
                 _notifyIcon.Visible = false;
@@ -101,8 +108,14 @@ public partial class MainWindow : Window
         ShowPage(SystemInfoPage, "Hardware");
         await _viewModel.LoadHardwareOverviewAsync();
     }
+
     private void HardwareNav_Click(object sender, RoutedEventArgs e) => ShowPage(HardwarePage, "Driver e chipset");
     private void HistoryNav_Click(object sender, RoutedEventArgs e) => ShowPage(HistoryPage, "Cronologia");
+    private async void NetworkNav_Click(object sender, RoutedEventArgs e)
+    {
+        ShowPage(NetworkPage, "Gestione rete");
+        await _viewModel.Network.RefreshNetworkPageStatusAsync();
+    }
     private void SettingsNav_Click(object sender, RoutedEventArgs e) => ShowPage(SettingsPage, "Impostazioni");
 
     private async void CheckForAppUpdates_Click(object sender, RoutedEventArgs e) =>
@@ -135,6 +148,7 @@ public partial class MainWindow : Window
         SystemInfoPage.Visibility = Visibility.Collapsed;
         HardwarePage.Visibility = Visibility.Collapsed;
         HistoryPage.Visibility = Visibility.Collapsed;
+        NetworkPage.Visibility = Visibility.Collapsed;
         SettingsPage.Visibility = Visibility.Collapsed;
         page.Visibility = Visibility.Visible;
         PageTitle.Text = LocalizationService.Translate(title);
@@ -142,6 +156,10 @@ public partial class MainWindow : Window
             _hardwareTimer.Start();
         else
             _hardwareTimer.Stop();
+        if (ReferenceEquals(page, NetworkPage))
+            _networkStatusTimer.Start();
+        else
+            _networkStatusTimer.Stop();
     }
 
     private async void Scan_Click(object sender, RoutedEventArgs e)
@@ -160,6 +178,127 @@ public partial class MainWindow : Window
     }
 
     private void CancelScan_Click(object sender, RoutedEventArgs e) => _viewModel.CancelScan();
+
+    private async void NetworkDiscover_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.Network.DiscoverAsync();
+    }
+
+    private async void NetworkSelectForPair_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: NetworkAgentItem agent }) return;
+        if (agent.ConnectionRequestsEnabled)
+        {
+            await _viewModel.Network.RequestConnectionsAsync(agent);
+            return;
+        }
+        ShowNetworkPairingDialog(agent);
+    }
+
+    private async void NetworkRequestConnections_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.Network.RequestConnectionsAsync();
+
+    private void ShowNetworkPairingDialog(NetworkAgentItem agent)
+    {
+        var dialog = new NetworkPairingWindow(_viewModel.Network, agent) { Owner = this };
+        dialog.ShowDialog();
+    }
+
+    private async void NetworkPair_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.Network.PairAsync();
+
+    private async void NetworkStatus_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.Network.RefreshStatusAsync();
+
+    private async void NetworkScan_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.Network.StartScanAsync();
+
+    private async void NetworkScanSelected_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.Network.StartSelectedScansAsync();
+
+    private async void NetworkUpdateCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        var agent = _viewModel.Network.SelectedAgent;
+        if (agent is null) return;
+        var selected = _viewModel.Network.GetSelectedUpdatesForAgent(agent);
+        await ConfirmAndStartRemoteUpdatesAsync(selected, [agent], _viewModel.Network.StartUpdateCurrentAsync);
+    }
+
+    private async void NetworkUpdateSelected_Click(object sender, RoutedEventArgs e)
+    {
+        var selected = _viewModel.Network.GetSelectedUpdatesForConfirmation();
+        if (selected.Count == 0) return;
+        await ConfirmAndStartRemoteUpdatesAsync(
+            selected,
+            _viewModel.Network.GetAgentsForUpdates(selected),
+            _viewModel.Network.StartUpdatesSelectedAsync);
+    }
+
+    private async Task ConfirmAndStartRemoteUpdatesAsync(
+        IReadOnlyList<RemoteUpdateSelectionItem> selected,
+        IReadOnlyList<NetworkAgentItem> agents,
+        Func<Task> startUpdates)
+    {
+        if (selected.Count == 0) return;
+        var confirmation = new UpdateConfirmationWindow(selected, agents)
+        {
+            Owner = this
+        };
+        if (confirmation.ShowDialog() != true) return;
+
+        _viewModel.Network.ApplyRiskDecision(selected, includeRiskyUpdates: !confirmation.ExcludeRiskyItems);
+        if (!selected.Any(x => x.IsSelected && x.CanInstall))
+        {
+            MessageBox.Show(
+                "Dopo aver escluso gli aggiornamenti con rimozione preventiva non rimangono elementi da installare.",
+                "Gestione rete",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+        await startUpdates();
+    }
+
+    private void NetworkSelectVisibleUpdates_Click(object sender, RoutedEventArgs e) =>
+        _viewModel.Network.SelectVisibleUpdates();
+
+    private void NetworkDeselectVisibleUpdates_Click(object sender, RoutedEventArgs e) =>
+        _viewModel.Network.DeselectVisibleUpdates();
+
+    private async void NetworkCancelCurrent_Click(object sender, RoutedEventArgs e) =>
+        await _viewModel.Network.CancelCurrentAsync();
+
+    private void ConfigureThisPc_Click(object sender, RoutedEventArgs e)
+    {
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executable))
+        {
+            MessageBox.Show("Impossibile individuare l'eseguibile di Update Center.", "Gestione rete");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executable,
+                UseShellExecute = true,
+                Verb = "runas",
+                WorkingDirectory = AppContext.BaseDirectory
+            };
+            startInfo.ArgumentList.Add("--agent-setup");
+            Process.Start(startInfo);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            // L'utente ha annullato la richiesta UAC.
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Impossibile aprire la configurazione del componente di rete:\n\n{ex.Message}",
+                "Gestione rete", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
     private void SelectAll_Click(object sender, RoutedEventArgs e) => _viewModel.SetAllSelected(true);
     private void DeselectAll_Click(object sender, RoutedEventArgs e) => _viewModel.SetAllSelected(false);
 
@@ -298,12 +437,63 @@ public partial class MainWindow : Window
         var narrow = ActualWidth < 1000;
         var shortDriverLayout = ActualHeight < 680;
         var stackedUpdatesFooter = ActualWidth < 1120;
+        var stackedNetworkActions = ActualWidth < 860;
+        var stackedNetworkPageHeader = ActualWidth < 1320;
+        var stackedNetworkDeviceHeader = ActualWidth < 1280;
+        var ultraCompactNetwork = ActualWidth < 900;
+        var stackedNetworkResultTools = !ultraCompactNetwork && ActualWidth < 1500;
         var sidebarWidth = iconOnly ? 76d : narrow ? 205d : compact ? 230d : 260d;
         SidebarColumn.Width = new GridLength(sidebarWidth);
         TitleSidebarColumn.Width = new GridLength(sidebarWidth);
         ContentHost.Margin = iconOnly ? new Thickness(8, 0, 8, 8) :
             narrow ? new Thickness(10, 0, 10, 10) : new Thickness(18, 0, 18, 18);
         HomeStatusColumn.Width = new GridLength(iconOnly ? 210d : narrow ? 220d : compact ? 255d : 300d);
+        NetworkDevicesColumn.Width = new GridLength(1, GridUnitType.Star);
+        NetworkTopCardsColumnGap.Width = new GridLength(0);
+        NetworkPairingColumn.Width = new GridLength(0);
+        NetworkTopCardsRowGap.Height = new GridLength(0);
+        NetworkTopCardsSecondRow.Height = new GridLength(0);
+        Grid.SetRow(NetworkDevicesCard, 0);
+        Grid.SetColumn(NetworkDevicesCard, 0);
+        Grid.SetColumnSpan(NetworkDevicesCard, 3);
+        NetworkDevicesCard.MaxHeight = double.PositiveInfinity;
+
+        NetworkDeviceHeaderActionsRow.Height = stackedNetworkDeviceHeader ? GridLength.Auto : new GridLength(0);
+        Grid.SetRow(NetworkDeviceHeaderActions, stackedNetworkDeviceHeader ? 1 : 0);
+        Grid.SetColumn(NetworkDeviceHeaderActions, stackedNetworkDeviceHeader ? 0 : 1);
+        Grid.SetColumnSpan(NetworkDeviceHeaderActions, stackedNetworkDeviceHeader ? 2 : 1);
+        NetworkDeviceHeaderActions.Margin = stackedNetworkDeviceHeader
+            ? new Thickness(0, 10, 0, 0)
+            : new Thickness(0);
+
+        NetworkPageHeaderActionsRow.Height = stackedNetworkPageHeader ? GridLength.Auto : new GridLength(0);
+        Grid.SetRow(NetworkPageHeaderActions, stackedNetworkPageHeader ? 1 : 0);
+        Grid.SetColumn(NetworkPageHeaderActions, stackedNetworkPageHeader ? 0 : 1);
+        Grid.SetColumnSpan(NetworkPageHeaderActions, stackedNetworkPageHeader ? 2 : 1);
+        Grid.SetColumnSpan(NetworkPageHeaderTitle, stackedNetworkPageHeader ? 2 : 1);
+        NetworkPageHeaderActions.Margin = stackedNetworkPageHeader
+            ? new Thickness(0, 10, 0, 0)
+            : new Thickness(0);
+        NetworkPageHeaderActions.HorizontalAlignment = stackedNetworkPageHeader
+            ? HorizontalAlignment.Left
+            : HorizontalAlignment.Right;
+
+        NetworkActionButtonsRow.Height = stackedNetworkActions ? GridLength.Auto : new GridLength(0);
+        Grid.SetRow(NetworkActionButtons, stackedNetworkActions ? 1 : 0);
+        Grid.SetColumn(NetworkActionButtons, stackedNetworkActions ? 0 : 1);
+        Grid.SetColumnSpan(NetworkActionButtons, stackedNetworkActions ? 2 : 1);
+        NetworkActionButtons.Margin = stackedNetworkActions ? new Thickness(0, 9, 0, 0) : new Thickness(0);
+
+        NetworkResultsToolsRow.Height = stackedNetworkResultTools ? GridLength.Auto : new GridLength(0);
+        Grid.SetRow(NetworkResultsTools, stackedNetworkResultTools ? 1 : 0);
+        Grid.SetColumn(NetworkResultsTools, stackedNetworkResultTools ? 0 : 1);
+        Grid.SetColumnSpan(NetworkResultsTools, stackedNetworkResultTools ? 2 : 1);
+        NetworkResultsTools.Margin = stackedNetworkResultTools ? new Thickness(0, 10, 0, 0) : new Thickness(0);
+        NetworkActionHint.Visibility = ActualWidth < 860 ? Visibility.Collapsed : Visibility.Visible;
+        NetworkStatusBar.Visibility = ActualHeight < 740 ? Visibility.Collapsed : Visibility.Visible;
+
+        NetworkResultNameColumn.MinWidth = ActualWidth < 800 ? 150 : 170;
+        NetworkVersionsColumn.MinWidth = ActualWidth < 800 ? 180 : 200;
         UpdateFilterColumn.Width = new GridLength(iconOnly ? 130d : narrow ? 145d : 165d);
         DriverFilterColumn.Width = new GridLength(iconOnly ? 145d : narrow ? 160d : 190d);
         UpdatesFooterSecondRow.Height = stackedUpdatesFooter ? GridLength.Auto : new GridLength(0);
@@ -318,6 +508,7 @@ public partial class MainWindow : Window
         AppNameText.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         VersionBadge.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         HistoryHintBadge.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        NetworkPreviewBadge.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         DriverSummaryPanel.Visibility = compact || shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverMachineName.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverSourceDescription.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
@@ -333,6 +524,7 @@ public partial class MainWindow : Window
         SetNavigationAppearance(SystemInfoNav, iconOnly ? "▤" : $"▤   {LocalizationService.Translate("Hardware")}", iconOnly);
         SetNavigationAppearance(HardwareNav, iconOnly ? "▣" : $"▣   {LocalizationService.Translate("Driver e chipset")}", iconOnly);
         SetNavigationAppearance(HistoryNav, iconOnly ? "◷" : $"◷   {LocalizationService.Translate("Cronologia")}", iconOnly);
+        SetNavigationAppearance(NetworkNav, iconOnly ? "⌘" : $"⌘   {LocalizationService.Translate("Gestione rete")}", iconOnly);
         SetNavigationAppearance(SettingsNav, iconOnly ? "⚙" : $"⚙   {LocalizationService.Translate("Impostazioni")}", iconOnly);
     }
 
@@ -425,6 +617,81 @@ public partial class MainWindow : Window
         if (page.Visibility != Visibility.Visible || page.ScrollableHeight <= 0) return;
         page.ScrollToVerticalOffset(page.VerticalOffset - (e.Delta / 3d));
         e.Handled = true;
+    }
+
+    private async void RepairDriver_Click(object sender, RoutedEventArgs e)
+    {
+        if (_driverRepairInProgress || sender is not Button { Tag: DriverProblemItem problem } repairButton ||
+            !problem.CanManageDriverProblem)
+            return;
+
+        if (!problem.CanRepairWithInstalledDriver)
+        {
+            await RunScanFromProblemAsync(problem);
+            return;
+        }
+
+        var confirmation = MessageBox.Show(
+            this,
+            $"Update Center riapplicherà il pacchetto driver già registrato e scelto da Windows per:\n\n" +
+            $"{problem.DeviceName}\n{problem.InstalledInfName}\n\n" +
+            "Il dispositivo verrà riavviato e controllato nuovamente. Il pacchetto non verrà eliminato dal sistema. Continuare?",
+            "Riparazione driver con Windows",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (confirmation != MessageBoxResult.Yes) return;
+
+        _driverRepairInProgress = true;
+        repairButton.Content = "Riparazione in corso…";
+        repairButton.IsEnabled = false;
+        Mouse.OverrideCursor = Cursors.Wait;
+        try
+        {
+            var result = await DriverRepairService.RunElevatedAsync(
+                problem.DeviceId,
+                problem.DeviceName,
+                problem.InstalledInfName);
+            MessageBox.Show(
+                this,
+                result.Message,
+                result.Success ? "Driver riparato" : "Driver ancora da controllare",
+                MessageBoxButton.OK,
+                result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            await _viewModel.RefreshDriverDiagnosticsAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // L'utente ha annullato la richiesta amministratore.
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Riparazione non riuscita:\n\n{ex.Message}",
+                "Riparazione driver",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+        finally
+        {
+            Mouse.OverrideCursor = null;
+            repairButton.ClearValue(ContentControl.ContentProperty);
+            repairButton.ClearValue(UIElement.IsEnabledProperty);
+            _driverRepairInProgress = false;
+        }
+    }
+
+    private async Task RunScanFromProblemAsync(DriverProblemItem problem)
+    {
+        if (_viewModel.IsBusy) return;
+        MessageBox.Show(
+            $"Update Center cercherà un driver compatibile e verificato per {problem.DeviceName} tramite Windows Update e il catalogo ufficiale dei produttori.",
+            "Ricerca driver",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+        ShowPage(HomePage, "Home");
+        await _viewModel.ScanAsync();
+        ShowUpdatesNotification();
+        ShowPage(UpdatesPage, "Aggiornamenti");
     }
 
     private async void ScheduledScanTimer_Tick(object? sender, EventArgs e)

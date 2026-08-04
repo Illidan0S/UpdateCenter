@@ -147,7 +147,7 @@ jobs:
           if ($assets.Count -ne 4) {
             throw "Sono attesi quattro asset di Release, trovati: $($assets.Count)."
           }
-          gh release create $env:GITHUB_REF_NAME @assets `
+          gh release create $env:GITHUB_REF_NAME $assets `
             --repo "$env:GITHUB_REPOSITORY" `
             --title "Update Center v$env:RELEASE_VERSION" `
             --generate-notes `

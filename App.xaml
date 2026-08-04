@@ -44,6 +44,9 @@
         <SolidColorBrush x:Key="MutedTextBrush" Color="{StaticResource MutedTextColor}" />
         <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource SuccessColor}" />
         <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}" />
+        <SolidColorBrush x:Key="DriverTypeBrush" Color="#2563EB" />
+        <SolidColorBrush x:Key="SoftwareTypeBrush" Color="#7C3AED" />
+        <SolidColorBrush x:Key="RuntimeTypeBrush" Color="#D97706" />
         <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
         <SolidColorBrush x:Key="InputBrush" Color="#FFFFFF" />
         <SolidColorBrush x:Key="AlternateRowBrush" Color="#FAFBFC" />
