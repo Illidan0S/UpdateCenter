@@ -852,9 +852,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void SaveSettings()
     {
         Settings.LanguageMode = LocalizationService.Normalize(Settings.LanguageMode);
-        Settings.AutomaticScanInterval = Settings.AutomaticScanInterval is "Daily" or "Weekly"
-            ? Settings.AutomaticScanInterval
-            : "Off";
+        Settings.AutomaticScanInterval = AppSettings.NormalizeAutomaticScanInterval(Settings.AutomaticScanInterval);
         JsonStorage.SaveSettings(Settings);
     }
 

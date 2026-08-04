@@ -22,6 +22,12 @@ public sealed class AppSettings
     public bool ApplyMigrations()
     {
         var changed = false;
+        var normalizedInterval = NormalizeAutomaticScanInterval(AutomaticScanInterval);
+        if (!string.Equals(AutomaticScanInterval, normalizedInterval, StringComparison.Ordinal))
+        {
+            AutomaticScanInterval = normalizedInterval;
+            changed = true;
+        }
         if (DefaultsRevision >= CurrentDefaultsRevision) return changed;
 
         if (DefaultsRevision < 2 && FontSizeMode.Equals("Media", StringComparison.OrdinalIgnoreCase))
@@ -33,11 +39,17 @@ public sealed class AppSettings
         if (DefaultsRevision < 3)
         {
             LanguageMode = string.IsNullOrWhiteSpace(LanguageMode) ? "it" : LanguageMode;
-            AutomaticScanInterval = string.IsNullOrWhiteSpace(AutomaticScanInterval) ? "Off" : AutomaticScanInterval;
             changed = true;
         }
 
         DefaultsRevision = CurrentDefaultsRevision;
         return true;
     }
+
+    public static string NormalizeAutomaticScanInterval(string? value) => value?.Trim() switch
+    {
+        "Daily" or "Ogni giorno" => "Daily",
+        "Weekly" or "Ogni settimana" => "Weekly",
+        _ => "Off"
+    };
 }
