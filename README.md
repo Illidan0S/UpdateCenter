@@ -1,6 +1,8 @@
 # Update Center
 
-Versione pubblica attuale: **1.1.1**.
+Versione pubblica attuale: **1.1.2**.
+
+Risolto l’errore nella finestra di conferma degli aggiornamenti software: “L’associazione bidirezionale richiede Path o XPath”.
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
