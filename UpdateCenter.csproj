@@ -15,7 +15,7 @@
     <Version>1.1.2</Version>
     <AssemblyVersion>1.1.2.0</AssemblyVersion>
     <FileVersion>1.1.2.0</FileVersion>
-    <InformationalVersion>1.1.2-network-preview</InformationalVersion>
+    <InformationalVersion>1.1.2</InformationalVersion>
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Authors>Illidan0S</Authors>
