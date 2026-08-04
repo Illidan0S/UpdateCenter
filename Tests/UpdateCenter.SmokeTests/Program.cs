@@ -2,6 +2,10 @@ using UpdateCenter.Models;
 using UpdateCenter.Services;
 using System.Reflection;
 using System.Text.Json;
+using UpdateCenter.Core;
+using UpdateCenter.Contracts;
+using UpdateCenter.RemoteClient;
+using UpdateCenter.ViewModels;
 
 var parsingCases = new Dictionary<string, SemanticVersion>
 {
@@ -27,8 +31,8 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.0.8")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla build 1.0.8.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.2")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla preview 1.1.2.");
 
 var supportedUpdateTargetMethod = typeof(AppUpdateService).GetMethod(
     "IsSupportedUpdateTargetName", BindingFlags.Static | BindingFlags.NonPublic)
@@ -118,6 +122,39 @@ if (WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15002B), 
     WinGetService.ClassifyOutcome(new ProcessResult(0, "", "")) != UpdateOutcomes.Completed)
     throw new InvalidOperationException("Classificazione degli esiti WinGet non valida.");
 
+var suppressedHytale = new WinGetApplicabilitySuppression
+{
+    PackageId = "HypixelStudios.Hytale",
+    InstalledVersion = "2026.01.13-e6eb932",
+    AvailableVersion = "2026.07.29-8228f98",
+    RecordedUtc = DateTime.UtcNow
+};
+var sameHytaleUpdate = new UpdateItem
+{
+    Id = "HypixelStudios.Hytale",
+    Name = "Hytale Launcher",
+    Kind = UpdateKind.Software,
+    InstalledVersion = "2026.01.13-e6eb932",
+    AvailableVersion = "2026.07.29-8228f98"
+};
+var futureHytaleUpdate = new UpdateItem
+{
+    Id = "HypixelStudios.Hytale",
+    Name = "Hytale Launcher",
+    Kind = UpdateKind.Software,
+    InstalledVersion = "2026.01.13-e6eb932",
+    AvailableVersion = "2026.08.15-future"
+};
+if (!WinGetApplicabilityStore.Matches(suppressedHytale, sameHytaleUpdate) ||
+    WinGetApplicabilityStore.Matches(suppressedHytale, futureHytaleUpdate))
+    throw new InvalidOperationException("La quarantena WinGet non distingue correttamente una nuova versione futura.");
+if (WinGetManifestSafetyService.ParseInstallerScope("InstallerType: nullsoft\nScope: user\n") != "user")
+    throw new InvalidOperationException("L'ambito dell'installer WinGet non viene letto correttamente.");
+WinGetManifestSafetyService.ApplyScopeCompatibility(sameHytaleUpdate, "machine", "user");
+if (sameHytaleUpdate.CanInstall || sameHytaleUpdate.IsSelected ||
+    !sameHytaleUpdate.Status.Contains("manuale", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Il cambio di ambito WinGet non viene bloccato in modo sicuro.");
+
 var safeManifest = "PackageIdentifier: Example.Safe\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: install";
 var destructiveManifest = "PackageIdentifier: Example.Risky\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: uninstallPrevious";
 var deniedManifest = "PackageIdentifier: Example.Denied\nInstallers:\n- Architecture: x64\n  UpgradeBehavior: deny";
@@ -152,6 +189,89 @@ var riskySelection = new UpdateItem
 riskySelection.IsSelected = false;
 if (!riskySelection.CanInstall || riskySelection.IsSelected || riskySelection.PriorityLabel != "Conferma")
     throw new InvalidOperationException("Gli aggiornamenti rischiosi devono restare installabili ma non preselezionati.");
+
+var repairableDriver = new DriverProblemItem
+{
+    DeviceId = "PCI\\VEN_14C3&DEV_0616",
+    ErrorCode = 31,
+    InstalledInfName = "oem42.inf",
+    InstalledDriverSigned = true
+};
+var unsafeDriver = new DriverProblemItem
+{
+    DeviceId = "PCI\\VEN_14C3&DEV_0616",
+    ErrorCode = 31,
+    InstalledInfName = "..\\driver.inf",
+    InstalledDriverSigned = true
+};
+if (!repairableDriver.CanRepairWithInstalledDriver || unsafeDriver.CanRepairWithInstalledDriver)
+    throw new InvalidOperationException("La riparazione driver non limita correttamente i pacchetti OEM registrati da Windows.");
+if (PreflightService.FormatBytes(125L * 1024 * 1024) != "125 MB")
+    throw new InvalidOperationException("La dimensione dei pacchetti remoti non viene formattata correttamente.");
+
+var networkAgent = new NetworkAgentItem();
+networkAgent.Apply(new DiscoveredAgent
+{
+    AgentId = Guid.NewGuid(),
+    DisplayName = "PC test",
+    MachineName = "PC-TEST",
+    Address = "192.168.1.25",
+    ApiPort = 47382,
+    ConnectionRequestsEnabled = true
+}, isPaired: false);
+networkAgent.ConnectionRequestStatus = "Collegamento accettato";
+networkAgent.Apply(new PairedAgentRecord
+{
+    AgentId = networkAgent.AgentId,
+    DisplayName = networkAgent.DisplayName,
+    Address = networkAgent.Address,
+    ApiPort = networkAgent.ApiPort,
+    CertificateSha256 = new string('A', 64),
+    PairedUtc = DateTime.UtcNow
+});
+if (networkAgent.AssociationText != "Autorizzato" || networkAgent.ConnectionRequestStatus.Length != 0)
+    throw new InvalidOperationException("Lo stato terminale della richiesta contraddice l'autorizzazione del dispositivo.");
+networkAgent.ConnectionRequestStatus = "Collegamento accettato";
+networkAgent.MarkUnpaired(hasController: false);
+if (networkAgent.AssociationText != "Non autorizzato" || networkAgent.ConnectionRequestStatus.Length != 0)
+    throw new InvalidOperationException("La revoca non ripulisce correttamente lo stato del collegamento.");
+
+var laptopAgent = new NetworkAgentItem();
+var laptopId = Guid.NewGuid();
+laptopAgent.Apply(new DiscoveredAgent
+{
+    AgentId = laptopId,
+    DisplayName = "PORTATILE-IT",
+    MachineName = "PORTATILE-IT",
+    Address = "192.168.1.30",
+    ApiPort = 47382
+}, isPaired: false);
+laptopAgent.SetScanResults(Guid.NewGuid(), new ScanResult
+{
+    HasBattery = true,
+    IsOnBattery = true,
+    BatteryPercentage = 55,
+    SystemDriveFreeBytes = 20L * 1024 * 1024 * 1024,
+    Updates = [new RemoteUpdateItem
+    {
+        Id = "Example.RemoteRisk",
+        Name = "Aggiornamento rischioso",
+        Kind = "Software",
+        CanInstall = true,
+        RequiresRiskConfirmation = true,
+        DownloadSizeBytes = 125L * 1024 * 1024
+    }]
+});
+var remoteRisk = laptopAgent.Updates.Single();
+remoteRisk.IsSelected = true;
+var remoteSummary = RemoteUpdateConfirmationService.Build([remoteRisk], [laptopAgent]);
+if (!remoteSummary.PowerStatus.Contains("PORTATILE-IT", StringComparison.Ordinal) ||
+    !remoteSummary.PowerStatus.Contains("55%", StringComparison.Ordinal) ||
+    !remoteSummary.DiskStatus.Contains("125 MB", StringComparison.Ordinal) ||
+    !remoteSummary.DiskStatus.Contains("20 GB", StringComparison.Ordinal) ||
+    !remoteSummary.RiskItems.Single().Contains("PORTATILE-IT", StringComparison.Ordinal) ||
+    remoteSummary.Warnings.Count != 1)
+    throw new InvalidOperationException("Il riepilogo remoto non raggruppa correttamente dimensioni, portatili e rischi per PC.");
 
 var duplicateOperaRows = string.Join('\n',
     $"{"Nome",-36}{"Id",-20}{"Versione",-16}{"Disponibile",-16}Origine",
@@ -420,6 +540,12 @@ if (StorageHealthService.IsUserVisibleVolume(systemFat32Volume) ||
 var repairedHistoryText = JsonStorage.RepairLegacyEncoding("Hytale Launcher non ÃƒÂ¨ applicabile: versione piÃ¹ recente");
 if (repairedHistoryText != "Hytale Launcher non è applicabile: versione più recente")
     throw new InvalidOperationException("La riparazione della codifica nella cronologia non è valida.");
+
+if (UserMessageFormatter.FromException(new TaskCanceledException("The operation was canceled.")) !=
+        "tempo di attesa scaduto" ||
+    UserMessageFormatter.FromException(new InvalidOperationException("RateLimited: Attendi alcuni secondi.")) !=
+        "Attendi alcuni secondi.")
+    throw new InvalidOperationException("La traduzione degli errori tecnici non è valida.");
 
 var pauseController = new UpdatePauseController(Path.GetTempPath());
 pauseController.RequestPause();

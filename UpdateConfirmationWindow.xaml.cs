@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Input;
 using UpdateCenter.Models;
 using UpdateCenter.Services;
+using UpdateCenter.ViewModels;
 
 namespace UpdateCenter;
 
@@ -9,6 +10,7 @@ public partial class UpdateConfirmationWindow : Window
 {
     private readonly bool _preflightCanContinue;
     private readonly bool _requiresRiskConfirmation;
+    public bool ExcludeRiskyItems { get; private set; }
 
     public UpdateConfirmationWindow(
         IReadOnlyList<UpdateItem> items,
@@ -42,7 +44,7 @@ public partial class UpdateConfirmationWindow : Window
 
         if (_requiresRiskConfirmation)
         {
-            RiskItemsList.ItemsSource = items.Where(x => x.RequiresRiskConfirmation).ToList();
+            RiskItemsList.ItemsSource = items.Where(x => x.RequiresRiskConfirmation).Select(x => x.Name).ToList();
             RiskConfirmationPanel.Visibility = Visibility.Visible;
             if (_preflightCanContinue)
             {
@@ -65,6 +67,50 @@ public partial class UpdateConfirmationWindow : Window
         }
     }
 
+    public UpdateConfirmationWindow(
+        IReadOnlyList<RemoteUpdateSelectionItem> items,
+        IReadOnlyList<NetworkAgentItem> agents)
+    {
+        InitializeComponent();
+        _preflightCanContinue = true;
+        _requiresRiskConfirmation = items.Any(x => x.RequiresRiskConfirmation);
+        Loaded += (_, _) => LocalizationService.ApplyTo(this);
+        ItemsGrid.ItemsSource = items;
+        DeviceColumn.Visibility = Visibility.Visible;
+        DiskHeadingText.Text = "PACCHETTI / SPAZIO PER PC";
+
+        SummaryText.Text = items.Count == 1
+            ? "1 aggiornamento remoto selezionato"
+            : $"{items.Count} aggiornamenti remoti selezionati su {items.Select(x => x.AgentId).Distinct().Count()} PC";
+        ImportantCountText.Text = items.Count(x => x.IsImportant).ToString();
+        SoftwareCountText.Text = items.Count(x => x.Kind is "Software" or "Runtime").ToString();
+        DriverCountText.Text = items.Count(x => x.Kind == "Driver").ToString();
+
+        var remoteSummary = RemoteUpdateConfirmationService.Build(items, agents);
+        PowerStatusText.Text = remoteSummary.PowerStatus;
+        DiskStatusText.Text = remoteSummary.DiskStatus;
+
+        RestorePointText.Text = "Gli aggiornamenti vengono eseguiti separatamente su ogni PC. " +
+                               "Le protezioni configurate localmente restano applicate sul relativo dispositivo.";
+        FooterInfoText.Text = "L'avvio e l'avanzamento resteranno separati per ciascun PC.";
+
+        if (remoteSummary.Warnings.Count > 0)
+        {
+            WarningsList.ItemsSource = remoteSummary.Warnings;
+            WarningsPanel.Visibility = Visibility.Visible;
+        }
+
+        if (_requiresRiskConfirmation)
+        {
+            RiskItemsList.ItemsSource = remoteSummary.RiskItems;
+            RiskConfirmationPanel.Visibility = Visibility.Visible;
+            ExcludeRiskItemsButton.Visibility = Visibility.Visible;
+            ConfirmButton.IsEnabled = false;
+            ConfirmButton.Content = "Conferma il rischio";
+            FooterInfoText.Text = "Puoi includere gli elementi rischiosi oppure continuare escludendoli.";
+        }
+    }
+
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState == MouseButtonState.Pressed)
@@ -81,6 +127,11 @@ public partial class UpdateConfirmationWindow : Window
         ConfirmButton.Content = !_preflightCanContinue
             ? "Controlli non superati"
             : ConfirmButton.IsEnabled ? "Conferma e aggiorna" : "Conferma il rischio";
+    }
+    private void ExcludeRiskItems_Click(object sender, RoutedEventArgs e)
+    {
+        ExcludeRiskyItems = true;
+        DialogResult = true;
     }
     private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
 }

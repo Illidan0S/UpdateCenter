@@ -29,9 +29,30 @@ Il risultato viene scritto in `installer-dist\UpdateCenter-Setup-vVERSIONE.exe` 
 
 ```powershell
 dotnet run --project .\Tests\UpdateCenter.SmokeTests\UpdateCenter.SmokeTests.csproj --configuration Release --no-restore
+dotnet run --project .\Tests\UpdateCenter.NetworkCoreTests\UpdateCenter.NetworkCoreTests.csproj --configuration Release --no-restore
 ```
 
 I smoke test verificano, tra gli altri aspetti, versione semantica, impostazioni predefinite, classificazione dei runtime, riepilogo hardware, storage e pausa degli aggiornamenti.
+
+I test Network Core verificano il protocollo locale a messaggi limitati, il lock a operazione singola, la retention e il recupero delle operazioni dopo un riavvio.
+
+## Preview tecnica Network
+
+La gestione LAN è inclusa ma disabilitata per impostazione predefinita. Per produrre la cartella self-contained:
+
+```powershell
+.\build-network-preview.ps1
+```
+
+Il risultato viene scritto in `dist-network-preview`. Gli script inclusi sono:
+
+- `install-agent-preview.ps1`: installa il servizio senza abilitare la rete;
+- `enable-network-preview.ps1`: abilita discovery UDP e API HTTPS soltanto sul profilo firewall Privato;
+- `disable-network-preview.ps1`: chiude la rete e rimuove le due regole firewall;
+- `uninstall-agent-preview.ps1`: disabilita la rete e rimuove il servizio;
+- `UpdateCenter.NetworkConsole.exe`: strumento tecnico per discovery, pairing, stato e scansione remota.
+
+La rimozione conserva intenzionalmente binari e dati; la loro cancellazione rimane manuale.
 
 ## Struttura del progetto
 

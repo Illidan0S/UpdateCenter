@@ -28,6 +28,15 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        if (e.Args.Length == 2 &&
+            e.Args[0].Equals("--repair-driver-admin", StringComparison.OrdinalIgnoreCase))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            var exitCode = DriverRepairService.RunAdministrator(e.Args[1]);
+            Shutdown(exitCode);
+            return;
+        }
+
         base.OnStartup(e);
         DispatcherUnhandledException += (_, args) =>
         {
@@ -48,6 +57,22 @@ public partial class App : System.Windows.Application
             LocalizationService.Initialize(settings.LanguageMode);
             ThemeService.Apply(settings.ThemeMode);
             TypographyService.Apply(settings.FontSizeMode);
+            if (e.Args.Length == 2 &&
+                e.Args[0].Equals("--connection-request", StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParse(e.Args[1], out var connectionRequestId))
+            {
+                var requestWindow = new ConnectionRequestWindow(connectionRequestId);
+                MainWindow = requestWindow;
+                requestWindow.Show();
+                return;
+            }
+            if (e.Args.Length == 1 && e.Args[0].Equals("--agent-setup", StringComparison.OrdinalIgnoreCase))
+            {
+                var setupWindow = new AgentSetupWindow();
+                MainWindow = setupWindow;
+                setupWindow.Show();
+                return;
+            }
             var mainWindow = new MainWindow();
             MainWindow = mainWindow;
             mainWindow.Show();

@@ -15,6 +15,12 @@ public sealed class PreflightResult
     public bool DiskSafe { get; set; } = true;
 }
 
+public sealed record MachinePreflightSnapshot(
+    bool HasBattery,
+    bool IsOnBattery,
+    int BatteryPercentage,
+    long SystemDriveFreeBytes);
+
 public static class PreflightService
 {
     public static bool ShouldCreateRestorePoint(IReadOnlyList<UpdateItem> items, AppSettings settings) =>
@@ -106,6 +112,34 @@ public static class PreflightService
         return result;
     }
 
+    public static MachinePreflightSnapshot CaptureMachineSnapshot()
+    {
+        var hasBattery = false;
+        var isOnBattery = false;
+        var batteryPercentage = -1;
+        if (TryGetPowerStatus(out var power))
+        {
+            hasBattery = power.BatteryFlag != 128;
+            isOnBattery = hasBattery && power.ACLineStatus == 0;
+            batteryPercentage = hasBattery && power.BatteryLifePercent <= 100
+                ? power.BatteryLifePercent
+                : -1;
+        }
+
+        long freeBytes = 0;
+        try
+        {
+            var root = Path.GetPathRoot(Environment.SystemDirectory);
+            if (!string.IsNullOrWhiteSpace(root)) freeBytes = new DriveInfo(root).AvailableFreeSpace;
+        }
+        catch (Exception ex)
+        {
+            LogService.Write("Lettura dello spazio libero per il riepilogo remoto non riuscita.", ex);
+        }
+
+        return new MachinePreflightSnapshot(hasBattery, isOnBattery, batteryPercentage, freeBytes);
+    }
+
     internal static (long TotalBytes, int KnownCount, int UnknownCount) CalculatePackageSize(
         IReadOnlyList<UpdateItem> selectedItems)
     {
@@ -146,7 +180,7 @@ public static class PreflightService
         return (long)Math.Max(0, amount * multiplier);
     }
 
-    private static string FormatBytes(long bytes)
+    public static string FormatBytes(long bytes)
     {
         string[] units = ["B", "KB", "MB", "GB", "TB"];
         var value = (double)Math.Max(0, bytes);
