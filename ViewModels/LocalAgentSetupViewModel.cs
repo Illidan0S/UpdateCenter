@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Principal;
 using UpdateCenter.Contracts;
 using UpdateCenter.Core;
+using UpdateCenter.Services;
 
 namespace UpdateCenter.ViewModels;
 
@@ -61,12 +62,12 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
     }
     public string ControllerName
     {
-        get => _controllerName;
+        get => LocalizationService.Translate(_controllerName);
         private set { _controllerName = value; OnPropertyChanged(); OnPropertyChanged(nameof(ConnectionStatusText)); }
     }
     public string StatusText
     {
-        get => _statusText;
+        get => LocalizationService.Translate(_statusText);
         private set { _statusText = value; OnPropertyChanged(); }
     }
     public string PairingCode
@@ -76,7 +77,7 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
     }
     public string PairingExpiry
     {
-        get => _pairingExpiry;
+        get => LocalizationService.Translate(_pairingExpiry);
         private set { _pairingExpiry = value; OnPropertyChanged(); }
     }
     public string AgentId
@@ -86,7 +87,7 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
     }
     public string NetworkScopeName
     {
-        get => _networkScopeName;
+        get => LocalizationService.Translate(_networkScopeName);
         private set { _networkScopeName = value; OnPropertyChanged(); }
     }
     public string AllowedSubnets
@@ -125,20 +126,20 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
             OnPropertyChanged(nameof(ConnectionRequestStatusText));
         }
     }
-    public string NetworkStateText => !NetworkEnabled
+    public string NetworkStateText => LocalizationService.Translate(!NetworkEnabled
         ? "Disabilitata"
         : NetworkScopeActive
             ? "Attiva sulla rete corrente"
-            : "In pausa: il PC non è sulla rete autorizzata";
+            : "In pausa: il PC non è sulla rete autorizzata");
     public string ConnectionStatusText => HasController
-        ? $"Connesso a {ControllerName}"
-        : NetworkEnabled ? "Non collegato a un PC principale" : "Gestione remota disabilitata";
+        ? LocalizationService.IsEnglish ? $"Connected to {ControllerName}" : $"Connesso a {ControllerName}"
+        : LocalizationService.Translate(NetworkEnabled ? "Non collegato a un PC principale" : "Gestione remota disabilitata");
     public string ConnectionRequestStatusText => HasController
-        ? $"Questo PC è già collegato a {ControllerName}."
+        ? LocalizationService.IsEnglish ? $"This PC is already connected to {ControllerName}." : $"Questo PC è già collegato a {ControllerName}."
         : ConnectionRequestsEnabled
-            ? "Richieste di collegamento abilitate" +
-              (PendingConnectionRequestCount > 0 ? $" · {PendingConnectionRequestCount} in attesa" : "")
-            : "Richieste automatiche disabilitate";
+            ? LocalizationService.Text("Richieste di collegamento abilitate", "Connection requests enabled") +
+              (PendingConnectionRequestCount > 0 ? LocalizationService.IsEnglish ? $" · {PendingConnectionRequestCount} pending" : $" · {PendingConnectionRequestCount} in attesa" : "")
+            : LocalizationService.Translate("Richieste automatiche disabilitate");
     public bool CanSetup => !IsBusy && IsAdministrator && SetupFilesAvailable;
     public bool CanRefresh => !IsBusy;
     public bool CanGenerateCode => !IsBusy && IsAdministrator && AgentAvailable && NetworkEnabled && NetworkScopeActive && !HasController;
