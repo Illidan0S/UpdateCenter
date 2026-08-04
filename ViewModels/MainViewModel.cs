@@ -864,6 +864,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         CurrentItemText = LocalizationService.Translate(CurrentItemText);
         AppUpdateStatus = LocalizationService.Translate(AppUpdateStatus);
         foreach (var item in Updates) item.RefreshLocalizedProperties();
+        Network.NotifyLanguageChanged();
         OnPropertyChanged(nameof(LastScanLabel));
         OnPropertyChanged(nameof(HomeScanSummary));
         OnPropertyChanged(nameof(LastAppUpdateCheckLabel));

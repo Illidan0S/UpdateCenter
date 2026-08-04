@@ -63,12 +63,12 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
     }
     public string LocalConnectionStateText
     {
-        get => _localConnectionStateText;
+        get => LocalizationService.Translate(_localConnectionStateText);
         private set { if (_localConnectionStateText == value) return; _localConnectionStateText = value; OnPropertyChanged(); }
     }
     public string LocalConnectionDetailText
     {
-        get => _localConnectionDetailText;
+        get => LocalizationService.Translate(_localConnectionDetailText);
         private set { if (_localConnectionDetailText == value) return; _localConnectionDetailText = value; OnPropertyChanged(); }
     }
 
@@ -111,7 +111,7 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
 
     public string StatusText
     {
-        get => _statusText;
+        get => LocalizationService.Translate(_statusText);
         private set { _statusText = value; OnPropertyChanged(); }
     }
 
@@ -153,13 +153,13 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
 
     public string RemoteState
     {
-        get => _remoteState;
+        get => LocalizationService.Translate(_remoteState);
         private set { _remoteState = value; OnPropertyChanged(); }
     }
 
     public string ScanSummary
     {
-        get => _scanSummary;
+        get => LocalizationService.Translate(_scanSummary);
         private set { _scanSummary = value; OnPropertyChanged(); }
     }
 
@@ -192,26 +192,26 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
     public int SelectedComputerCount => GetScanTargets().Count;
     public string ScanActionText => SelectedComputerCount switch
     {
-        0 => "Scansiona",
-        1 => "Scansiona 1 PC",
-        var count => $"Scansiona {count} PC"
+        0 => LocalizationService.Text("Scansiona", "Scan"),
+        1 => LocalizationService.Text("Scansiona 1 PC", "Scan 1 PC"),
+        var count => LocalizationService.IsEnglish ? $"Scan {count} PCs" : $"Scansiona {count} PC"
     };
     public int SelectedUpdateCount => GetVisibleSelectedUpdates().Count;
     public int UpdateComputerCount => GetVisibleSelectedUpdates().Select(x => x.AgentId).Distinct().Count();
-    public string UpdateActionText => "Aggiorna elementi selezionati";
+    public string UpdateActionText => LocalizationService.Translate("Aggiorna elementi selezionati");
     public int ConnectionRequestTargetCount => GetConnectionRequestTargets().Count;
     public string ConnectionRequestActionText => ConnectionRequestTargetCount switch
     {
-        0 => "Richiedi collegamento",
-        1 => "Richiedi collegamento",
-        var count => $"Richiedi a {count} PC"
+        0 => LocalizationService.Translate("Richiedi collegamento"),
+        1 => LocalizationService.Translate("Richiedi collegamento"),
+        var count => LocalizationService.IsEnglish ? $"Request from {count} PCs" : $"Richiedi a {count} PC"
     };
     public string AssociationPanelTitle => SelectedAgent?.IsPaired == true
-        ? "Connessione sicura"
-        : "Associazione sicura";
+        ? LocalizationService.Translate("Connessione sicura")
+        : LocalizationService.Translate("Associazione sicura");
     public string AssociationPanelDescription => SelectedAgent?.IsPaired == true
-        ? "Il dispositivo evidenziato ha autorizzato questo PC principale."
-        : "Inserisci il codice temporaneo mostrato sul PC che vuoi associare.";
+        ? LocalizationService.Text("Il dispositivo evidenziato ha autorizzato questo PC principale.", "The highlighted device authorized this controller PC.")
+        : LocalizationService.Text("Inserisci il codice temporaneo mostrato sul PC che vuoi associare.", "Enter the temporary code shown on the PC you want to pair.");
 
     public bool CanDiscover => !IsBusy;
     public bool CanRequestConnections => !IsBusy && ConnectionRequestTargetCount > 0;
@@ -822,6 +822,23 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         if (ReferenceEquals(agent, SelectedAgent)) LoadSelectedResults();
     }
 
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(LocalConnectionStateText));
+        OnPropertyChanged(nameof(LocalConnectionDetailText));
+        OnPropertyChanged(nameof(RemoteState));
+        OnPropertyChanged(nameof(ScanSummary));
+        OnPropertyChanged(nameof(ScanActionText));
+        OnPropertyChanged(nameof(UpdateActionText));
+        OnPropertyChanged(nameof(ConnectionRequestActionText));
+        OnPropertyChanged(nameof(AssociationPanelTitle));
+        OnPropertyChanged(nameof(AssociationPanelDescription));
+        OnPropertyChanged(nameof(SelectedResultScope));
+        foreach (var agent in Agents)
+            agent.NotifyLanguageChanged();
+    }
+
     public void Dispose()
     {
         _lifetime.Cancel();
@@ -1145,9 +1162,9 @@ public sealed class NetworkAgentItem : INotifyPropertyChanged
         }
     }
     public bool IsSelected { get => _isSelected; set => Set(ref _isSelected, value); }
-    public string ConnectionState { get => _connectionState; set => Set(ref _connectionState, value); }
+    public string ConnectionState { get => LocalizationService.Translate(_connectionState); set => Set(ref _connectionState, value); }
     public string LastScanText { get => _lastScanText; set => Set(ref _lastScanText, value); }
-    public string OperationStatus { get => _operationStatus; set => Set(ref _operationStatus, value); }
+    public string OperationStatus { get => LocalizationService.Translate(_operationStatus); set => Set(ref _operationStatus, value); }
     public double Progress { get => _progress; set => Set(ref _progress, Math.Clamp(value, 0, 100)); }
     public Guid ActiveOperationId
     {
@@ -1174,14 +1191,24 @@ public sealed class NetworkAgentItem : INotifyPropertyChanged
     public string Endpoint => $"{Address}:{ApiPort}";
     public bool CanRequestConnection => !IsPaired && !HasController && ConnectionRequestsEnabled && !ConnectionRequestInProgress;
     public bool CanStartConnectionAction => !IsPaired && !HasController && !ConnectionRequestInProgress;
-    public string ConnectionActionText => ConnectionRequestInProgress ? "In attesa" : ConnectionRequestsEnabled ? "Richiedi" : "Codice";
-    public string AssociationText => IsPaired
+    public string ConnectionActionText => LocalizationService.Translate(ConnectionRequestInProgress ? "In attesa" : ConnectionRequestsEnabled ? "Richiedi" : "Codice");
+    public string AssociationText => LocalizationService.Translate(IsPaired
         ? "Autorizzato"
         : HasController
             ? "Collegato a un altro PC"
             : !string.IsNullOrWhiteSpace(ConnectionRequestStatus)
                 ? ConnectionRequestStatus
-                : ConnectionRequestsEnabled ? "Pronto a collegarsi" : "Non autorizzato";
+                : ConnectionRequestsEnabled ? "Pronto a collegarsi" : "Non autorizzato");
+
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(ConnectionState));
+        OnPropertyChanged(nameof(OperationStatus));
+        OnPropertyChanged(nameof(ConnectionActionText));
+        OnPropertyChanged(nameof(AssociationText));
+        foreach (var update in Updates)
+            update.NotifyLanguageChanged();
+    }
 
     public void Apply(DiscoveredAgent agent, bool isPaired)
     {
@@ -1381,7 +1408,7 @@ public sealed class RemoteUpdateSelectionItem : INotifyPropertyChanged
     public string DownloadSizeLabel => DownloadSizeBytes > 0
         ? PreflightService.FormatBytes(DownloadSizeBytes)
         : "Non dichiarata";
-    public string PriorityLabel => RequiresRiskConfirmation
+    public string PriorityLabel => LocalizationService.Translate(RequiresRiskConfirmation
         ? "Conferma"
         : SourceItem.HasUnverifiedInstallerMetadata
             ? "Verifica"
@@ -1389,7 +1416,7 @@ public sealed class RemoteUpdateSelectionItem : INotifyPropertyChanged
                 ? "Solo verifica"
                 : IsImportant
                     ? "Importante"
-                    : IsOptional ? "Facoltativo" : "Standard";
+                    : IsOptional ? "Facoltativo" : "Standard");
     public string PriorityDescription => RequiresRiskConfirmation
         ? "L'installer può rimuovere la versione funzionante prima di installare quella nuova."
         : IsImportant
@@ -1400,7 +1427,7 @@ public sealed class RemoteUpdateSelectionItem : INotifyPropertyChanged
     public string RestartLabel => RequiresRestart ? "Sì" : "No";
     public bool CanInstall => SourceItem.CanInstall && _deviceAuthorized;
     public bool RequiresRiskConfirmation => SourceItem.RequiresRiskConfirmation;
-    public string RiskLabel => RequiresRiskConfirmation ? "Richiesta" : "—";
+    public string RiskLabel => RequiresRiskConfirmation ? LocalizationService.Translate("Richiesta") : "—";
     public bool IsSelected
     {
         get => _isSelected;
@@ -1417,8 +1444,15 @@ public sealed class RemoteUpdateSelectionItem : INotifyPropertyChanged
         get => _riskConfirmed;
         set { if (_riskConfirmed == value) return; _riskConfirmed = value; OnPropertyChanged(); }
     }
-    public string Status { get => _status; set { if (_status == value) return; _status = value; OnPropertyChanged(); } }
+    public string Status { get => LocalizationService.Translate(_status); set { if (_status == value) return; _status = value; OnPropertyChanged(); } }
     public string ResultMessage { get => _resultMessage; set { if (_resultMessage == value) return; _resultMessage = value; OnPropertyChanged(); } }
+
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(PriorityLabel));
+        OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(RiskLabel));
+    }
 
     public void MarkDeviceDisconnected()
     {

@@ -1,6 +1,8 @@
 # Update Center
 
-Versione pubblica attuale: **1.1.2**.
+Versione pubblica attuale: **1.1.3**.
+
+Completata la traduzione inglese della pagina Gestione rete.
 
 Risolto l’errore nella finestra di conferma degli aggiornamenti software: “L’associazione bidirezionale richiede Path o XPath”.
 

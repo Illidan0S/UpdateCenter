@@ -31,8 +31,8 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.2")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla preview 1.1.2.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.3")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla preview 1.1.3.");
 
 var supportedUpdateTargetMethod = typeof(AppUpdateService).GetMethod(
     "IsSupportedUpdateTargetName", BindingFlags.Static | BindingFlags.NonPublic)
