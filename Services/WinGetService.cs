@@ -115,7 +115,7 @@ public sealed class WinGetService
         };
         if (silent) arguments.Add("--silent");
         return ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(45)).GetAwaiter().GetResult();
+            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
     }
 
     public static ProcessResult Upgrade(PlanItem item, bool silent)
@@ -289,18 +289,131 @@ public sealed class WinGetService
         }
 
         return ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(45)).GetAwaiter().GetResult();
+            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
     }
 
-    private static (ProcessResult Result, List<WinGetPackageRow> Rows) QueryInstalled(string selector, string value)
+    private static (ProcessResult Result, List<WinGetPackageRow> Rows) QueryInstalled(
+        string selector, string value, TimeSpan? timeout = null)
     {
         var arguments = new[]
         {
             "list", selector, value, "--exact", "--accept-source-agreements", "--disable-interactivity", "--nowarn"
         };
         var result = ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
+            "winget.exe", arguments, CancellationToken.None, timeout ?? TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
         return (result, ParsePackageRows(result.StandardOutput + Environment.NewLine + result.StandardError));
+    }
+
+    internal static UpdateVerificationResult VerifyInstallation(
+        PlanItem item,
+        Func<string, string, (ProcessResult Result, List<WinGetPackageRow> Rows)>? queryInstalled = null,
+        int maxAttempts = 3,
+        Action<TimeSpan>? waitBeforeRetry = null)
+    {
+        if (!IsSafePackageId(item.Id))
+        {
+            return new UpdateVerificationResult
+            {
+                IsDefinitive = true,
+                Status = UpdateVerificationStatuses.Failed,
+                Message = "Identificativo WinGet non valido durante la verifica post-installazione.",
+                Diagnostics = $"PackageId rifiutato: {item.Id}"
+            };
+        }
+
+        queryInstalled ??= (selector, value) =>
+            QueryInstalled(selector, value, TimeSpan.FromSeconds(10));
+        waitBeforeRetry ??= static delay => Thread.Sleep(delay);
+        maxAttempts = Math.Clamp(maxAttempts, 1, 5);
+        var diagnostics = new List<string>();
+        UpdateVerificationResult? latest = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                var installed = queryInstalled("--id", item.Id);
+                latest = EvaluateInstalledQuery(item, installed.Result, installed.Rows);
+                diagnostics.Add(
+                    $"Tentativo {attempt}/{maxAttempts}: code={installed.Result.ExitCode}; " +
+                    $"pid={installed.Result.ProcessId?.ToString() ?? "n/d"}; " +
+                    $"duration={installed.Result.Duration?.ToString() ?? "n/d"}; " +
+                    $"command={installed.Result.CommandLine}; result={latest.Status}.");
+            }
+            catch (Exception ex)
+            {
+                latest = new UpdateVerificationResult
+                {
+                    IsDefinitive = false,
+                    Status = UpdateVerificationStatuses.Unavailable,
+                    Message = "Verifica post-installazione non disponibile.",
+                    Diagnostics = ex.ToString()
+                };
+                diagnostics.Add($"Tentativo {attempt}/{maxAttempts}: eccezione={ex.Message}");
+            }
+
+            if (latest.Verified)
+                break;
+            if (attempt < maxAttempts)
+                waitBeforeRetry(TimeSpan.FromSeconds(attempt * 3));
+        }
+
+        latest ??= new UpdateVerificationResult
+        {
+            IsDefinitive = false,
+            Status = UpdateVerificationStatuses.Unavailable,
+            Message = "Verifica post-installazione non disponibile."
+        };
+        latest.Diagnostics = string.Join(Environment.NewLine, diagnostics) +
+                             (string.IsNullOrWhiteSpace(latest.Diagnostics)
+                                 ? ""
+                                 : Environment.NewLine + latest.Diagnostics);
+        return latest;
+    }
+
+    private static UpdateVerificationResult EvaluateInstalledQuery(
+        PlanItem item,
+        ProcessResult result,
+        IReadOnlyList<WinGetPackageRow> rows)
+    {
+        if (!result.Success)
+        {
+            var packageMissing = IsInstalledPackageMatchFailure(result);
+            return new UpdateVerificationResult
+            {
+                IsDefinitive = packageMissing,
+                Status = packageMissing
+                    ? UpdateVerificationStatuses.Failed
+                    : UpdateVerificationStatuses.Unavailable,
+                Message = packageMissing
+                    ? "Il pacchetto non risulta installato dopo l'operazione."
+                    : "WinGet non ha permesso di verificare lo stato installato dopo l'operazione."
+            };
+        }
+
+        var row = rows.FirstOrDefault(x =>
+            x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+        {
+            return new UpdateVerificationResult
+            {
+                IsDefinitive = true,
+                Status = UpdateVerificationStatuses.Failed,
+                Message = "Il pacchetto non risulta installato dopo l'operazione."
+            };
+        }
+
+        var targetHasVersion = !string.IsNullOrWhiteSpace(item.AvailableVersion) &&
+                               item.AvailableVersion.Any(char.IsDigit);
+        var verified = !targetHasVersion || IsVersionAtLeast(row.InstalledVersion, item.AvailableVersion);
+        return new UpdateVerificationResult
+        {
+            IsDefinitive = true,
+            Verified = verified,
+            Status = verified ? UpdateVerificationStatuses.Verified : UpdateVerificationStatuses.Failed,
+            Message = verified
+                ? $"Versione installata verificata: {row.InstalledVersion}."
+                : $"La versione installata ({row.InstalledVersion}) non raggiunge quella attesa ({item.AvailableVersion})."
+        };
     }
 
     private static List<string> BuildScanArguments(bool includeUnknown)
@@ -335,6 +448,19 @@ public sealed class WinGetService
         _ => result.Success ? UpdateOutcomes.Completed : UpdateOutcomes.Failed
     };
 
+    internal static bool RequiresRestart(ProcessResult result)
+    {
+        if (result.ExitCode is 1641 or 3010)
+            return true;
+        if (!result.Success)
+            return false;
+        var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
+        return output.Contains("restart required", StringComparison.OrdinalIgnoreCase) ||
+               output.Contains("reboot required", StringComparison.OrdinalIgnoreCase) ||
+               output.Contains("riavvio richiesto", StringComparison.OrdinalIgnoreCase) ||
+               output.Contains("riavvio necessario", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsVersionAtLeast(string installed, string target)
     {
         if (string.IsNullOrWhiteSpace(installed) || string.IsNullOrWhiteSpace(target) ||
@@ -364,7 +490,16 @@ public sealed class WinGetService
             if (!string.IsNullOrWhiteSpace(attempt.StandardError))
                 errors.AppendLine($"--- Tentativo {index + 1} ---\n{attempt.StandardError.Trim()}");
         }
-        return new ProcessResult(exitCode, output.ToString(), errors.ToString(), commands.ToString().Trim());
+        var processId = attempts.LastOrDefault(x => x.ProcessId.HasValue)?.ProcessId;
+        var duration = attempts.Where(x => x.Duration.HasValue)
+            .Aggregate(TimeSpan.Zero, (total, attempt) => total + attempt.Duration!.Value);
+        return new ProcessResult(
+            exitCode,
+            output.ToString(),
+            errors.ToString(),
+            commands.ToString().Trim(),
+            processId,
+            duration == TimeSpan.Zero ? null : duration);
     }
 
     private static int FindHeader(IReadOnlyList<string> headers, params string[] candidates)

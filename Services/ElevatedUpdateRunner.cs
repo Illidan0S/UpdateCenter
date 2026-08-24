@@ -13,6 +13,7 @@ public static class ElevatedUpdateRunner
 
         UpdatePlan? plan = null;
         UpdateRunStatus? status = null;
+        RunnerStatusPublisher? publisher = null;
         try
         {
             ValidatePlanPath(planPath);
@@ -28,40 +29,44 @@ public static class ElevatedUpdateRunner
                 Message = "Preparazione aggiornamenti…",
                 RestorePointRequested = plan.CreateRestorePoint
             };
-            WriteStatus(plan.StatusFile, status);
+            publisher = new RunnerStatusPublisher(plan.StatusFile, status);
 
             if (requireAdministrator && !IsAdministrator())
                 throw new UnauthorizedAccessException("I privilegi di amministratore non sono stati concessi.");
 
             if (plan.CreateRestorePoint)
             {
-                status.Message = "Creazione del punto di ripristino…";
-                WriteStatus(plan.StatusFile, status);
-                status.RestorePointCreated = TryCreateRestorePoint(out var restoreMessage);
-                status.Message = restoreMessage;
-                WriteStatus(plan.StatusFile, status);
+                publisher.Update(current =>
+                {
+                    current.Phase = "restore-point";
+                    current.Message = "Creazione del punto di ripristino…";
+                }, markProgress: true);
+                var restorePointCreated = TryCreateRestorePoint(out var restoreMessage);
+                publisher.Update(current =>
+                {
+                    current.RestorePointCreated = restorePointCreated;
+                    current.Message = restoreMessage;
+                }, markProgress: true);
             }
 
             for (var index = 0; index < plan.Items.Count; index++)
             {
-                WaitWhilePaused(plan, status);
+                WaitWhilePaused(plan, publisher);
                 var item = plan.Items[index];
-                status.CurrentIndex = index;
-                status.CurrentName = item.Name;
-                status.Phase = "Preparazione";
-                status.CurrentItemProgress = 1;
-                status.LastHeartbeatUtc = DateTime.UtcNow;
-                status.Message = $"Aggiornamento di {item.Name}…";
-                WriteStatus(plan.StatusFile, status);
-
-                void ReportItemProgress(int percent, string message)
+                publisher.Update(current =>
                 {
-                    status.CurrentItemProgress = Math.Clamp(percent, 1, 99);
-                    status.Phase = message;
-                    status.Message = message;
-                    status.LastHeartbeatUtc = DateTime.UtcNow;
-                    WriteStatus(plan.StatusFile, status);
-                }
+                    current.CurrentIndex = index;
+                    current.CurrentItemId = item.Id;
+                    current.CurrentName = item.Name;
+                    current.InstallerTool = GetInstallerTool(item);
+                    current.Phase = "Preparazione";
+                    current.CurrentItemProgress = 1;
+                    current.CurrentItemStartedUtc = DateTime.UtcNow;
+                    current.Message = $"Aggiornamento di {item.Name}…";
+                }, markProgress: true);
+
+                void ReportItemProgress(int percent, string message) =>
+                    publisher.ReportProgress(percent, message);
 
                 ItemRunResult result;
                 if (item.Kind.Equals(nameof(UpdateKind.Driver), StringComparison.OrdinalIgnoreCase))
@@ -77,34 +82,62 @@ public static class ElevatedUpdateRunner
                     result = InstallSoftware(item, plan.SilentSoftwareInstall);
                 }
 
-                status.Results.Add(result);
-                status.RestartRequired |= result.RestartRequired;
-                status.CurrentIndex = index + 1;
-                status.CurrentItemProgress = 100;
-                status.Phase = "Completato";
-                status.LastHeartbeatUtc = DateTime.UtcNow;
-                status.Message = result.Message;
-                WriteStatus(plan.StatusFile, status);
+                LogService.WriteEvent(
+                    "update",
+                    string.IsNullOrWhiteSpace(result.Phase) ? "result" : result.Phase,
+                    result.Success
+                        ? "success"
+                        : result.InstallerSucceeded
+                            ? "verification-failure"
+                            : "failure",
+                    result.Id,
+                    result.ResultCode,
+                    $"installerSucceeded={result.InstallerSucceeded}; " +
+                    $"verification={result.VerificationStatus}; verified={result.Verified}; {result.Message}");
+                publisher.Update(current =>
+                {
+                    current.Results.Add(result);
+                    current.RestartRequired |= result.RestartRequired;
+                    current.CurrentIndex = index + 1;
+                    current.CurrentItemProgress = 100;
+                    current.Phase = "Completato";
+                    current.Message = result.Message;
+                    current.CurrentItemStartedUtc = null;
+                    current.CurrentItemId = "";
+                    current.InstallerTool = "";
+                }, markProgress: true);
             }
 
-            status.State = "Completed";
-            status.CurrentName = "";
-            status.Message = status.Results.All(x => x.Success)
-                ? "Tutti gli aggiornamenti selezionati sono terminati."
-                : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
-            WriteStatus(plan.StatusFile, status);
+            publisher.Update(current =>
+            {
+                current.State = "Completed";
+                current.CurrentName = "";
+                current.Message = current.Results.All(x => x.Success)
+                    ? "Tutti gli aggiornamenti selezionati sono terminati."
+                    : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
+            }, markProgress: true);
             return status.Results.All(x => x.Success) ? 0 : 1;
         }
         catch (Exception ex)
         {
             LogService.Write("Esecuzione elevata interrotta.", ex);
-            if (plan is not null && status is not null)
+            if (publisher is not null)
             {
-                status.State = "Failed";
-                status.Message = ex.Message;
-                try { WriteStatus(plan.StatusFile, status); } catch { }
+                try
+                {
+                    publisher.Update(current =>
+                    {
+                        current.State = "Failed";
+                        current.Message = ex.Message;
+                    });
+                }
+                catch { }
             }
             return 1;
+        }
+        finally
+        {
+            publisher?.Dispose();
         }
     }
 
@@ -116,8 +149,25 @@ public static class ElevatedUpdateRunner
             var result = isFreshInstall
                 ? WinGetService.Install(item, silent)
                 : WinGetService.Upgrade(item, silent);
-            var outcome = WinGetService.ClassifyOutcome(result);
-            if (outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
+            var installerOutcome = WinGetService.ClassifyOutcome(result);
+            var restartRequired = WinGetService.RequiresRestart(result);
+            var installerSucceeded = installerOutcome.Equals(UpdateOutcomes.Completed, StringComparison.Ordinal) ||
+                                     restartRequired;
+            var shouldVerify = installerOutcome.Equals(UpdateOutcomes.Completed, StringComparison.Ordinal) ||
+                               installerOutcome.Equals(UpdateOutcomes.Failed, StringComparison.Ordinal);
+            var verification = shouldVerify
+                ? WinGetService.VerifyInstallation(item)
+                : new UpdateVerificationResult
+                {
+                    Status = UpdateVerificationStatuses.NotRun,
+                    Message = "Verifica post-installazione non richiesta per questo esito."
+                };
+            var decision = UpdateResultPolicy.Resolve(installerSucceeded, restartRequired, verification);
+            var finalOutcome = installerOutcome is UpdateOutcomes.NotApplicable or UpdateOutcomes.ManualRequired
+                ? installerOutcome
+                : decision.Outcome;
+
+            if (installerOutcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
                 WinGetApplicabilityStore.RecordNotApplicable(item);
             var output = string.Join(" ", (result.StandardOutput + "\n" + result.StandardError)
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
@@ -128,6 +178,32 @@ public static class ElevatedUpdateRunner
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
                 .FirstOrDefault(x => x.Contains("risulta già aggiornato", StringComparison.OrdinalIgnoreCase));
+            var completedMessage = alreadyCurrentMessage ?? (isFreshInstall
+                ? "Runtime installato con WinGet."
+                : "Software aggiornato con WinGet.");
+            if (installerSucceeded && !string.IsNullOrWhiteSpace(verification.Message))
+                completedMessage = verification.IsDefinitive && !verification.Verified
+                    ? $"WinGet ha completato l'installer, ma la verifica post-installazione non è riuscita. {verification.Message}"
+                    : $"{completedMessage} {verification.Message}";
+            if (!installerSucceeded && verification.Verified)
+                completedMessage =
+                    $"WinGet ha restituito il codice {result.ExitCode}, ma la versione target risulta installata. {verification.Message}";
+
+            var message = decision.Success
+                ? completedMessage
+                : installerOutcome switch
+                {
+                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non è applicabile a questo PC. " +
+                                                    "L'elemento resta visibile come aggiornamento manuale in questa scansione e verrà escluso dalle successive " +
+                                                    "finché non cambia la versione installata o quella proposta. Usa l'aggiornamento interno del programma " +
+                                                    "o il sito ufficiale del produttore.",
+                    UpdateOutcomes.ManualRequired => "Questo pacchetto non supporta l'aggiornamento automatico con la tecnologia di installazione corrente. Usa l'installer ufficiale del produttore.",
+                    _ => installerSucceeded && !string.IsNullOrWhiteSpace(verification.Message)
+                        ? $"WinGet ha completato l'installer, ma la verifica post-installazione non è riuscita. {verification.Message}"
+                        : string.IsNullOrWhiteSpace(output)
+                            ? $"WinGet ha restituito il codice {result.ExitCode}."
+                            : output
+                };
 
             return new ItemRunResult
             {
@@ -136,23 +212,19 @@ public static class ElevatedUpdateRunner
                 Kind = item.Kind.Equals(nameof(UpdateKind.Runtime), StringComparison.Ordinal)
                     ? "Runtime"
                     : item.Kind,
-                Success = !outcome.Equals(UpdateOutcomes.Failed, StringComparison.Ordinal),
-                Outcome = outcome,
-                Message = outcome switch
-                {
-                    UpdateOutcomes.Completed => alreadyCurrentMessage ?? (isFreshInstall
-                        ? "Runtime installato con WinGet."
-                        : "Software aggiornato con WinGet."),
-                    UpdateOutcomes.NotApplicable => "La versione segnalata da WinGet non è applicabile a questo PC. " +
-                                                    "L'elemento resta visibile come aggiornamento manuale in questa scansione e verrà escluso dalle successive " +
-                                                    "finché non cambia la versione installata o quella proposta. Usa l'aggiornamento interno del programma " +
-                                                    "o il sito ufficiale del produttore.",
-                    UpdateOutcomes.ManualRequired => "Questo pacchetto non supporta l'aggiornamento automatico con la tecnologia di installazione corrente. Usa l'installer ufficiale del produttore.",
-                    _ => string.IsNullOrWhiteSpace(output)
-                        ? $"WinGet ha restituito il codice {result.ExitCode}."
-                        : output
-                },
-                Diagnostics = BuildProcessDiagnostics(result)
+                Success = decision.Success,
+                InstallerSucceeded = installerSucceeded,
+                Verified = decision.Verified,
+                VerificationStatus = decision.VerificationStatus,
+                ResultCode = result.ExitCode,
+                Phase = isFreshInstall ? "winget-install" : "winget-upgrade",
+                Outcome = finalOutcome,
+                RestartRequired = restartRequired,
+                Message = message,
+                Diagnostics = BuildProcessDiagnostics(result) +
+                              (string.IsNullOrWhiteSpace(verification.Diagnostics)
+                                  ? ""
+                                  : "\n\nVerifica post-installazione:\n" + verification.Diagnostics)
             };
         }
         catch (Exception ex)
@@ -166,6 +238,12 @@ public static class ElevatedUpdateRunner
                     ? "Runtime"
                     : item.Kind,
                 Success = false,
+                InstallerSucceeded = false,
+                Verified = false,
+                VerificationStatus = UpdateVerificationStatuses.NotRun,
+                ResultCode = ex.HResult,
+                Phase = "winget-exception",
+                Outcome = UpdateOutcomes.Failed,
                 Message = ex.Message,
                 Diagnostics = ex.ToString()
             };
@@ -177,6 +255,8 @@ public static class ElevatedUpdateRunner
         var lines = new List<string>
         {
             $"Codice di uscita: {result.ExitCode}",
+            $"PID processo esterno: {result.ProcessId?.ToString() ?? "non disponibile"}",
+            $"Durata: {result.Duration?.ToString() ?? "non disponibile"}",
             $"Comando/i eseguiti:\n{result.CommandLine}"
         };
         if (!string.IsNullOrWhiteSpace(result.StandardOutput))
@@ -254,7 +334,16 @@ public static class ElevatedUpdateRunner
             throw new UnauthorizedAccessException("Percorso del segnale di pausa non consentito.");
     }
 
-    private static void WaitWhilePaused(UpdatePlan plan, UpdateRunStatus status)
+    private static string GetInstallerTool(PlanItem item)
+    {
+        if (!item.Kind.Equals(nameof(UpdateKind.Driver), StringComparison.OrdinalIgnoreCase))
+            return "WinGet";
+        return item.DriverInstallMode.Equals(DriverInstallModes.OfficialInfPackage, StringComparison.Ordinal)
+            ? "PnPUtil/INF"
+            : "Windows Update";
+    }
+
+    private static void WaitWhilePaused(UpdatePlan plan, RunnerStatusPublisher publisher)
     {
         var wasPaused = false;
         while (File.Exists(plan.PauseFile))
@@ -266,22 +355,24 @@ public static class ElevatedUpdateRunner
             }
 
             wasPaused = true;
-            status.State = "Paused";
-            status.CurrentName = "";
-            status.Phase = "Pausa";
-            status.CurrentItemProgress = 0;
-            status.Message = "Aggiornamenti in pausa. Premi Riprendi in Update Center per continuare.";
-            status.LastHeartbeatUtc = DateTime.UtcNow;
-            WriteStatus(plan.StatusFile, status);
+            publisher.Update(status =>
+            {
+                status.State = "Paused";
+                status.CurrentName = "";
+                status.Phase = "Pausa";
+                status.CurrentItemProgress = 0;
+                status.Message = "Aggiornamenti in pausa. Premi Riprendi in Update Center per continuare.";
+            });
             Thread.Sleep(350);
         }
 
         if (!wasPaused) return;
-        status.State = "Running";
-        status.Phase = "Ripresa";
-        status.Message = "Ripresa degli aggiornamenti…";
-        status.LastHeartbeatUtc = DateTime.UtcNow;
-        WriteStatus(plan.StatusFile, status);
+        publisher.Update(status =>
+        {
+            status.State = "Running";
+            status.Phase = "Ripresa";
+            status.Message = "Ripresa degli aggiornamenti…";
+        }, markProgress: true);
     }
 
     private static bool IsProcessRunning(int processId)
@@ -294,7 +385,148 @@ public static class ElevatedUpdateRunner
         catch { return false; }
     }
 
-    private static void WriteStatus(string path, UpdateRunStatus status) => JsonStorage.WriteAtomic(path, status);
+    internal sealed class RunnerStatusPublisher : IDisposable
+    {
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(5);
+        private readonly object _sync = new();
+        private readonly string _statusPath;
+        private readonly UpdateRunStatus _status;
+        private readonly TimeSpan _heartbeatInterval;
+        private readonly CancellationTokenSource _stop = new();
+        private readonly Task _heartbeatTask;
+
+        public RunnerStatusPublisher(
+            string statusPath,
+            UpdateRunStatus status,
+            TimeSpan? heartbeatInterval = null)
+        {
+            _statusPath = statusPath;
+            _status = status;
+            _heartbeatInterval = heartbeatInterval ?? HeartbeatInterval;
+            Update(_ => { });
+            _heartbeatTask = Task.Run(PublishHeartbeatAsync);
+        }
+
+        public void Update(Action<UpdateRunStatus> update, bool markProgress = false)
+        {
+            lock (_sync)
+            {
+                update(_status);
+                var now = DateTime.UtcNow;
+                _status.LastHeartbeatUtc = now;
+                if (markProgress)
+                    _status.LastProgressUtc = now;
+                JsonStorage.WriteAtomic(_statusPath, _status);
+            }
+        }
+
+        public void ReportProgress(int percent, string message)
+        {
+            lock (_sync)
+            {
+                var normalizedPercent = Math.Clamp(percent, 1, 99);
+                var changed = Math.Abs(_status.CurrentItemProgress - normalizedPercent) > 0.001 ||
+                              !_status.Phase.Equals(message, StringComparison.Ordinal);
+                _status.CurrentItemProgress = normalizedPercent;
+                _status.Phase = message;
+                _status.Message = message;
+                var now = DateTime.UtcNow;
+                _status.LastHeartbeatUtc = now;
+                if (changed)
+                    _status.LastProgressUtc = now;
+                JsonStorage.WriteAtomic(_statusPath, _status);
+            }
+        }
+
+        private async Task PublishHeartbeatAsync()
+        {
+            using var timer = new PeriodicTimer(_heartbeatInterval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(_stop.Token).ConfigureAwait(false))
+                {
+                    try { Update(_ => { }); }
+                    catch (Exception ex)
+                    {
+                        LogService.WriteEvent(
+                            "watchdog", "runner-heartbeat", "write-failure",
+                            resultCode: ex.HResult,
+                            details: ex.Message,
+                            exception: ex);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            _stop.Cancel();
+            try { _heartbeatTask.GetAwaiter().GetResult(); } catch { }
+            _stop.Dispose();
+        }
+    }
+}
+
+internal readonly record struct UpdateWatchdogThresholds(
+    TimeSpan HeartbeatTimeout,
+    TimeSpan ProgressWarning,
+    TimeSpan ItemTimeout)
+{
+    public static UpdateWatchdogThresholds Default { get; } = new(
+        TimeSpan.FromSeconds(75),
+        TimeSpan.FromMinutes(12),
+        TimeSpan.FromMinutes(90));
+}
+
+internal readonly record struct UpdateWatchdogDecision(
+    bool ShouldTerminate,
+    string TerminationReason,
+    bool ShouldWarnProgress,
+    TimeSpan HeartbeatAge,
+    TimeSpan ProgressAge,
+    TimeSpan ItemDuration);
+
+internal static class UpdateWatchdogPolicy
+{
+    public static UpdateWatchdogDecision Evaluate(
+        UpdateRunStatus status,
+        DateTime nowUtc,
+        UpdateWatchdogThresholds thresholds)
+    {
+        var heartbeatAge = Elapsed(nowUtc, status.LastHeartbeatUtc);
+        var progressAge = Elapsed(nowUtc, status.LastProgressUtc);
+        var itemDuration = status.CurrentItemStartedUtc is DateTime startedUtc
+            ? Elapsed(nowUtc, startedUtc)
+            : TimeSpan.Zero;
+        var supervised = status.State.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
+                         status.State.Equals("Paused", StringComparison.OrdinalIgnoreCase) ||
+                         status.State.Equals("Starting", StringComparison.OrdinalIgnoreCase);
+        if (supervised && heartbeatAge > thresholds.HeartbeatTimeout)
+        {
+            return new UpdateWatchdogDecision(
+                true, "runner-heartbeat-timeout", false,
+                heartbeatAge, progressAge, itemDuration);
+        }
+
+        var installing = status.State.Equals("Running", StringComparison.OrdinalIgnoreCase) &&
+                         status.CurrentItemStartedUtc.HasValue;
+        if (installing && itemDuration > thresholds.ItemTimeout)
+        {
+            return new UpdateWatchdogDecision(
+                true, "absolute-item-timeout", false,
+                heartbeatAge, progressAge, itemDuration);
+        }
+
+        return new UpdateWatchdogDecision(
+            false, "", installing && progressAge > thresholds.ProgressWarning,
+            heartbeatAge, progressAge, itemDuration);
+    }
+
+    private static TimeSpan Elapsed(DateTime nowUtc, DateTime thenUtc) =>
+        nowUtc > thenUtc ? nowUtc - thenUtc : TimeSpan.Zero;
 }
 
 public sealed class UpdateCoordinator
@@ -425,6 +657,9 @@ public sealed class UpdateCoordinator
             }
 
             UpdateRunStatus? latest = null;
+            var runnerStartedUtc = DateTime.UtcNow;
+            DateTime? warnedProgressTimestamp = null;
+            var thresholds = UpdateWatchdogThresholds.Default;
             while (!process.HasExited)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -433,13 +668,40 @@ public sealed class UpdateCoordinator
                 {
                     latest = current;
                     progress(BuildAggregateProgress(aggregate, current, completedBeforeBatch));
-                    if (current.State.Equals("Running", StringComparison.OrdinalIgnoreCase) &&
-                        DateTime.UtcNow - current.LastHeartbeatUtc > TimeSpan.FromMinutes(12))
+                    var decision = UpdateWatchdogPolicy.Evaluate(current, DateTime.UtcNow, thresholds);
+                    if (decision.ShouldWarnProgress &&
+                        warnedProgressTimestamp != current.LastProgressUtc)
                     {
-                        try { process.Kill(true); } catch { }
-                        throw new TimeoutException(
-                            $"L'aggiornamento di {current.CurrentName} non ha comunicato progressi per 12 minuti ed è stato interrotto.");
+                        warnedProgressTimestamp = current.LastProgressUtc;
+                        LogService.WriteEvent(
+                            "watchdog", current.Phase, "progress-stalled-warning",
+                            current.CurrentItemId,
+                            details: BuildWatchdogDiagnostics(
+                                process.Id, current, decision,
+                                "Nessun progresso per 12 minuti; heartbeat runner ancora valido, installazione lasciata in esecuzione."));
                     }
+
+                    if (decision.ShouldTerminate)
+                    {
+                        var timeoutMessage = decision.TerminationReason == "absolute-item-timeout"
+                            ? $"L'aggiornamento di {current.CurrentName} ha superato il limite massimo di 90 minuti."
+                            : $"Il runner dell'aggiornamento di {current.CurrentName} non comunica da oltre 75 secondi.";
+                        LogService.WriteEvent(
+                            "watchdog", current.Phase, decision.TerminationReason,
+                            current.CurrentItemId,
+                            details: BuildWatchdogDiagnostics(process.Id, current, decision, timeoutMessage));
+                        try { process.Kill(true); } catch { }
+                        throw new TimeoutException(timeoutMessage);
+                    }
+                }
+                else if (DateTime.UtcNow - runnerStartedUtc > thresholds.HeartbeatTimeout)
+                {
+                    var message = "Il runner non ha pubblicato lo stato iniziale entro 75 secondi.";
+                    LogService.WriteEvent(
+                        "watchdog", "runner-start", "runner-heartbeat-timeout",
+                        details: $"runnerPid={process.Id}; reason={message}");
+                    try { process.Kill(true); } catch { }
+                    throw new TimeoutException(message);
                 }
                 await Task.Delay(350, cancellationToken);
             }
@@ -475,6 +737,10 @@ public sealed class UpdateCoordinator
         Phase = batch.Phase,
         CurrentItemProgress = batch.CurrentItemProgress,
         LastHeartbeatUtc = batch.LastHeartbeatUtc,
+        LastProgressUtc = batch.LastProgressUtc,
+        CurrentItemStartedUtc = batch.CurrentItemStartedUtc,
+        CurrentItemId = batch.CurrentItemId,
+        InstallerTool = batch.InstallerTool,
         RestorePointRequested = aggregate.RestorePointRequested || batch.RestorePointRequested,
         RestorePointCreated = aggregate.RestorePointCreated || batch.RestorePointCreated,
         RestartRequired = aggregate.RestartRequired || batch.RestartRequired,
@@ -488,6 +754,15 @@ public sealed class UpdateCoordinator
         aggregate.RestorePointCreated |= batch.RestorePointCreated;
         aggregate.RestartRequired |= batch.RestartRequired;
     }
+
+    private static string BuildWatchdogDiagnostics(
+        int runnerProcessId,
+        UpdateRunStatus status,
+        UpdateWatchdogDecision decision,
+        string reason) =>
+        $"runnerPid={runnerProcessId}; tool={status.InstallerTool}; phase={status.Phase}; " +
+        $"heartbeatAge={decision.HeartbeatAge}; progressAge={decision.ProgressAge}; " +
+        $"itemDuration={decision.ItemDuration}; reason={reason}";
 
     private static void TryDelete(string path)
     {

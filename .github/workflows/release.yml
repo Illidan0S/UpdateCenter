@@ -64,6 +64,13 @@ jobs:
         shell: pwsh
         run: .\build.ps1 -NoRestore
 
+      - name: Sign portable executable
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: .\sign-windows-artifact.ps1 -Path '.\dist\UpdateCenter.exe' -Required:($env:GITHUB_REF_TYPE -eq 'tag')
+
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -71,6 +78,14 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: .\build-installer.ps1 -NoAppBuild
+
+      - name: Sign installer
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: .\sign-windows-artifact.ps1 -Path ".\installer-dist\UpdateCenter-Setup-v$env:RELEASE_VERSION.exe" -Required:($env:GITHUB_REF_TYPE -eq 'tag')
 
       - name: Create and verify release artifacts
         id: package

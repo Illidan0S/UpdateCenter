@@ -1,8 +1,8 @@
 # Update Center
 
-Versione pubblica attuale: **1.1.3**.
+Versione pubblica attuale: **1.1.4**.
 
-Completata la traduzione inglese della pagina Gestione rete.
+Rafforzata la gestione degli esiti di installazione: verifica post-installazione per WinGet e driver, aggiornamento coerente degli elenchi e protezione dai refresh WPF durante transazioni di modifica.
 
 Risolto l’errore nella finestra di conferma degli aggiornamenti software: “L’associazione bidirezionale richiede Path o XPath”.
 

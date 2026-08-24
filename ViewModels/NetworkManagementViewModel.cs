@@ -183,7 +183,7 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
             if (ReferenceEquals(_selectedResultScope, value) || value is null) return;
             _selectedResultScope = value;
             OnPropertyChanged();
-            ResultsView.Refresh();
+            MainViewModel.TryRefreshCollectionView(ResultsView, "network-results");
             UpdateResultSummary();
             OnActionStateChanged();
         }
@@ -885,7 +885,7 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
             ResultScopes.Add(new ResultScopeOption(agent.AgentId, agent.DisplayName));
         _selectedResultScope = ResultScopes.FirstOrDefault(x => x.AgentId == previousScopeId) ?? ResultScopes[0];
         OnPropertyChanged(nameof(SelectedResultScope));
-        ResultsView.Refresh();
+        MainViewModel.TryRefreshCollectionView(ResultsView, "network-results");
         UpdateResultSummary();
         OnActionStateChanged();
     }

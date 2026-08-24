@@ -21,6 +21,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly AppUpdateService _appUpdateService = new();
     private CancellationTokenSource? _scanCancellation;
     private bool _isBusy;
+    private int _updateRunActive;
     private bool _isScanRunning;
     private double _progress;
     private string _statusText = LocalizationService.Text("Pronto per la scansione", "Ready to scan");
@@ -591,24 +592,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public async Task<UpdateRunStatus?> InstallItemsAsync(IReadOnlyList<UpdateItem> items)
     {
         var selected = items.Distinct().ToList();
-        if (IsBusy || selected.Count == 0) return null;
-
-        IsBusy = true;
-        _activePauseController = new UpdatePauseController();
-        IsUpdatePaused = false;
-        IsUpdatePauseRequested = false;
-        OnPropertyChanged(nameof(CanPauseUpdates));
-        Progress = 2;
-        StatusText = T("Aggiornamento in corso", "Update in progress");
-        CurrentItemText = T("Conferma la richiesta di Controllo account utente di Windows.", "Confirm the Windows User Account Control prompt if requested.");
-        foreach (var item in selected)
+        if (selected.Count == 0 ||
+            Interlocked.CompareExchange(ref _updateRunActive, 1, 0) != 0)
+            return null;
+        if (IsBusy)
         {
-            item.Status = T("In attesa", "Waiting");
-            item.ResultDetails = T("In attesa dell'installazione.", "Waiting for installation.");
+            Interlocked.Exchange(ref _updateRunActive, 0);
+            return null;
         }
 
+        IsBusy = true;
         try
         {
+            _activePauseController = new UpdatePauseController();
+            IsUpdatePaused = false;
+            IsUpdatePauseRequested = false;
+            OnPropertyChanged(nameof(CanPauseUpdates));
+            Progress = 2;
+            StatusText = T("Aggiornamento in corso", "Update in progress");
+            CurrentItemText = T("Conferma la richiesta di Controllo account utente di Windows.", "Confirm the Windows User Account Control prompt if requested.");
+            foreach (var item in selected)
+            {
+                item.Status = T("In attesa", "Waiting");
+                item.ResultDetails = T("In attesa dell'installazione.", "Waiting for installation.");
+            }
+
             var result = await _coordinator.RunAsync(selected, Settings, _activePauseController, status =>
             {
                 System.Windows.Application.Current.Dispatcher.Invoke(() =>
@@ -629,16 +637,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         ? T("Aggiornamento in corso", "Update in progress")
                         : LocalizationService.IsEnglish ? $"Updating: {status.CurrentName}" : $"Aggiornamento: {status.CurrentName}";
 
-                    ApplyRunResults(selected, status.Results);
+                    ApplyRunResultsSafely(selected, status.Results);
                 });
             }, CancellationToken.None);
 
-            ApplyRunResults(selected, result.Results);
+            ApplyRunResultsSafely(selected, result.Results);
             SaveRunToHistory(selected, result);
+            await RefreshDriversAfterUpdateRunAsync(result.Results);
             Progress = 100;
-            StatusText = result.Results.All(x => x.Success)
-                ? T("Aggiornamenti completati", "Updates completed")
-                : T("Completato con alcuni errori", "Completed with some errors");
+            StatusText = result.Results.Any(x => !x.Success)
+                ? T("Completato con alcuni errori", "Completed with some errors")
+                : result.Results.Any(x => !x.Verified)
+                    ? T("Completato · verifica richiesta", "Completed · verification required")
+                    : T("Aggiornamenti completati", "Updates completed");
             CurrentItemText = result.Message;
             return result;
         }
@@ -660,7 +671,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             LogService.Write("Aggiornamento selezionato fallito.", ex);
             StatusText = T("Aggiornamento non avviato", "Update not started");
             CurrentItemText = ex.Message;
-            foreach (var item in selected)
+            foreach (var item in selected.Where(x =>
+                         x.Status.Equals("In attesa", StringComparison.OrdinalIgnoreCase) ||
+                         x.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)))
             {
                 item.Status = T("Errore", "Error");
                 item.ResultDetails = ex.Message;
@@ -674,6 +687,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             IsUpdatePaused = false;
             IsUpdatePauseRequested = false;
             IsBusy = false;
+            Interlocked.Exchange(ref _updateRunActive, 0);
             OnPropertyChanged(nameof(CanPauseUpdates));
             NotifyCounts();
         }
@@ -793,7 +807,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void ApplyRunResults(
         IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results)
     {
-        var removedAny = false;
         foreach (var runResult in results)
         {
             var item = selected.FirstOrDefault(x =>
@@ -805,7 +818,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             {
                 UpdateOutcomes.NotApplicable => T("Non applicabile", "Not applicable"),
                 UpdateOutcomes.ManualRequired => T("Aggiornamento manuale", "Manual update"),
-                _ => runResult.Success ? T("Aggiornato", "Updated") : T("Errore", "Error")
+                _ => !runResult.InstallerSucceeded
+                    ? T("Errore", "Error")
+                    : !runResult.Success
+                        ? T("Errore di verifica", "Verification failed")
+                        : runResult.Verified
+                            ? T("Aggiornato", "Updated")
+                            : T("Completato · da verificare", "Completed · verify")
             };
             item.ResultDetails = runResult.Message;
             item.Diagnostics = runResult.Diagnostics;
@@ -813,18 +832,129 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
                 item.CanInstall = false;
 
-            var shouldRemove = runResult.Success &&
-                               !runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) &&
-                               !runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal);
-            if (shouldRemove && Updates.Remove(item))
+            if (ShouldRemoveCompletedUpdate(runResult) && Updates.Remove(item))
             {
                 item.PropertyChanged -= UpdateItemOnPropertyChanged;
-                removedAny = true;
             }
         }
 
-        if (!removedAny) return;
-        RefreshUpdatesView();
+        // ObservableCollection aggiorna già la CollectionView. Un Refresh esplicito
+        // qui può essere illegale durante una transazione WPF AddNew/EditItem.
+        NotifyCounts();
+    }
+
+    internal static bool ShouldRemoveCompletedUpdate(ItemRunResult result) =>
+        result.Success &&
+        result.Verified &&
+        !result.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) &&
+        !result.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal);
+
+    private void ApplyRunResultsSafely(
+        IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results)
+    {
+        try
+        {
+            ApplyRunResults(selected, results);
+        }
+        catch (Exception ex)
+        {
+            LogService.WriteEvent(
+                "ui",
+                "apply-run-results",
+                "ui-error",
+                resultCode: ex.HResult,
+                details: "L'esito reale dell'installer è conservato; è fallita solo la proiezione UI.",
+                exception: ex);
+        }
+    }
+
+    private async Task RefreshDriversAfterUpdateRunAsync(IReadOnlyList<ItemRunResult> results)
+    {
+        if (!results.Any(x =>
+                x.Kind.Equals(nameof(UpdateKind.Driver), StringComparison.OrdinalIgnoreCase) &&
+                x.InstallerSucceeded))
+            return;
+
+        HardwareCheckStatus = T(
+            "Ricaricamento dello stato reale dei driver…",
+            "Reloading the actual driver state…");
+
+        try
+        {
+            var hardware = await _hardwareInventory.ScanAsync(CancellationToken.None);
+            _cachedHardwareScan = hardware;
+            ClearDriverInventory();
+            ApplyHardware(hardware);
+
+            var refreshedUpdates = new List<UpdateItem>();
+            var warnings = new List<string>();
+            try
+            {
+                var microsoft = await _windowsUpdate.ScanDriversAsync(
+                    CancellationToken.None, hardware.Drivers);
+                refreshedUpdates.AddRange(microsoft.Updates);
+                warnings.AddRange(microsoft.SourceWarnings);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add(ex.Message);
+                LogService.WriteEvent(
+                    "driver-refresh", "windows-update", "warning",
+                    resultCode: ex.HResult, details: ex.Message, exception: ex);
+            }
+
+            try
+            {
+                var official = await _officialDriverCatalog.ScanAsync(
+                    hardware.Drivers, CancellationToken.None);
+                refreshedUpdates.AddRange(official.Updates);
+                warnings.AddRange(official.Warnings);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add(ex.Message);
+                LogService.WriteEvent(
+                    "driver-refresh", "official-catalog", "warning",
+                    resultCode: ex.HResult, details: ex.Message, exception: ex);
+            }
+
+            // Sostituisce completamente le offerte soltanto quando tutte le fonti
+            // hanno risposto. In caso contrario conserva le righe fallite/non
+            // verificate e aggiunge i risultati nuovi senza duplicati.
+            if (warnings.Count == 0)
+                ClearDriverUpdates();
+            AddUpdates(refreshedUpdates);
+
+            var current = Updates.Count(x => x.Kind == UpdateKind.Driver);
+            HardwareCheckStatus = warnings.Count == 0
+                ? current == 0
+                    ? T("Nessun aggiornamento driver ancora applicabile.",
+                        "No driver update is still applicable.")
+                    : LocalizationService.IsEnglish
+                        ? $"{current} driver updates are still applicable after verification."
+                        : $"{current} aggiornamenti driver risultano ancora applicabili dopo la verifica."
+                : T(
+                    "Elenco driver aggiornato; alcune sorgenti non hanno completato la verifica.",
+                    "Driver list refreshed; some sources did not complete verification.");
+        }
+        catch (Exception ex)
+        {
+            HardwareCheckStatus = T(
+                "Installazione terminata, ma il nuovo inventario driver non è disponibile.",
+                "Installation finished, but the refreshed driver inventory is unavailable.");
+            LogService.WriteEvent(
+                "driver-refresh", "inventory", "failure",
+                resultCode: ex.HResult, details: ex.Message, exception: ex);
+        }
+    }
+
+    private void ClearDriverUpdates()
+    {
+        foreach (var item in Updates.Where(x => x.Kind == UpdateKind.Driver).ToList())
+        {
+            item.PropertyChanged -= UpdateItemOnPropertyChanged;
+            Updates.Remove(item);
+        }
         NotifyCounts();
     }
 
@@ -979,7 +1109,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void RefreshUpdatesView()
     {
-        UpdatesView.Refresh();
+        TryRefreshCollectionView(UpdatesView, "updates");
         OnPropertyChanged(nameof(VisibleUpdateCount));
     }
 
@@ -1015,8 +1145,35 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private void RefreshDriverInventoryView()
     {
-        DriverInventoryView.Refresh();
+        TryRefreshCollectionView(DriverInventoryView, "driver-inventory");
         OnPropertyChanged(nameof(VisibleDriverCount));
+    }
+
+    internal static bool TryRefreshCollectionView(ICollectionView view, string viewName)
+    {
+        if (view is IEditableCollectionView editable &&
+            (editable.IsAddingNew || editable.IsEditingItem))
+        {
+            LogService.WriteEvent(
+                "ui", "collection-refresh", "skipped",
+                details: $"{viewName}: WPF AddNew/EditItem attivo.");
+            return false;
+        }
+
+        try
+        {
+            view.Refresh();
+            return true;
+        }
+        catch (InvalidOperationException ex)
+        {
+            LogService.WriteEvent(
+                "ui", "collection-refresh", "ui-error",
+                resultCode: ex.HResult,
+                details: $"{viewName}: refresh non eseguito senza alterare l'esito dell'aggiornamento.",
+                exception: ex);
+            return false;
+        }
     }
 
     private void SaveRunToHistory(IReadOnlyList<UpdateItem> selected, UpdateRunStatus result)
@@ -1035,7 +1192,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 {
                     UpdateOutcomes.NotApplicable => "Non applicabile",
                     UpdateOutcomes.ManualRequired => "Manuale",
-                    _ => runResult.Success ? "Riuscito" : "Fallito"
+                    _ => runResult.InstallerSucceeded ? "Riuscito" : "Fallito"
                 },
                 Details = BuildReadableHistoryDetails(item, runResult),
                 Diagnostics = runResult.Diagnostics
@@ -1061,12 +1218,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return $"{runResult.Name} richiede un aggiornamento manuale perché il pacchetto installato e quello nuovo " +
                    $"non supportano un upgrade automatico compatibile. Dettaglio: {technicalDetail}";
 
-        if (runResult.Success)
+        if (runResult.InstallerSucceeded)
         {
             var restart = runResult.RestartRequired
                 ? " Per completare l'operazione è richiesto il riavvio di Windows."
                 : " Non è richiesto alcun riavvio.";
-            return $"{runResult.Name} è stato aggiornato correttamente da {fromVersion} a {toVersion} usando {source}.{restart} Dettaglio tecnico: {technicalDetail}";
+            if (runResult.Verified)
+                return $"{runResult.Name} è stato aggiornato e verificato da {fromVersion} a {toVersion} usando {source}.{restart} Dettaglio tecnico: {technicalDetail}";
+
+            var verification = runResult.VerificationStatus switch
+            {
+                UpdateVerificationStatuses.PendingRestart => "La verifica finale richiede il riavvio.",
+                UpdateVerificationStatuses.Failed => "L'installer è terminato, ma la verifica finale non ha confermato l'aggiornamento.",
+                _ => "L'installer è terminato, ma la verifica finale non è disponibile."
+            };
+            return $"{runResult.Name}: {verification}{restart} Dettaglio tecnico: {technicalDetail}";
         }
 
         return $"L'aggiornamento di {runResult.Name} da {fromVersion} a {toVersion} non è riuscito. " +

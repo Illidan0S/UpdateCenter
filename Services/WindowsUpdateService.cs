@@ -250,6 +250,7 @@ public sealed class WindowsUpdateService
         object? sessionObject = null;
         object? searcherObject = null;
         object? searchResultObject = null;
+        object? verificationSearchResultObject = null;
         object? collectionObject = null;
 
         try
@@ -284,7 +285,10 @@ public sealed class WindowsUpdateService
             }
 
             if (selectedUpdate is null)
-                return Failed(planItem, "L'aggiornamento non è più proposto da Windows Update. Esegui una nuova scansione.");
+                return Failed(
+                    planItem,
+                    "L'aggiornamento non è più proposto da Windows Update. Esegui una nuova scansione.",
+                    "windows-update-search");
 
             if (!Convert.ToBoolean(selectedUpdate.EulaAccepted))
                 selectedUpdate.AcceptEula();
@@ -301,7 +305,12 @@ public sealed class WindowsUpdateService
             dynamic downloadResult = downloader.Download();
             int downloadCode = Convert.ToInt32(downloadResult.ResultCode);
             if (downloadCode is not (2 or 3))
-                return Failed(planItem, $"Download del driver non riuscito (codice {downloadCode}).");
+                return Failed(
+                    planItem,
+                    $"Download del driver non riuscito (codice {downloadCode}).",
+                    "windows-update-download",
+                    downloadCode,
+                    $"Windows Update DownloadResultCode={downloadCode}.");
 
             progress?.Invoke(72, "Installazione del driver tramite Windows Update...");
             dynamic installer = session.CreateUpdateInstaller();
@@ -309,40 +318,126 @@ public sealed class WindowsUpdateService
             dynamic installResult = installer.Install();
             int resultCode = Convert.ToInt32(installResult.ResultCode);
             bool reboot = Convert.ToBoolean(installResult.RebootRequired);
-            bool success = resultCode is 2 or 3;
-            progress?.Invoke(98, "Verifica del risultato restituito da Windows Update...");
+            bool installerSucceeded = resultCode is 2 or 3;
+            progress?.Invoke(96, "Verifica del risultato restituito da Windows Update...");
+
+            var isInstalledAvailable = TryBool(
+                () => Convert.ToBoolean(selectedUpdate.IsInstalled), out var reportedInstalled);
+            bool? stillApplicable = null;
+            string applicabilityDiagnostics;
+            try
+            {
+                progress?.Invoke(98, "Nuova scansione di applicabilità del driver...");
+                verificationSearchResultObject = searcher.Search(DriverSearchCriteria);
+                dynamic verificationSearchResult = verificationSearchResultObject;
+                var found = false;
+                int verificationCount = verificationSearchResult.Updates.Count;
+                for (var index = 0; index < verificationCount; index++)
+                {
+                    dynamic candidate = verificationSearchResult.Updates.Item(index);
+                    var candidateId = Convert.ToString(candidate.Identity.UpdateID);
+                    var candidateRevision = Convert.ToInt32(candidate.Identity.RevisionNumber);
+                    if (candidateId == planItem.WindowsUpdateId &&
+                        candidateRevision == planItem.WindowsUpdateRevision)
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                stillApplicable = found;
+                applicabilityDiagnostics = $"PostInstallStillApplicable={found}.";
+            }
+            catch (Exception ex)
+            {
+                applicabilityDiagnostics = $"PostInstallApplicabilityUnavailable={ex.Message}.";
+            }
+
+            var targetReached = isInstalledAvailable && reportedInstalled || stillApplicable == false;
+            var verification = new UpdateVerificationResult
+            {
+                IsDefinitive = targetReached || stillApplicable == true && !reboot,
+                Verified = targetReached,
+                Status = targetReached
+                    ? UpdateVerificationStatuses.Verified
+                    : reboot
+                        ? UpdateVerificationStatuses.PendingRestart
+                        : stillApplicable == true
+                            ? UpdateVerificationStatuses.Failed
+                            : UpdateVerificationStatuses.Unavailable,
+                Message = targetReached
+                    ? "Il driver non è più applicabile ed è verificato da Windows Update."
+                    : reboot
+                        ? "La verifica finale richiede il riavvio."
+                        : stillApplicable == true
+                            ? "Dopo una nuova scansione il driver risulta ancora applicabile."
+                            : "Lo stato post-installazione non è tecnicamente verificabile."
+            };
+            var decision = UpdateResultPolicy.Resolve(installerSucceeded, reboot, verification);
 
             return new ItemRunResult
             {
                 Id = planItem.Id,
                 Name = planItem.Name,
                 Kind = planItem.Kind,
-                Success = success,
+                Success = decision.Success,
+                InstallerSucceeded = installerSucceeded,
+                Verified = decision.Verified,
+                VerificationStatus = decision.VerificationStatus,
+                ResultCode = resultCode,
+                Phase = "windows-update-install",
                 RestartRequired = reboot,
-                Message = success ? "Driver installato da Windows Update." : $"Installazione non riuscita (codice {resultCode})."
+                Outcome = decision.Outcome,
+                Message = decision.Verified
+                    ? "Driver installato e verificato da Windows Update."
+                    : decision.VerificationStatus.Equals(UpdateVerificationStatuses.PendingRestart, StringComparison.Ordinal)
+                        ? "Windows Update ha completato l'installazione; la verifica finale richiede il riavvio."
+                        : decision.Success
+                            ? "Windows Update segnala installazione completata, ma lo stato installato non è ancora verificabile."
+                            : $"Installazione non riuscita (codice {resultCode}).",
+                Diagnostics =
+                    $"Windows Update DownloadResultCode={downloadCode}; InstallResultCode={resultCode}; " +
+                    $"IsInstalledAvailable={isInstalledAvailable}; IsInstalled={reportedInstalled}; " +
+                    $"RebootRequired={reboot}; {applicabilityDiagnostics}"
             };
         }
         catch (Exception ex)
         {
             LogService.Write($"Errore installazione driver {planItem.Name}.", ex);
-            return Failed(planItem, ex.Message);
+            return Failed(
+                planItem,
+                ex.Message,
+                "windows-update-exception",
+                ex.HResult,
+                ex.ToString());
         }
         finally
         {
             ReleaseCom(collectionObject);
+            ReleaseCom(verificationSearchResultObject);
             ReleaseCom(searchResultObject);
             ReleaseCom(searcherObject);
             ReleaseCom(sessionObject);
         }
     }
 
-    private static ItemRunResult Failed(PlanItem item, string message) => new()
+    private static ItemRunResult Failed(
+        PlanItem item,
+        string message,
+        string phase = "windows-update-install",
+        int? resultCode = null,
+        string diagnostics = "") => new()
     {
         Id = item.Id,
         Name = item.Name,
         Kind = item.Kind,
         Success = false,
-        Message = message
+        InstallerSucceeded = false,
+        Verified = false,
+        VerificationStatus = UpdateVerificationStatuses.Failed,
+        ResultCode = resultCode,
+        Phase = phase,
+        Message = message,
+        Diagnostics = diagnostics
     };
 
     private static void EnsureWindows()
@@ -355,6 +450,20 @@ public sealed class WindowsUpdateService
     {
         try { if (value is not null && Marshal.IsComObject(value)) Marshal.FinalReleaseComObject(value); }
         catch { }
+    }
+
+    private static bool TryBool(Func<bool> getter, out bool value)
+    {
+        try
+        {
+            value = getter();
+            return true;
+        }
+        catch
+        {
+            value = false;
+            return false;
+        }
     }
 
     private static string FormatBytes(long bytes)

@@ -3,7 +3,13 @@ using System.Text;
 
 namespace UpdateCenter.Services;
 
-public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError, string CommandLine = "")
+public sealed record ProcessResult(
+    int ExitCode,
+    string StandardOutput,
+    string StandardError,
+    string CommandLine = "",
+    int? ProcessId = null,
+    TimeSpan? Duration = null)
 {
     public bool Success => ExitCode == 0;
 }
@@ -17,6 +23,7 @@ public static class ProcessRunner
         TimeSpan? timeout = null,
         bool createWindow = false)
     {
+        var stopwatch = Stopwatch.StartNew();
         using var process = new Process
         {
             StartInfo = new ProcessStartInfo
@@ -45,6 +52,8 @@ public static class ProcessRunner
             if (!process.Start())
                 throw new InvalidOperationException($"Impossibile avviare {fileName}.");
 
+            var processId = process.Id;
+
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
@@ -61,15 +70,19 @@ public static class ProcessRunner
             {
                 try { if (!process.HasExited) process.Kill(true); } catch { }
                 if (timeoutCts?.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
-                    throw new TimeoutException($"{fileName} non ha risposto entro il tempo previsto.");
+                    throw new TimeoutException(
+                        $"{fileName} (PID {processId}) non ha risposto entro {timeout}; durata {stopwatch.Elapsed}.");
                 throw;
             }
 
+            stopwatch.Stop();
             return new ProcessResult(
                 process.ExitCode,
                 stdout.ToString(),
                 stderr.ToString(),
-                BuildDisplayCommand(fileName, arguments));
+                BuildDisplayCommand(fileName, arguments),
+                processId,
+                stopwatch.Elapsed);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {

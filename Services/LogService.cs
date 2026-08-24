@@ -5,6 +5,28 @@ public static class LogService
     private static readonly object Gate = new();
     private const long MaximumDailyLogSize = 2L * 1024 * 1024;
 
+    public static void WriteEvent(
+        string operation,
+        string phase,
+        string outcome,
+        string? itemId = null,
+        int? resultCode = null,
+        string? details = null,
+        Exception? exception = null)
+    {
+        var fields = new List<string>
+        {
+            $"operation={operation}",
+            $"phase={phase}",
+            $"outcome={outcome}"
+        };
+        if (!string.IsNullOrWhiteSpace(itemId)) fields.Add($"item={itemId}");
+        if (resultCode.HasValue) fields.Add($"code={resultCode.Value} (0x{resultCode.Value:X8})");
+        if (!string.IsNullOrWhiteSpace(details))
+            fields.Add($"details={details.Replace(Environment.NewLine, " ")}");
+        Write(string.Join(" | ", fields), exception);
+    }
+
     public static void Write(string message, Exception? exception = null)
     {
         try

@@ -17,6 +17,7 @@ public static class OfficialDriverPackageService
     public static ItemRunResult Install(PlanItem item, Action<int, string>? progress = null)
     {
         var workRoot = Path.Combine(Path.GetTempPath(), "UpdateCenter", "driver-" + Guid.NewGuid().ToString("N"));
+        var currentPhase = "official-inf-prepare";
         try
         {
             progress?.Invoke(10, "Verifica del piano di installazione driver...");
@@ -24,11 +25,13 @@ public static class OfficialDriverPackageService
             Directory.CreateDirectory(workRoot);
             var packagePath = Path.Combine(workRoot,
                 item.DriverPackageType.Equals("cab-inf", StringComparison.OrdinalIgnoreCase) ? "driver.cab" : "driver.zip");
+            currentPhase = "official-inf-download";
             progress?.Invoke(15, "Download del pacchetto driver ufficiale...");
             DownloadVerified(item, packagePath, progress);
 
             var extractPath = Path.Combine(workRoot, "extracted");
             Directory.CreateDirectory(extractPath);
+            currentPhase = "official-inf-extract";
             progress?.Invoke(62, "Estrazione sicura del pacchetto driver...");
             if (item.DriverPackageType.Equals("zip-inf", StringComparison.OrdinalIgnoreCase))
                 ExtractZipSafely(packagePath, extractPath);
@@ -36,11 +39,16 @@ public static class OfficialDriverPackageService
                 ExtractCab(packagePath, extractPath);
 
             RejectCompanionApplications(extractPath);
+            currentPhase = "official-inf-hardware-validation";
             progress?.Invoke(72, "Verifica della compatibilita con il dispositivo...");
             var matchingInfs = FindMatchingInfs(extractPath, item.CompatibleHardwareIds);
             if (matchingInfs.Count == 0)
-                return Failed(item, "Pacchetto rifiutato: nessun INF contiene uno degli ID hardware verificati.");
+                return Failed(
+                    item,
+                    "Pacchetto rifiutato: nessun INF contiene uno degli ID hardware verificati.",
+                    currentPhase);
 
+            currentPhase = "official-inf-signature-validation";
             for (var infIndex = 0; infIndex < matchingInfs.Count; infIndex++)
             {
                 var infPath = matchingInfs[infIndex];
@@ -50,7 +58,10 @@ public static class OfficialDriverPackageService
             }
 
             var messages = new List<string>();
+            var installerDiagnostics = new List<string>();
             var restartRequired = false;
+            int? installerResultCode = null;
+            currentPhase = "official-inf-install";
             for (var infIndex = 0; infIndex < matchingInfs.Count; infIndex++)
             {
                 var infPath = matchingInfs[infIndex];
@@ -60,35 +71,89 @@ public static class OfficialDriverPackageService
                     "pnputil.exe",
                     ["/add-driver", infPath, "/install"],
                     CancellationToken.None,
-                    TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
+                    TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
+                installerResultCode = result.ExitCode;
                 var output = string.Join(" ", (result.StandardOutput + "\n" + result.StandardError)
                     .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
                     .Select(x => x.Trim()).Where(x => x.Length > 0).TakeLast(5));
-                if (!result.Success)
-                    return Failed(item, string.IsNullOrWhiteSpace(output)
-                        ? $"PnPUtil ha restituito il codice {result.ExitCode}."
-                        : output);
-                if (output.Contains("restart", StringComparison.OrdinalIgnoreCase) ||
-                    output.Contains("riavvio", StringComparison.OrdinalIgnoreCase))
-                    restartRequired = true;
+                installerDiagnostics.Add(
+                    $"{Path.GetFileName(infPath)}: code={result.ExitCode}; pid={result.ProcessId?.ToString() ?? "n/d"}; " +
+                    $"duration={result.Duration?.ToString() ?? "n/d"}; command={result.CommandLine}; output={output}");
+                var pnputilRestartRequired = result.ExitCode is 1641 or 3010 ||
+                                             output.Contains("restart required", StringComparison.OrdinalIgnoreCase) ||
+                                             output.Contains("reboot required", StringComparison.OrdinalIgnoreCase) ||
+                                             output.Contains("riavvio richiesto", StringComparison.OrdinalIgnoreCase) ||
+                                             output.Contains("riavvio necessario", StringComparison.OrdinalIgnoreCase) ||
+                                             output.Contains("necessario riavviare", StringComparison.OrdinalIgnoreCase);
+                restartRequired |= pnputilRestartRequired;
+                if (!result.Success && !pnputilRestartRequired)
+                {
+                    var verificationAfterError = VerifyInstalledDriver(item, restartRequired);
+                    if (verificationAfterError.Verified)
+                    {
+                        return new ItemRunResult
+                        {
+                            Id = item.Id,
+                            Name = item.Name,
+                            Kind = item.Kind,
+                            Success = true,
+                            InstallerSucceeded = false,
+                            Verified = true,
+                            VerificationStatus = UpdateVerificationStatuses.Verified,
+                            ResultCode = result.ExitCode,
+                            Phase = currentPhase,
+                            Outcome = UpdateOutcomes.Completed,
+                            RestartRequired = restartRequired,
+                            Message = "PnPUtil ha restituito un errore, ma la versione target del driver risulta installata.",
+                            Diagnostics = string.Join(Environment.NewLine, installerDiagnostics) +
+                                          Environment.NewLine + "Verifica post-installazione: " +
+                                          verificationAfterError.Diagnostics
+                        };
+                    }
+                    return Failed(
+                        item,
+                        string.IsNullOrWhiteSpace(output)
+                            ? $"PnPUtil ha restituito il codice {result.ExitCode}."
+                            : output,
+                        currentPhase,
+                        result.ExitCode,
+                        string.Join(Environment.NewLine, installerDiagnostics) +
+                        Environment.NewLine + "Verifica post-installazione: " +
+                        verificationAfterError.Diagnostics);
+                }
                 messages.Add(Path.GetFileName(infPath));
             }
 
+            currentPhase = "official-inf-verification";
             progress?.Invoke(99, "Verifica finale della versione installata...");
+            var verification = VerifyInstalledDriver(item, restartRequired);
+            var decision = UpdateResultPolicy.Resolve(true, restartRequired, verification);
             return new ItemRunResult
             {
                 Id = item.Id,
                 Name = item.Name,
                 Kind = item.Kind,
-                Success = true,
+                Success = decision.Success,
+                InstallerSucceeded = true,
+                Verified = decision.Verified,
+                VerificationStatus = decision.VerificationStatus,
+                ResultCode = installerResultCode,
+                Phase = currentPhase,
+                Outcome = decision.Outcome,
                 RestartRequired = restartRequired,
-                Message = $"Driver INF ufficiale installato ({string.Join(", ", messages)}). Nessuna app del produttore è stata eseguita."
+                Message = verification.Verified
+                    ? $"Driver INF ufficiale installato e verificato ({string.Join(", ", messages)}). Nessuna app del produttore è stata eseguita."
+                    : $"Driver INF ufficiale installato ({string.Join(", ", messages)}). {verification.Message}",
+                Diagnostics = string.Join(Environment.NewLine, installerDiagnostics) +
+                              (string.IsNullOrWhiteSpace(verification.Diagnostics)
+                                  ? ""
+                                  : Environment.NewLine + "Verifica post-installazione: " + verification.Diagnostics)
             };
         }
         catch (Exception ex)
         {
             LogService.Write($"Installazione del pacchetto driver ufficiale {item.Name} rifiutata o fallita.", ex);
-            return Failed(item, ex.Message);
+            return Failed(item, ex.Message, currentPhase, ex.HResult, ex.ToString());
         }
         finally
         {
@@ -122,7 +187,7 @@ public static class OfficialDriverPackageService
     {
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.0.6");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.1.4");
         var current = new Uri(item.OfficialDownloadUrl, UriKind.Absolute);
         for (var redirect = 0; redirect <= 5; redirect++)
         {
@@ -277,7 +342,105 @@ public static class OfficialDriverPackageService
                ?? throw new InvalidOperationException("Risposta della verifica firma non valida.");
     }
 
-    private static string NormalizeId(string value) => value.Replace(" ", "", StringComparison.Ordinal).ToUpperInvariant();
+    private static UpdateVerificationResult VerifyInstalledDriver(PlanItem item, bool restartRequired)
+    {
+        UpdateVerificationResult? latest = null;
+        var attemptDiagnostics = new List<string>();
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            latest = VerifyInstalledDriverOnce(item, restartRequired);
+            attemptDiagnostics.Add(
+                $"Tentativo inventario {attempt}/3: {latest.Status}. {latest.Diagnostics}");
+            if (latest.Verified)
+                break;
+            if (attempt < 3)
+                Thread.Sleep(TimeSpan.FromSeconds(2));
+        }
+
+        latest ??= new UpdateVerificationResult
+        {
+            IsDefinitive = false,
+            Status = UpdateVerificationStatuses.Unavailable,
+            Message = "Verifica finale dell'inventario non disponibile."
+        };
+        latest.Diagnostics = string.Join(Environment.NewLine, attemptDiagnostics);
+        return latest;
+    }
+
+    private static UpdateVerificationResult VerifyInstalledDriverOnce(PlanItem item, bool restartRequired)
+    {
+        try
+        {
+            var scan = new HardwareInventoryService()
+                .ScanAsync(CancellationToken.None).GetAwaiter().GetResult();
+            var expectedIds = item.CompatibleHardwareIds
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(NormalizeId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var candidates = scan.Drivers.Where(driver =>
+                driver.HardwareIds.Concat(driver.CompatibleIds).Append(driver.DeviceId)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(NormalizeId)
+                    .Any(expectedIds.Contains))
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                return new UpdateVerificationResult
+                {
+                    IsDefinitive = !restartRequired,
+                    Status = restartRequired
+                        ? UpdateVerificationStatuses.PendingRestart
+                        : UpdateVerificationStatuses.Failed,
+                    Message = restartRequired
+                        ? "La verifica dell'inventario verrà completata dopo il riavvio."
+                        : "Il dispositivo aggiornato non è stato ritrovato nell'inventario hardware.",
+                    Diagnostics = "Nessun dispositivo compatibile trovato nella verifica post-installazione."
+                };
+            }
+
+            var targetHasVersion = !string.IsNullOrWhiteSpace(item.AvailableVersion) &&
+                                   item.AvailableVersion.Any(char.IsDigit);
+            var verified = !targetHasVersion || candidates.Any(driver =>
+                DriverVersionComparer.Compare(driver.InstalledVersion, item.AvailableVersion) >= 0);
+            return new UpdateVerificationResult
+            {
+                IsDefinitive = verified || !restartRequired,
+                Verified = verified,
+                Status = verified
+                    ? UpdateVerificationStatuses.Verified
+                    : restartRequired
+                        ? UpdateVerificationStatuses.PendingRestart
+                        : UpdateVerificationStatuses.Failed,
+                Message = verified
+                    ? "Versione driver verificata nell'inventario hardware."
+                    : restartRequired
+                        ? "La nuova versione non è ancora visibile; verifica da completare dopo il riavvio."
+                        : "La versione attesa non risulta installata nell'inventario hardware.",
+                Diagnostics = "Versioni rilevate: " + string.Join(", ",
+                    candidates.Select(x => $"{x.DeviceName}={x.InstalledVersion}"))
+            };
+        }
+        catch (Exception ex)
+        {
+            return new UpdateVerificationResult
+            {
+                IsDefinitive = false,
+                Status = restartRequired
+                    ? UpdateVerificationStatuses.PendingRestart
+                    : UpdateVerificationStatuses.Unavailable,
+                Message = restartRequired
+                    ? "Verifica finale rinviata al riavvio."
+                    : "Verifica finale dell'inventario non disponibile.",
+                Diagnostics = ex.ToString()
+            };
+        }
+    }
+
+    private static string NormalizeId(string value) =>
+        value.Trim().TrimEnd('\0').Replace(" ", "", StringComparison.Ordinal).ToUpperInvariant();
 
     private static void EnsureInside(string path, string root)
     {
@@ -301,13 +464,25 @@ public static class OfficialDriverPackageService
         catch { }
     }
 
-    private static ItemRunResult Failed(PlanItem item, string message) => new()
+    private static ItemRunResult Failed(
+        PlanItem item,
+        string message,
+        string phase = "official-inf-install",
+        int? resultCode = null,
+        string diagnostics = "") => new()
     {
         Id = item.Id,
         Name = item.Name,
         Kind = item.Kind,
         Success = false,
-        Message = message
+        InstallerSucceeded = false,
+        Verified = false,
+        VerificationStatus = UpdateVerificationStatuses.Failed,
+        ResultCode = resultCode,
+        Phase = phase,
+        Outcome = UpdateOutcomes.Failed,
+        Message = message,
+        Diagnostics = diagnostics
     };
 
     private sealed class SignatureInfo

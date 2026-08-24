@@ -1,7 +1,10 @@
 using UpdateCenter.Models;
 using UpdateCenter.Services;
+using System.Collections;
+using System.ComponentModel;
 using System.Reflection;
 using System.Text.Json;
+using System.Windows.Data;
 using UpdateCenter.Core;
 using UpdateCenter.Contracts;
 using UpdateCenter.RemoteClient;
@@ -31,8 +34,145 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.3")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla preview 1.1.3.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.4")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla release 1.1.4.");
+
+var defaultVerification = new UpdateVerificationResult();
+if (defaultVerification.Verified || defaultVerification.IsDefinitive ||
+    defaultVerification.Status != UpdateVerificationStatuses.NotRun)
+    throw new InvalidOperationException("Lo stato iniziale della verifica post-installazione non è sicuro.");
+
+var watchdogNow = new DateTime(2026, 8, 24, 20, 0, 0, DateTimeKind.Utc);
+var silentInstallerStatus = new UpdateRunStatus
+{
+    State = "Running",
+    CurrentItemStartedUtc = watchdogNow - TimeSpan.FromMinutes(20),
+    LastProgressUtc = watchdogNow - TimeSpan.FromMinutes(13),
+    LastHeartbeatUtc = watchdogNow - TimeSpan.FromSeconds(5)
+};
+var silentDecision = UpdateWatchdogPolicy.Evaluate(
+    silentInstallerStatus, watchdogNow, UpdateWatchdogThresholds.Default);
+if (silentDecision.ShouldTerminate || !silentDecision.ShouldWarnProgress)
+    throw new InvalidOperationException("Un installer silenzioso con heartbeat vivo viene terminato erroneamente.");
+
+silentInstallerStatus.LastHeartbeatUtc = watchdogNow - TimeSpan.FromSeconds(80);
+var staleHeartbeatDecision = UpdateWatchdogPolicy.Evaluate(
+    silentInstallerStatus, watchdogNow, UpdateWatchdogThresholds.Default);
+if (!staleHeartbeatDecision.ShouldTerminate ||
+    staleHeartbeatDecision.TerminationReason != "runner-heartbeat-timeout")
+    throw new InvalidOperationException("Il watchdog non rileva un heartbeat runner fermo.");
+
+silentInstallerStatus.LastHeartbeatUtc = watchdogNow;
+silentInstallerStatus.LastProgressUtc = watchdogNow;
+silentInstallerStatus.CurrentItemStartedUtc = watchdogNow - TimeSpan.FromMinutes(91);
+var absoluteTimeoutDecision = UpdateWatchdogPolicy.Evaluate(
+    silentInstallerStatus, watchdogNow, UpdateWatchdogThresholds.Default);
+if (!absoluteTimeoutDecision.ShouldTerminate ||
+    absoluteTimeoutDecision.TerminationReason != "absolute-item-timeout")
+    throw new InvalidOperationException("Il timeout massimo assoluto non viene applicato.");
+
+var heartbeatStatusPath = Path.Combine(
+    Path.GetTempPath(), $"updatecenter-heartbeat-smoke-{Guid.NewGuid():N}.json");
+var fixedProgressUtc = watchdogNow - TimeSpan.FromMinutes(13);
+try
+{
+    var heartbeatStatus = new UpdateRunStatus
+    {
+        State = "Running",
+        LastHeartbeatUtc = watchdogNow,
+        LastProgressUtc = fixedProgressUtc
+    };
+    using (var publisher = new ElevatedUpdateRunner.RunnerStatusPublisher(
+               heartbeatStatusPath, heartbeatStatus, TimeSpan.FromMilliseconds(15)))
+    {
+        var initialHeartbeat = JsonStorage.Read<UpdateRunStatus>(heartbeatStatusPath)?.LastHeartbeatUtc
+            ?? throw new InvalidOperationException("Heartbeat iniziale non pubblicato.");
+        Thread.Sleep(80);
+        var refreshedHeartbeat = JsonStorage.Read<UpdateRunStatus>(heartbeatStatusPath)
+            ?? throw new InvalidOperationException("Heartbeat periodico non pubblicato.");
+        if (refreshedHeartbeat.LastHeartbeatUtc <= initialHeartbeat ||
+            refreshedHeartbeat.LastProgressUtc != fixedProgressUtc)
+            throw new InvalidOperationException("Heartbeat e progresso non sono mantenuti separati.");
+    }
+}
+finally
+{
+    try { File.Delete(heartbeatStatusPath); } catch { }
+}
+
+var unavailableDecision = UpdateResultPolicy.Resolve(
+    installerSucceeded: true,
+    restartRequired: false,
+    new UpdateVerificationResult
+    {
+        IsDefinitive = false,
+        Status = UpdateVerificationStatuses.Unavailable
+    });
+var oldVersionDecision = UpdateResultPolicy.Resolve(
+    installerSucceeded: true,
+    restartRequired: false,
+    new UpdateVerificationResult
+    {
+        IsDefinitive = true,
+        Status = UpdateVerificationStatuses.Failed
+    });
+var rebootDecision = UpdateResultPolicy.Resolve(
+    installerSucceeded: true,
+    restartRequired: true,
+    new UpdateVerificationResult
+    {
+        IsDefinitive = false,
+        Status = UpdateVerificationStatuses.PendingRestart
+    });
+var verifiedAfterInstallerError = UpdateResultPolicy.Resolve(
+    installerSucceeded: false,
+    restartRequired: false,
+    new UpdateVerificationResult
+    {
+        IsDefinitive = true,
+        Verified = true,
+        Status = UpdateVerificationStatuses.Verified
+    });
+if (!unavailableDecision.Success || unavailableDecision.Verified ||
+    oldVersionDecision.Success ||
+    !rebootDecision.Success || rebootDecision.Verified ||
+    rebootDecision.VerificationStatus != UpdateVerificationStatuses.PendingRestart ||
+    !verifiedAfterInstallerError.Success || !verifiedAfterInstallerError.Verified)
+    throw new InvalidOperationException("La semantica finale installer/verifica/riavvio non è coerente.");
+
+var verifiedRun = new ItemRunResult
+{
+    Success = true,
+    InstallerSucceeded = true,
+    Verified = true,
+    Outcome = UpdateOutcomes.Completed
+};
+var unverifiedRun = new ItemRunResult
+{
+    Success = true,
+    InstallerSucceeded = true,
+    Verified = false,
+    VerificationStatus = UpdateVerificationStatuses.Unavailable,
+    Outcome = UpdateOutcomes.Completed
+};
+if (!MainViewModel.ShouldRemoveCompletedUpdate(verifiedRun) ||
+    MainViewModel.ShouldRemoveCompletedUpdate(unverifiedRun))
+    throw new InvalidOperationException("Gli aggiornamenti vengono rimossi senza una verifica positiva.");
+
+var editableItems = new ArrayList { new EditableSmokeItem() };
+var editableView = new ListCollectionView(editableItems);
+((IEditableCollectionViewAddNewItem)editableView).AddNewItem(new object());
+if (MainViewModel.TryRefreshCollectionView(editableView, "smoke-add-new"))
+    throw new InvalidOperationException("Refresh WPF eseguito durante AddNew.");
+editableView.CancelNew();
+if (!MainViewModel.TryRefreshCollectionView(editableView, "smoke-after-add-new"))
+    throw new InvalidOperationException("Refresh WPF non ripristinato dopo AddNew.");
+editableView.EditItem(editableItems[0]!);
+if (MainViewModel.TryRefreshCollectionView(editableView, "smoke-edit-item"))
+    throw new InvalidOperationException("Refresh WPF eseguito durante EditItem.");
+editableView.CancelEdit();
+if (!MainViewModel.TryRefreshCollectionView(editableView, "smoke-after-edit-item"))
+    throw new InvalidOperationException("Refresh WPF non ripristinato dopo EditItem.");
 
 var supportedUpdateTargetMethod = typeof(AppUpdateService).GetMethod(
     "IsSupportedUpdateTargetName", BindingFlags.Static | BindingFlags.NonPublic)
@@ -103,6 +243,33 @@ var installedInventory = string.Join('\n',
     new string('-', 90),
     $"{"Opera GX Stable",-24}{"Opera.OperaGX",-25}{"133.0.5932.39",-16}{"",-16}winget");
 var installedRows = WinGetService.ParsePackageRows(installedInventory);
+var verificationAttempt = 0;
+var delayedWinGetVerification = WinGetService.VerifyInstallation(
+    new PlanItem
+    {
+        Id = "Example.DelayedInventory",
+        Name = "Delayed Inventory",
+        InstalledVersion = "1.0.0",
+        AvailableVersion = "2.0.0"
+    },
+    (selector, value) =>
+    {
+        if (selector != "--id" || value != "Example.DelayedInventory")
+            throw new InvalidOperationException("La verifica WinGet non usa l'ID esatto.");
+        verificationAttempt++;
+        var version = verificationAttempt == 1 ? "1.0.0" : "2.0.0";
+        return (
+            new ProcessResult(0, "", "", "winget list --id Example.DelayedInventory --exact"),
+            new List<WinGetPackageRow>
+            {
+                new("Delayed Inventory", "Example.DelayedInventory", version, "", "winget")
+            });
+    },
+    maxAttempts: 3,
+    waitBeforeRetry: _ => { });
+if (!delayedWinGetVerification.Verified || verificationAttempt != 2)
+    throw new InvalidOperationException("La verifica WinGet non accetta l'inventario aggiornato a un retry successivo.");
+
 var uninstalledCandidate = new UpdateItem
 {
     Id = "Example.NotInstalled",
@@ -561,3 +728,10 @@ if (pauseController.IsPauseRequested)
 pauseController.Cleanup();
 
 Console.WriteLine("Smoke test superati: aggiornamenti, diagnostica driver, runtime, storage e pausa.");
+
+sealed class EditableSmokeItem : IEditableObject
+{
+    public void BeginEdit() { }
+    public void CancelEdit() { }
+    public void EndEdit() { }
+}

@@ -8,6 +8,65 @@ public static class UpdateOutcomes
     public const string ManualRequired = "ManualRequired";
 }
 
+public static class UpdateVerificationStatuses
+{
+    public const string NotRun = "NotRun";
+    public const string Verified = "Verified";
+    public const string Failed = "Failed";
+    public const string Unavailable = "Unavailable";
+    public const string PendingRestart = "PendingRestart";
+}
+
+public sealed class UpdateVerificationResult
+{
+    public bool IsDefinitive { get; set; }
+    public bool Verified { get; set; }
+    public string Status { get; set; } = UpdateVerificationStatuses.NotRun;
+    public string Message { get; set; } = "";
+    public string Diagnostics { get; set; } = "";
+}
+
+internal readonly record struct UpdateResultDecision(
+    bool Success,
+    bool Verified,
+    string VerificationStatus,
+    string Outcome);
+
+internal static class UpdateResultPolicy
+{
+    public static UpdateResultDecision Resolve(
+        bool installerSucceeded,
+        bool restartRequired,
+        UpdateVerificationResult verification)
+    {
+        if (verification.Verified)
+        {
+            return new UpdateResultDecision(
+                true,
+                true,
+                UpdateVerificationStatuses.Verified,
+                UpdateOutcomes.Completed);
+        }
+
+        if (restartRequired ||
+            verification.Status.Equals(UpdateVerificationStatuses.PendingRestart, StringComparison.Ordinal))
+        {
+            return new UpdateResultDecision(
+                installerSucceeded,
+                false,
+                UpdateVerificationStatuses.PendingRestart,
+                installerSucceeded ? UpdateOutcomes.Completed : UpdateOutcomes.Failed);
+        }
+
+        var success = installerSucceeded && !verification.IsDefinitive;
+        return new UpdateResultDecision(
+            success,
+            false,
+            verification.Status,
+            success ? UpdateOutcomes.Completed : UpdateOutcomes.Failed);
+    }
+}
+
 public sealed class UpdatePlan
 {
     public bool CreateRestorePoint { get; set; }
@@ -51,6 +110,10 @@ public sealed class UpdateRunStatus
     public string Phase { get; set; } = "";
     public double CurrentItemProgress { get; set; }
     public DateTime LastHeartbeatUtc { get; set; } = DateTime.UtcNow;
+    public DateTime LastProgressUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? CurrentItemStartedUtc { get; set; }
+    public string CurrentItemId { get; set; } = "";
+    public string InstallerTool { get; set; } = "";
     public bool RestorePointRequested { get; set; }
     public bool RestorePointCreated { get; set; }
     public bool RestartRequired { get; set; }
@@ -63,6 +126,11 @@ public sealed class ItemRunResult
     public string Name { get; set; } = "";
     public string Kind { get; set; } = "";
     public bool Success { get; set; }
+    public bool InstallerSucceeded { get; set; }
+    public bool Verified { get; set; }
+    public string VerificationStatus { get; set; } = UpdateVerificationStatuses.NotRun;
+    public int? ResultCode { get; set; }
+    public string Phase { get; set; } = "";
     public bool RestartRequired { get; set; }
     public string Outcome { get; set; } = UpdateOutcomes.Completed;
     public string Message { get; set; } = "";
