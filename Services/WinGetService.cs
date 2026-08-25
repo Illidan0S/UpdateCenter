@@ -175,6 +175,33 @@ public sealed class WinGetService
         return CombineAttempts(attempts, withoutSource.ExitCode);
     }
 
+    public static ProcessResult RunInteractive(PlanItem item)
+    {
+        if (!IsSafePackageId(item.Id))
+            return new ProcessResult(1, "", "Identificativo WinGet non valido.", "winget interactive");
+        var arguments = BuildInteractiveArguments(item);
+        return ProcessRunner.RunAsync(
+            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
+    }
+
+    internal static IReadOnlyList<string> BuildInteractiveArguments(PlanItem item)
+    {
+        var operation = item.PackageOperation.Equals(PackageOperations.Install, StringComparison.Ordinal)
+            ? "install"
+            : "upgrade";
+        return
+        [
+            operation,
+            "--id", item.Id,
+            "--exact",
+            "--source", "winget",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+            "--interactive",
+            "--nowarn"
+        ];
+    }
+
     private static WinGetPackageRow? ResolveExactInstalledMatch(
         IEnumerable<WinGetPackageRow> rows, string expectedName, string expectedId)
     {
@@ -447,6 +474,58 @@ public sealed class WinGetService
         UpdateInstallTechnologyMismatch or InstallUpgradeNotSupported => UpdateOutcomes.ManualRequired,
         _ => result.Success ? UpdateOutcomes.Completed : UpdateOutcomes.Failed
     };
+
+    internal static bool IsFileInUseFailure(ProcessResult result)
+    {
+        if (result.Success)
+            return false;
+
+        var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
+        if (result.ExitCode == unchecked((int)0x80070020) ||
+            output.Contains("0x80070020", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var installerFilesUsedByOtherApplication =
+            output.Contains(
+                "i file modificati dal programma di installazione sono attualmente utilizzati da un'applicazione diversa",
+                StringComparison.OrdinalIgnoreCase) &&
+            output.Contains("chiudere le applicazioni, quindi riprovare", StringComparison.OrdinalIgnoreCase);
+        if (installerFilesUsedByOtherApplication)
+            return true;
+
+        string[] exactSignals =
+        [
+            "the process cannot access the file because it is being used by another process",
+            "cannot access the file because it is being used by another process",
+            "the file is in use by another process",
+            "files are in use by another application",
+            "close the following applications before continuing",
+            "impossibile accedere al file perché è utilizzato da un altro processo",
+            "impossibile accedere al file in quanto utilizzato da un altro processo",
+            "file in uso da un altro processo",
+            "chiudere le applicazioni seguenti prima di continuare"
+        ];
+        if (exactSignals.Any(signal => output.Contains(signal, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        var explicitlyRunning = output.Contains("is already running", StringComparison.OrdinalIgnoreCase) ||
+                                output.Contains("is currently running", StringComparison.OrdinalIgnoreCase) ||
+                                output.Contains("is still running", StringComparison.OrdinalIgnoreCase) ||
+                                output.Contains("è già in esecuzione", StringComparison.OrdinalIgnoreCase) ||
+                                output.Contains("è ancora in esecuzione", StringComparison.OrdinalIgnoreCase);
+        var explicitlyRequestsClose = output.Contains("please close", StringComparison.OrdinalIgnoreCase) ||
+                                      output.Contains("close it before", StringComparison.OrdinalIgnoreCase) ||
+                                      output.Contains("close the application", StringComparison.OrdinalIgnoreCase) ||
+                                      output.Contains("chiudi l'applicazione", StringComparison.OrdinalIgnoreCase) ||
+                                      output.Contains("chiudere l'applicazione", StringComparison.OrdinalIgnoreCase) ||
+                                      output.Contains("chiudere il programma", StringComparison.OrdinalIgnoreCase);
+        return explicitlyRunning && explicitlyRequestsClose;
+    }
+
+    internal static string ClassifyFailureReason(ProcessResult result, bool finalSuccess) =>
+        !finalSuccess && IsFileInUseFailure(result)
+            ? UpdateFailureReasons.FilesInUse
+            : UpdateFailureReasons.None;
 
     internal static bool RequiresRestart(ProcessResult result)
     {

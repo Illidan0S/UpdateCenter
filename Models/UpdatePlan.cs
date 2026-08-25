@@ -17,6 +17,12 @@ public static class UpdateVerificationStatuses
     public const string PendingRestart = "PendingRestart";
 }
 
+public static class UpdateFailureReasons
+{
+    public const string None = "";
+    public const string FilesInUse = "FilesInUse";
+}
+
 public sealed class UpdateVerificationResult
 {
     public bool IsDefinitive { get; set; }
@@ -131,6 +137,7 @@ public sealed class ItemRunResult
     public string VerificationStatus { get; set; } = UpdateVerificationStatuses.NotRun;
     public int? ResultCode { get; set; }
     public string Phase { get; set; } = "";
+    public string FailureReason { get; set; } = UpdateFailureReasons.None;
     public bool RestartRequired { get; set; }
     public string Outcome { get; set; } = UpdateOutcomes.Completed;
     public string Message { get; set; } = "";

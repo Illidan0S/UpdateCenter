@@ -1,0 +1,50 @@
+<Window x:Class="UpdateCenter.WinGetProcessRecoveryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="590" Height="330" WindowStartupLocation="CenterOwner"
+        WindowStyle="None" AllowsTransparency="True" ResizeMode="NoResize"
+        Background="Transparent" ShowInTaskbar="False">
+    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1" CornerRadius="20">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="54" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="76" />
+            </Grid.RowDefinitions>
+
+            <Grid Margin="22,0,12,0" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <TextBlock x:Name="TitleText" FontSize="{DynamicResource FontSize16}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Button Content="×" Style="{StaticResource SecondaryButton}" Width="36" Height="34"
+                        Padding="0" HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Click="Cancel_Click" />
+            </Grid>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="28,18,28,18">
+                <StackPanel>
+                    <Border Width="52" Height="52" CornerRadius="16" HorizontalAlignment="Left"
+                            Background="{DynamicResource WarningSoftBrush}" Margin="0,0,0,16">
+                        <TextBlock Text="!" Foreground="{DynamicResource WarningBrush}"
+                                   FontSize="{DynamicResource FontSize23}" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <TextBlock x:Name="MessageText" FontSize="{DynamicResource FontSize16}"
+                               TextWrapping="Wrap" />
+                    <TextBlock x:Name="ProcessText" Foreground="{DynamicResource MutedTextBrush}"
+                               Margin="0,12,0,0" TextWrapping="Wrap" />
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="0,0,20,20"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="24,14">
+                    <Button x:Name="CancelButton" Content="Annulla" Style="{StaticResource SecondaryButton}"
+                            Click="Cancel_Click" />
+                    <Button x:Name="ConfirmButton" Style="{StaticResource RoundedButton}"
+                            Margin="10,0,0,0" Click="Confirm_Click" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

@@ -340,7 +340,9 @@ public partial class MainWindow : Window
         progressWindow.Activate();
         UpdateProgressRecallButton();
 
-        var result = await _viewModel.InstallItemsAsync(items);
+        var result = await _viewModel.InstallItemsAsync(
+            items,
+            new WpfWinGetProcessRecoveryPrompt(progressWindow));
         if (result is null)
         {
             progressWindow.ShowFailure(_viewModel.StatusText, _viewModel.CurrentItemText);

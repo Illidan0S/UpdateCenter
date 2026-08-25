@@ -589,7 +589,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public Task<UpdateRunStatus?> InstallSelectedAsync() => InstallItemsAsync(SelectedItems);
 
-    public async Task<UpdateRunStatus?> InstallItemsAsync(IReadOnlyList<UpdateItem> items)
+    public Task<UpdateRunStatus?> InstallItemsAsync(IReadOnlyList<UpdateItem> items) =>
+        InstallItemsAsync(items, processRecoveryPrompt: null);
+
+    internal async Task<UpdateRunStatus?> InstallItemsAsync(
+        IReadOnlyList<UpdateItem> items,
+        IWinGetProcessRecoveryPrompt? processRecoveryPrompt)
     {
         var selected = items.Distinct().ToList();
         if (selected.Count == 0 ||
@@ -639,7 +644,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
                     ApplyRunResultsSafely(selected, status.Results);
                 });
-            }, CancellationToken.None);
+            }, CancellationToken.None, processRecoveryPrompt);
 
             ApplyRunResultsSafely(selected, result.Results);
             SaveRunToHistory(selected, result);

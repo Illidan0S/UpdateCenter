@@ -93,7 +93,8 @@ public static class ElevatedUpdateRunner
                     result.Id,
                     result.ResultCode,
                     $"installerSucceeded={result.InstallerSucceeded}; " +
-                    $"verification={result.VerificationStatus}; verified={result.Verified}; {result.Message}");
+                    $"verification={result.VerificationStatus}; verified={result.Verified}; " +
+                    $"failureReason={result.FailureReason}; {result.Message}");
                 publisher.Update(current =>
                 {
                     current.Results.Add(result);
@@ -141,14 +142,35 @@ public static class ElevatedUpdateRunner
         }
     }
 
-    private static ItemRunResult InstallSoftware(PlanItem item, bool silent)
+    internal static ItemRunResult InstallSoftwareInteractive(UpdateItem item) =>
+        InstallSoftware(ToPlanItem(item), silent: false, interactive: true);
+
+    internal static ItemRunResult EvaluateInteractiveResultForTest(
+        PlanItem item,
+        ProcessResult installerResult,
+        Func<PlanItem, UpdateVerificationResult> verification) =>
+        InstallSoftware(
+            item,
+            silent: false,
+            interactive: true,
+            suppliedResult: installerResult,
+            verificationOverride: verification);
+
+    private static ItemRunResult InstallSoftware(
+        PlanItem item,
+        bool silent,
+        bool interactive = false,
+        ProcessResult? suppliedResult = null,
+        Func<PlanItem, UpdateVerificationResult>? verificationOverride = null)
     {
         try
         {
             var isFreshInstall = item.PackageOperation.Equals(PackageOperations.Install, StringComparison.Ordinal);
-            var result = isFreshInstall
+            var result = suppliedResult ?? (interactive
+                ? WinGetService.RunInteractive(item)
+                : isFreshInstall
                 ? WinGetService.Install(item, silent)
-                : WinGetService.Upgrade(item, silent);
+                : WinGetService.Upgrade(item, silent));
             var installerOutcome = WinGetService.ClassifyOutcome(result);
             var restartRequired = WinGetService.RequiresRestart(result);
             var installerSucceeded = installerOutcome.Equals(UpdateOutcomes.Completed, StringComparison.Ordinal) ||
@@ -156,13 +178,14 @@ public static class ElevatedUpdateRunner
             var shouldVerify = installerOutcome.Equals(UpdateOutcomes.Completed, StringComparison.Ordinal) ||
                                installerOutcome.Equals(UpdateOutcomes.Failed, StringComparison.Ordinal);
             var verification = shouldVerify
-                ? WinGetService.VerifyInstallation(item)
+                ? verificationOverride?.Invoke(item) ?? WinGetService.VerifyInstallation(item)
                 : new UpdateVerificationResult
                 {
                     Status = UpdateVerificationStatuses.NotRun,
                     Message = "Verifica post-installazione non richiesta per questo esito."
                 };
             var decision = UpdateResultPolicy.Resolve(installerSucceeded, restartRequired, verification);
+            var failureReason = WinGetService.ClassifyFailureReason(result, decision.Success);
             var finalOutcome = installerOutcome is UpdateOutcomes.NotApplicable or UpdateOutcomes.ManualRequired
                 ? installerOutcome
                 : decision.Outcome;
@@ -217,7 +240,10 @@ public static class ElevatedUpdateRunner
                 Verified = decision.Verified,
                 VerificationStatus = decision.VerificationStatus,
                 ResultCode = result.ExitCode,
-                Phase = isFreshInstall ? "winget-install" : "winget-upgrade",
+                Phase = interactive
+                    ? "winget-interactive"
+                    : isFreshInstall ? "winget-install" : "winget-upgrade",
+                FailureReason = failureReason,
                 Outcome = finalOutcome,
                 RestartRequired = restartRequired,
                 Message = message,
@@ -468,6 +494,29 @@ public static class ElevatedUpdateRunner
             _stop.Dispose();
         }
     }
+
+    internal static PlanItem ToPlanItem(UpdateItem item) => new()
+    {
+        Id = item.Id,
+        Name = item.Name,
+        Kind = item.Kind.ToString(),
+        Source = item.Source,
+        InstalledVersion = item.InstalledVersion,
+        AvailableVersion = item.AvailableVersion,
+        PackageOperation = item.PackageOperation,
+        WindowsUpdateId = item.WindowsUpdateId,
+        WindowsUpdateRevision = item.WindowsUpdateRevision,
+        WindowsUpdateServerSelection = item.WindowsUpdateServerSelection,
+        WindowsUpdateServiceId = item.WindowsUpdateServiceId,
+        DriverInstallMode = item.DriverInstallMode,
+        Vendor = item.Publisher,
+        OfficialReleasePageUrl = item.OfficialReleasePageUrl,
+        OfficialDownloadUrl = item.OfficialDownloadUrl,
+        ExpectedSha256 = item.ExpectedSha256,
+        ExpectedSignerSubjects = item.ExpectedSignerSubjects,
+        DriverPackageType = item.DriverPackageType,
+        CompatibleHardwareIds = item.CompatibleHardwareIds
+    };
 }
 
 internal readonly record struct UpdateWatchdogThresholds(
@@ -531,12 +580,30 @@ internal static class UpdateWatchdogPolicy
 
 public sealed class UpdateCoordinator
 {
-    public async Task<UpdateRunStatus> RunAsync(
+    private readonly WinGetProcessRecoveryService _processRecovery;
+
+    public UpdateCoordinator() : this(new WinGetProcessRecoveryService())
+    {
+    }
+
+    internal UpdateCoordinator(WinGetProcessRecoveryService processRecovery) =>
+        _processRecovery = processRecovery;
+
+    public Task<UpdateRunStatus> RunAsync(
         IReadOnlyList<UpdateItem> selectedItems,
         AppSettings settings,
         UpdatePauseController pauseController,
         Action<UpdateRunStatus> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        RunAsync(selectedItems, settings, pauseController, progress, cancellationToken, processRecoveryPrompt: null);
+
+    internal async Task<UpdateRunStatus> RunAsync(
+        IReadOnlyList<UpdateItem> selectedItems,
+        AppSettings settings,
+        UpdatePauseController pauseController,
+        Action<UpdateRunStatus> progress,
+        CancellationToken cancellationToken,
+        IWinGetProcessRecoveryPrompt? processRecoveryPrompt)
     {
         if (selectedItems.Any(x => !x.CanInstall))
             throw new InvalidOperationException(
@@ -559,6 +626,36 @@ public sealed class UpdateCoordinator
                 var softwareResult = await RunBatchAsync(
                     software, settings, pauseController, requireAdministrator: false, aggregate.Results.Count,
                     aggregate, progress, cancellationToken);
+                if (processRecoveryPrompt is not null)
+                {
+                    for (var index = 0; index < softwareResult.Results.Count; index++)
+                    {
+                        var initialResult = softwareResult.Results[index];
+                        var item = software.FirstOrDefault(candidate =>
+                            candidate.Id.Equals(initialResult.Id, StringComparison.OrdinalIgnoreCase));
+                        if (item is null) continue;
+
+                        var finalResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+                            item,
+                            initialResult,
+                            () => _processRecovery.PrepareRetry(item, initialResult, processRecoveryPrompt),
+                            async () =>
+                            {
+                                var retryBatch = await RunBatchAsync(
+                                    [item], settings, pauseController, requireAdministrator: false,
+                                    completedBeforeBatch: Math.Min(index, Math.Max(0, aggregate.Total - 1)),
+                                    aggregate, progress, cancellationToken,
+                                    allowRestorePoint: false);
+                                softwareResult.RestartRequired |= retryBatch.RestartRequired;
+                                return retryBatch.Results.Single();
+                            },
+                            (retryResult, preparedContext) => _processRecovery.DiagnoseFailedRetry(
+                                item, retryResult, processRecoveryPrompt, preparedContext),
+                            () => Task.Run(() =>
+                                ElevatedUpdateRunner.InstallSoftwareInteractive(item)));
+                        softwareResult.Results[index] = finalResult;
+                    }
+                }
                 MergeBatch(aggregate, softwareResult);
             }
 
@@ -593,40 +690,21 @@ public sealed class UpdateCoordinator
         int completedBeforeBatch,
         UpdateRunStatus aggregate,
         Action<UpdateRunStatus> progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowRestorePoint = true)
     {
         var token = Guid.NewGuid().ToString("N");
         var planPath = Path.Combine(AppPaths.DataDirectory, $"update-plan-{token}.json");
         var statusPath = Path.Combine(AppPaths.DataDirectory, $"update-status-{token}.json");
         var plan = new UpdatePlan
         {
-            CreateRestorePoint = PreflightService.ShouldCreateRestorePoint(selectedItems, settings),
+            CreateRestorePoint = allowRestorePoint &&
+                                 PreflightService.ShouldCreateRestorePoint(selectedItems, settings),
             SilentSoftwareInstall = settings.SilentSoftwareInstall,
             StatusFile = statusPath,
             PauseFile = pauseController.SignalPath,
             PauseOwnerProcessId = Environment.ProcessId,
-            Items = selectedItems.Select(x => new PlanItem
-            {
-                Id = x.Id,
-                Name = x.Name,
-                Kind = x.Kind.ToString(),
-                Source = x.Source,
-                InstalledVersion = x.InstalledVersion,
-                AvailableVersion = x.AvailableVersion,
-                PackageOperation = x.PackageOperation,
-                WindowsUpdateId = x.WindowsUpdateId,
-                WindowsUpdateRevision = x.WindowsUpdateRevision,
-                WindowsUpdateServerSelection = x.WindowsUpdateServerSelection,
-                WindowsUpdateServiceId = x.WindowsUpdateServiceId,
-                DriverInstallMode = x.DriverInstallMode,
-                Vendor = x.Publisher,
-                OfficialReleasePageUrl = x.OfficialReleasePageUrl,
-                OfficialDownloadUrl = x.OfficialDownloadUrl,
-                ExpectedSha256 = x.ExpectedSha256,
-                ExpectedSignerSubjects = x.ExpectedSignerSubjects,
-                DriverPackageType = x.DriverPackageType,
-                CompatibleHardwareIds = x.CompatibleHardwareIds
-            }).ToList()
+            Items = selectedItems.Select(ElevatedUpdateRunner.ToPlanItem).ToList()
         };
 
         JsonStorage.WriteAtomic(planPath, plan);

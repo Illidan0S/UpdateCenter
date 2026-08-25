@@ -2,6 +2,7 @@ using UpdateCenter.Models;
 using UpdateCenter.Services;
 using System.Collections;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
 using System.Windows.Data;
@@ -9,6 +10,15 @@ using UpdateCenter.Core;
 using UpdateCenter.Contracts;
 using UpdateCenter.RemoteClient;
 using UpdateCenter.ViewModels;
+
+if (args.Length == 2 && args[0].Equals("--hold-restart-manager-file", StringComparison.Ordinal))
+{
+    using var heldFile = new FileStream(args[1], FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    Console.WriteLine("READY");
+    await Console.Out.FlushAsync();
+    await Console.In.ReadLineAsync();
+    return;
+}
 
 var parsingCases = new Dictionary<string, SemanticVersion>
 {
@@ -292,6 +302,407 @@ if (WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A15002B), 
     WinGetService.ClassifyOutcome(new ProcessResult(unchecked((int)0x8A150114), "", "")) != UpdateOutcomes.ManualRequired ||
     WinGetService.ClassifyOutcome(new ProcessResult(0, "", "")) != UpdateOutcomes.Completed)
     throw new InvalidOperationException("Classificazione degli esiti WinGet non valida.");
+
+var fileInUseResult = new ProcessResult(
+    1,
+    "",
+    "OBS Studio is already running. Please close the application before continuing.");
+var realItalianFileInUseResult = new ProcessResult(
+    6,
+    "I file modificati dal programma di installazione sono attualmente utilizzati da un'applicazione diversa.\n" +
+    "Chiudere le applicazioni, quindi riprovare.\n" +
+    "Programma di installazione non riuscito con codice di uscita: '6'",
+    "");
+var definitiveOldTargetDecision = UpdateResultPolicy.Resolve(
+    installerSucceeded: false,
+    restartRequired: false,
+    new UpdateVerificationResult
+    {
+        IsDefinitive = true,
+        Verified = false,
+        Status = UpdateVerificationStatuses.Failed,
+        Message = "La versione installata è ancora quella precedente."
+    });
+var realItalianFailureReason = WinGetService.ClassifyFailureReason(
+    realItalianFileInUseResult,
+    definitiveOldTargetDecision.Success);
+if (!WinGetService.IsFileInUseFailure(fileInUseResult) ||
+    realItalianFailureReason != UpdateFailureReasons.FilesInUse ||
+    WinGetService.ClassifyFailureReason(
+        new ProcessResult(6, "Errore generico dell'installer.", ""),
+        finalSuccess: false) != UpdateFailureReasons.None)
+    throw new InvalidOperationException("La classificazione conservativa dei file in uso non è valida.");
+
+var obsRoot = @"C:\Program Files\obs-studio";
+var obsPath = @"C:\Program Files\obs-studio\bin\64bit\obs64.exe";
+if (!WinGetProcessOperations.IsAttributedProcess("obs64", obsPath, [obsRoot], []) ||
+    WinGetProcessOperations.IsAttributedProcess("obs64", @"C:\Tools\obs64.exe", [obsRoot], []) ||
+    WinGetProcessOperations.IsAttributedProcess("explorer", obsPath, [obsRoot], [obsPath]) ||
+    WinGetProcessOperations.RegistrationNameMatches("OBS Studio Beta", "OBS Studio"))
+    throw new InvalidOperationException("L'attribuzione conservativa dei processi WinGet non è valida.");
+
+var blockedItem = new UpdateItem
+{
+    Id = "OBSProject.OBSStudio",
+    Name = "OBS Studio",
+    Kind = UpdateKind.Software,
+    InstalledVersion = "31.0",
+    AvailableVersion = "31.1"
+};
+var blockedResult = new ItemRunResult
+{
+    Id = blockedItem.Id,
+    Name = blockedItem.Name,
+    Success = false,
+    ResultCode = 1,
+    FailureReason = UpdateFailureReasons.FilesInUse,
+    Diagnostics = "Codice di uscita: 1\nOBS Studio is already running."
+};
+var expectedObsSharedRoot = Path.GetFullPath(Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+    "obs-studio-hook"));
+var obsHint = PackageRecoveryHints.Get("OBSProject.OBSStudio");
+if (obsHint.SharedResourceRoots.Count != 1 ||
+    !obsHint.SharedResourceRoots[0].Equals(expectedObsSharedRoot, StringComparison.OrdinalIgnoreCase) ||
+    PackageRecoveryHints.Get("OBSProject.Other").SharedResourceRoots.Count != 0 ||
+    PackageRecoveryHints.Get("obsproject.obsstudio").SharedResourceRoots.Count != 0)
+    throw new InvalidOperationException("Gli hint shared-resource OBS non usano il package ID esatto.");
+
+var interactivePlanItem = ElevatedUpdateRunner.ToPlanItem(blockedItem);
+var interactiveArguments = WinGetService.BuildInteractiveArguments(interactivePlanItem);
+var interactiveArgumentList = interactiveArguments.ToList();
+var interactiveIdIndex = interactiveArgumentList.IndexOf("--id");
+var interactiveSourceIndex = interactiveArgumentList.IndexOf("--source");
+if (interactiveArguments.Contains("--silent", StringComparer.OrdinalIgnoreCase) ||
+    interactiveArguments.Contains("--disable-interactivity", StringComparer.OrdinalIgnoreCase) ||
+    !interactiveArguments.Contains("--interactive", StringComparer.OrdinalIgnoreCase) ||
+    !interactiveArguments.Contains("--exact", StringComparer.OrdinalIgnoreCase) ||
+    !interactiveArguments.Contains("--id", StringComparer.OrdinalIgnoreCase) ||
+    !interactiveArguments.Contains("--source", StringComparer.OrdinalIgnoreCase) ||
+    !interactiveArguments.Contains("winget", StringComparer.OrdinalIgnoreCase) ||
+    interactiveIdIndex < 0 || interactiveIdIndex + 1 >= interactiveArgumentList.Count ||
+    interactiveArgumentList[interactiveIdIndex + 1] != blockedItem.Id ||
+    interactiveSourceIndex < 0 || interactiveSourceIndex + 1 >= interactiveArgumentList.Count ||
+    interactiveArgumentList[interactiveSourceIndex + 1] != "winget")
+    throw new InvalidOperationException("Il comando WinGet interattivo non mantiene i vincoli richiesti.");
+
+var interactiveVerificationCalls = 0;
+var evaluatedInteractiveResult = ElevatedUpdateRunner.EvaluateInteractiveResultForTest(
+    interactivePlanItem,
+    new ProcessResult(6, "Installer interattivo terminato.", "", "winget interactive"),
+    _ =>
+    {
+        interactiveVerificationCalls++;
+        return new UpdateVerificationResult
+        {
+            IsDefinitive = true,
+            Verified = true,
+            Status = UpdateVerificationStatuses.Verified,
+            Message = "Versione target installata.",
+            Diagnostics = "QueryInstalled exact ID: target confermato."
+        };
+    });
+if (interactiveVerificationCalls != 1 || !evaluatedInteractiveResult.Success ||
+    !evaluatedInteractiveResult.Verified || evaluatedInteractiveResult.ResultCode != 6 ||
+    evaluatedInteractiveResult.Phase != "winget-interactive")
+    throw new InvalidOperationException("L'installer interattivo non applica sempre la verifica post-installazione.");
+
+var obsHookPath = Path.Combine(expectedObsSharedRoot, "obs-hook.dll");
+var obsCandidate = new WinGetProcessCandidate(1234, "obs64", obsPath);
+var recoveryContext = new WinGetRecoveryContext(
+    blockedItem.Id,
+    [obsRoot],
+    [obsPath],
+    [expectedObsSharedRoot],
+    [obsHookPath],
+    [obsPath, obsHookPath],
+    [obsCandidate]);
+var packageBlocker = new RestartManagerBlocker(
+    obsCandidate.ProcessId,
+    "OBS Studio",
+    "",
+    RestartManagerApplicationType.MainWindow,
+    0,
+    true,
+    RestartManagerRebootReason.None,
+    obsPath,
+    [obsPath]);
+var externalBlocker = new RestartManagerBlocker(
+    4321,
+    "Plugin host esterno",
+    "",
+    RestartManagerApplicationType.OtherWindow,
+    0,
+    false,
+    RestartManagerRebootReason.None,
+    @"C:\Tools\plugin-host.exe",
+    [obsHookPath]);
+var unknownBlocker = new RestartManagerBlocker(
+    5432,
+    "Processo senza evidenza",
+    "",
+    RestartManagerApplicationType.OtherWindow,
+    0,
+    false,
+    RestartManagerRebootReason.None,
+    @"C:\Tools\unknown.exe",
+    []);
+var serviceBlocker = new RestartManagerBlocker(
+    888,
+    "Servizio condiviso",
+    "SharedService",
+    RestartManagerApplicationType.Service,
+    0,
+    false,
+    RestartManagerRebootReason.None,
+    @"C:\Windows\System32\svchost.exe",
+    [obsHookPath]);
+
+var packageDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsPath, packageBlocker), recoveryContext);
+var externalDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsPath, externalBlocker), recoveryContext);
+var unknownDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsPath, unknownBlocker), recoveryContext);
+var serviceDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsPath, serviceBlocker), recoveryContext);
+var noBlockerDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsPath), recoveryContext);
+if (packageDecision.Action != WinGetRecoveryAction.CloseConfirmedBlockers ||
+    packageDecision.Blockers.Single().Classification != WinGetBlockerClassification.PackageOwned ||
+    externalDecision.Action != WinGetRecoveryAction.CloseConfirmedBlockers ||
+    externalDecision.Blockers.Single().Classification != WinGetBlockerClassification.ExternalConfirmedBlocker ||
+    unknownDecision.Action != WinGetRecoveryAction.ManualIntervention ||
+    unknownDecision.Blockers.Single().Classification != WinGetBlockerClassification.Unknown ||
+    serviceDecision.Action != WinGetRecoveryAction.ManualIntervention ||
+    serviceDecision.Blockers.Single().Classification != WinGetBlockerClassification.SystemOrService ||
+    noBlockerDecision.Action != WinGetRecoveryAction.Retry)
+    throw new InvalidOperationException("La policy Restart Manager dei blocker non è conservativa.");
+
+var noBlockerOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var noBlockerPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: false);
+var noBlockerService = new WinGetProcessRecoveryService(
+    noBlockerOperations,
+    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsPath)));
+var noBlockerPreparation = noBlockerService.PrepareRetry(blockedItem, blockedResult, noBlockerPrompt);
+if (!noBlockerPreparation.ShouldRetry || noBlockerOperations.CloseCalls != 0)
+    throw new InvalidOperationException("L'assenza di blocker Restart Manager non autorizza il retry diretto.");
+
+var gracefulOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var gracefulPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: false);
+var gracefulService = new WinGetProcessRecoveryService(
+    gracefulOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath)));
+var gracefulPreparation = gracefulService.PrepareRetry(blockedItem, blockedResult, gracefulPrompt);
+if (!gracefulPreparation.ShouldRetry || gracefulOperations.CloseCalls != 1 ||
+    gracefulOperations.KillCalls != 0)
+    throw new InvalidOperationException("La chiusura pulita non viene verificata nuovamente con Restart Manager.");
+
+var residualOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var residualPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: false);
+var residualService = new WinGetProcessRecoveryService(
+    residualOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker)));
+var residualPreparation = residualService.PrepareRetry(blockedItem, blockedResult, residualPrompt);
+if (residualPreparation.ShouldRetry || residualOperations.CloseCalls != 1 ||
+    residualOperations.KillCalls != 0 || residualPrompt.KillPrompts != 1)
+    throw new InvalidOperationException("Un blocker residuo deve impedire il retry senza kill esplicito.");
+
+var forcedOperations = new FakeWinGetProcessOperations(recoveryContext, [obsCandidate], []);
+var forcedPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: true);
+var forcedService = new WinGetProcessRecoveryService(
+    forcedOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath)));
+var forcedPreparation = forcedService.PrepareRetry(blockedItem, blockedResult, forcedPrompt);
+if (!forcedPreparation.ShouldRetry || forcedOperations.CloseCalls != 1 ||
+    forcedOperations.KillCalls != 1 || forcedPrompt.KillPrompts != 1)
+    throw new InvalidOperationException("La terminazione forzata confermata non viene riverificata con Restart Manager.");
+
+var externalOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var externalPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: true);
+var externalService = new WinGetProcessRecoveryService(
+    externalOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsHookPath, externalBlocker),
+        SuccessfulRestartManagerQuery(obsHookPath)));
+var externalPreparation = externalService.PrepareRetry(blockedItem, blockedResult, externalPrompt);
+if (!externalPreparation.ShouldRetry || externalOperations.CloseCalls != 1 ||
+    externalOperations.KillCalls != 0 || externalPrompt.ManualPrompts != 0)
+    throw new InvalidOperationException("Un blocker esterno confermato non segue la chiusura controllata.");
+
+var unknownOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var unknownPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: true);
+var unknownService = new WinGetProcessRecoveryService(
+    unknownOperations,
+    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsHookPath, unknownBlocker)));
+var unknownPreparation = unknownService.PrepareRetry(blockedItem, blockedResult, unknownPrompt);
+if (unknownPreparation.ShouldRetry || unknownOperations.CloseCalls != 0 ||
+    unknownOperations.KillCalls != 0 || unknownPrompt.ManualPrompts != 1)
+    throw new InvalidOperationException("Un blocker senza evidenza RM non deve essere terminato.");
+
+var unavailableContext = recoveryContext with { FallbackCandidates = [] };
+var unavailableOperations = new FakeWinGetProcessOperations(unavailableContext, [], []);
+var unavailablePrompt = new FakeWinGetRecoveryPrompt(
+    confirmClose: true, confirmKill: true, confirmInteractive: true);
+var unavailableService = new WinGetProcessRecoveryService(
+    unavailableOperations,
+    new FakeRestartManagerService(new RestartManagerQueryResult(
+        Available: false,
+        Succeeded: false,
+        Resources: [obsPath],
+        Blockers: [],
+        RebootReason: RestartManagerRebootReason.None,
+        ErrorCode: 1,
+        Diagnostics: "Restart Manager non disponibile.")));
+var unavailablePreparation = unavailableService.PrepareRetry(blockedItem, blockedResult, unavailablePrompt);
+if (unavailablePreparation.ShouldRetry || !unavailablePreparation.ShouldRunInteractive ||
+    unavailableOperations.CloseCalls != 0 || unavailableOperations.KillCalls != 0 ||
+    unavailablePrompt.InteractivePrompts != 1)
+    throw new InvalidOperationException("Il fallback interattivo non è disponibile senza blocker identificabili.");
+
+var realItalianBlockedResult = new ItemRunResult
+{
+    Id = blockedItem.Id,
+    Name = blockedItem.Name,
+    Success = definitiveOldTargetDecision.Success,
+    InstallerSucceeded = false,
+    Verified = definitiveOldTargetDecision.Verified,
+    VerificationStatus = definitiveOldTargetDecision.VerificationStatus,
+    ResultCode = realItalianFileInUseResult.ExitCode,
+    FailureReason = realItalianFailureReason,
+    Diagnostics = realItalianFileInUseResult.StandardOutput
+};
+var recoveryRequestCount = 0;
+var recoveryRetryCount = 0;
+var recoveryRequestedResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+    blockedItem,
+    realItalianBlockedResult,
+    () =>
+    {
+        recoveryRequestCount++;
+        return new WinGetRecoveryPreparation(false, "Chiusura manuale richiesta.");
+    },
+    () =>
+    {
+        recoveryRetryCount++;
+        return Task.FromResult(new ItemRunResult { Id = blockedItem.Id, Success = true });
+    });
+if (recoveryRequestCount != 1 || recoveryRetryCount != 0 ||
+    recoveryRequestedResult.FailureReason != UpdateFailureReasons.FilesInUse)
+    throw new InvalidOperationException("Il fallimento WinGet italiano per file in uso non richiede la recovery.");
+
+var genericRecoveryRequestCount = 0;
+var genericFailedResult = CloneBlockedResult(realItalianBlockedResult);
+genericFailedResult.FailureReason = UpdateFailureReasons.None;
+await WinGetSingleRetryPolicy.ExecuteAsync(
+    blockedItem,
+    genericFailedResult,
+    () =>
+    {
+        genericRecoveryRequestCount++;
+        return new WinGetRecoveryPreparation(true, "Non deve essere raggiunto.");
+    },
+    () => Task.FromResult(new ItemRunResult { Id = blockedItem.Id, Success = true }));
+if (genericRecoveryRequestCount != 0)
+    throw new InvalidOperationException("Un fallimento WinGet generico ha attivato la recovery processi.");
+
+var failedRetryCount = 0;
+var failedRetryDiagnosisCount = 0;
+var failedRetryResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+    blockedItem,
+    CloneBlockedResult(blockedResult),
+    () => new WinGetRecoveryPreparation(true, "Processo chiuso."),
+    () =>
+    {
+        failedRetryCount++;
+        return Task.FromResult(new ItemRunResult
+        {
+            Id = blockedItem.Id,
+            Success = false,
+            ResultCode = 2,
+            FailureReason = UpdateFailureReasons.FilesInUse,
+            Diagnostics = "Retry fallito."
+        });
+    },
+    (_, _) =>
+    {
+        failedRetryDiagnosisCount++;
+        return new WinGetPostRetryDiagnosis(
+            "Blocker residuo diagnosticato; nessun secondo retry.",
+            ShouldRunInteractive: false);
+    });
+if (failedRetryResult.Success || failedRetryCount != 1 ||
+    failedRetryDiagnosisCount != 1 ||
+    !failedRetryResult.Diagnostics.Contains("nessun", StringComparison.OrdinalIgnoreCase) &&
+    !failedRetryResult.Diagnostics.Contains("Retry unico", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Un retry fallito non deve generare ulteriori tentativi.");
+
+var interactiveRetryCount = 0;
+var interactiveFallbackCount = 0;
+var interactiveDiagnosisCount = 0;
+var postRetryInteractiveResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+    blockedItem,
+    CloneBlockedResult(blockedResult),
+    () => new WinGetRecoveryPreparation(true, "Risorse verificate prima del retry."),
+    () =>
+    {
+        interactiveRetryCount++;
+        return Task.FromResult(new ItemRunResult
+        {
+            Id = blockedItem.Id,
+            Success = false,
+            ResultCode = 6,
+            FailureReason = UpdateFailureReasons.FilesInUse,
+            Diagnostics = "Retry silent ancora FilesInUse."
+        });
+    },
+    (_, _) =>
+    {
+        interactiveDiagnosisCount++;
+        return new WinGetPostRetryDiagnosis(
+            "Restart Manager non identifica blocker.",
+            ShouldRunInteractive: true);
+    },
+    () =>
+    {
+        interactiveFallbackCount++;
+        return Task.FromResult(evaluatedInteractiveResult);
+    });
+if (!postRetryInteractiveResult.Success || !postRetryInteractiveResult.Verified ||
+    interactiveRetryCount != 1 || interactiveDiagnosisCount != 1 || interactiveFallbackCount != 1 ||
+    !postRetryInteractiveResult.Diagnostics.Contains("Installer interattivo", StringComparison.Ordinal))
+    throw new InvalidOperationException("Il fallback interattivo post-retry non è singolo o non conserva la verifica.");
+
+var verifiedRetryCount = 0;
+var verifiedRetryResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+    blockedItem,
+    CloneBlockedResult(blockedResult),
+    () => new WinGetRecoveryPreparation(true, "Processo chiuso."),
+    () =>
+    {
+        verifiedRetryCount++;
+        return Task.FromResult(new ItemRunResult
+        {
+            Id = blockedItem.Id,
+            Success = true,
+            Verified = true,
+            VerificationStatus = UpdateVerificationStatuses.Verified,
+            ResultCode = 1,
+            Diagnostics = "Target verificato nonostante l'exit code anomalo."
+        });
+    });
+if (!verifiedRetryResult.Success || !verifiedRetryResult.Verified || verifiedRetryCount != 1 ||
+    !verifiedRetryResult.Diagnostics.Contains("ResultCode=1", StringComparison.Ordinal))
+    throw new InvalidOperationException("Il target verificato dopo retry non prevale sull'exit code anomalo.");
+
+await VerifyRestartManagerIntegrationAsync();
 
 var suppressedHytale = new WinGetApplicabilitySuppression
 {
@@ -729,9 +1140,190 @@ pauseController.Cleanup();
 
 Console.WriteLine("Smoke test superati: aggiornamenti, diagnostica driver, runtime, storage e pausa.");
 
+static ItemRunResult CloneBlockedResult(ItemRunResult source) => new()
+{
+    Id = source.Id,
+    Name = source.Name,
+    Success = source.Success,
+    ResultCode = source.ResultCode,
+    FailureReason = source.FailureReason,
+    Diagnostics = source.Diagnostics
+};
+
+static RestartManagerQueryResult SuccessfulRestartManagerQuery(
+    string resource,
+    params RestartManagerBlocker[] blockers) =>
+    new(
+        Available: true,
+        Succeeded: true,
+        Resources: [resource],
+        Blockers: blockers,
+        RebootReason: RestartManagerRebootReason.None,
+        ErrorCode: 0,
+        Diagnostics: blockers.Length == 0 ? "Nessun blocker." : "Blocker rilevati.");
+
+static async Task VerifyRestartManagerIntegrationAsync()
+{
+    if (!OperatingSystem.IsWindows())
+        return;
+
+    var testDirectory = Path.Combine(
+        Path.GetTempPath(), $"updatecenter-restart-manager-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(testDirectory);
+    var lockedFile = Path.Combine(testDirectory, "locked-module.dll");
+    await File.WriteAllBytesAsync(lockedFile, [0x4D, 0x5A, 0x00, 0x00]);
+    Process? helper = null;
+    try
+    {
+        var processPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Percorso del processo SmokeTests non disponibile.");
+        var startInfo = new ProcessStartInfo(processPath)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+            startInfo.ArgumentList.Add(Assembly.GetExecutingAssembly().Location);
+        startInfo.ArgumentList.Add("--hold-restart-manager-file");
+        startInfo.ArgumentList.Add(lockedFile);
+        helper = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Helper Restart Manager non avviato.");
+        var ready = await helper.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        if (!string.Equals(ready, "READY", StringComparison.Ordinal))
+        {
+            var error = await helper.StandardError.ReadToEndAsync();
+            throw new InvalidOperationException("Helper Restart Manager non sincronizzato. " + error);
+        }
+
+        var service = new WindowsRestartManagerService();
+        var sharedResources = WinGetProcessOperations.EnumerateSharedResources([testDirectory]);
+        if (sharedResources.Count != 1 ||
+            !sharedResources[0].Equals(lockedFile, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("La risorsa shared temporanea non è stata enumerata in sicurezza.");
+        var whileLocked = service.Query(sharedResources);
+        if (!whileLocked.Succeeded || whileLocked.Blockers.All(x => x.ProcessId != helper.Id))
+            throw new InvalidOperationException(
+                $"Restart Manager non ha restituito il PID helper {helper.Id}. {whileLocked.Diagnostics}");
+        var sharedContext = new WinGetRecoveryContext(
+            "Test.SharedPackage",
+            [Path.Combine(testDirectory, "primary-install-root")],
+            [],
+            [testDirectory],
+            sharedResources,
+            sharedResources,
+            []);
+        var sharedDecision = WinGetRecoveryDecisionPolicy.Evaluate(whileLocked, sharedContext);
+        var helperClassification = sharedDecision.Blockers
+            .Single(x => x.Blocker.ProcessId == helper.Id)
+            .Classification;
+        if (helperClassification != WinGetBlockerClassification.ExternalConfirmedBlocker)
+            throw new InvalidOperationException(
+                $"Il locker della shared resource è stato classificato come {helperClassification}.");
+
+        await helper.StandardInput.WriteLineAsync();
+        if (!helper.WaitForExit(5000))
+            throw new InvalidOperationException("Helper Restart Manager non terminato entro il limite.");
+
+        var afterRelease = service.Query(sharedResources);
+        if (!afterRelease.Succeeded || afterRelease.Blockers.Any(x => x.ProcessId == helper.Id))
+            throw new InvalidOperationException(
+                $"Restart Manager segnala ancora il PID helper {helper.Id}. {afterRelease.Diagnostics}");
+        Console.WriteLine("Restart Manager integration test: OK");
+    }
+    finally
+    {
+        if (helper is not null)
+        {
+            if (!helper.HasExited)
+            {
+                try { helper.Kill(entireProcessTree: true); } catch { }
+                helper.WaitForExit(2000);
+            }
+            helper.Dispose();
+        }
+        try { Directory.Delete(testDirectory, recursive: true); } catch { }
+    }
+}
+
 sealed class EditableSmokeItem : IEditableObject
 {
     public void BeginEdit() { }
     public void CancelEdit() { }
     public void EndEdit() { }
+}
+
+sealed class FakeWinGetProcessOperations(
+    WinGetRecoveryContext context,
+    IReadOnlyList<WinGetProcessCandidate> remainingAfterClose,
+    IReadOnlyList<WinGetProcessCandidate> remainingAfterKill) : IWinGetProcessOperations
+{
+    public int CloseCalls { get; private set; }
+    public int KillCalls { get; private set; }
+
+    public WinGetRecoveryContext CreateContext(UpdateItem item) => context;
+
+    public IReadOnlyList<WinGetProcessCandidate> CloseGracefully(
+        IReadOnlyList<WinGetProcessCandidate> processCandidates,
+        TimeSpan timeout)
+    {
+        CloseCalls++;
+        return remainingAfterClose;
+    }
+
+    public IReadOnlyList<WinGetProcessCandidate> Terminate(
+        IReadOnlyList<WinGetProcessCandidate> processCandidates,
+        TimeSpan timeout)
+    {
+        KillCalls++;
+        return remainingAfterKill;
+    }
+}
+
+sealed class FakeRestartManagerService(params RestartManagerQueryResult[] results)
+    : IWindowsRestartManagerService
+{
+    private int _index;
+
+    public RestartManagerQueryResult Query(IReadOnlyCollection<string> resources)
+    {
+        if (results.Length == 0)
+            throw new InvalidOperationException("Nessun risultato Restart Manager configurato.");
+        var result = results[Math.Min(_index, results.Length - 1)];
+        _index++;
+        return result;
+    }
+}
+
+sealed class FakeWinGetRecoveryPrompt(
+    bool confirmClose,
+    bool confirmKill,
+    bool confirmInteractive = false) : IWinGetProcessRecoveryPrompt
+{
+    public int KillPrompts { get; private set; }
+
+    public bool ConfirmGracefulClose(
+        UpdateItem item,
+        IReadOnlyList<WinGetProcessCandidate> candidates) => confirmClose;
+
+    public bool ConfirmForcedTermination(
+        UpdateItem item,
+        IReadOnlyList<WinGetProcessCandidate> candidates)
+    {
+        KillPrompts++;
+        return confirmKill;
+    }
+
+    public int ManualPrompts { get; private set; }
+    public int InteractivePrompts { get; private set; }
+
+    public bool ConfirmInteractiveInstaller(UpdateItem item)
+    {
+        InteractivePrompts++;
+        return confirmInteractive;
+    }
+
+    public void ShowManualCloseRequired(UpdateItem item, string detail) => ManualPrompts++;
 }
