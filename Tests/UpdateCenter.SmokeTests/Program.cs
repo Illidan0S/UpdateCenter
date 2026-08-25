@@ -196,6 +196,34 @@ if (!IsSupportedUpdateTarget("UpdateCenter.exe") ||
     IsSupportedUpdateTarget("AltroProgramma.exe"))
     throw new InvalidOperationException("La selezione degli eseguibili aggiornabili non è sicura o non supporta standard e portable.");
 
+var setupSelfUpdateStartInfoMethod = typeof(AppUpdateService).GetMethod(
+    "CreateSetupSelfUpdateStartInfo", BindingFlags.Static | BindingFlags.NonPublic)
+    ?? throw new InvalidOperationException("Preparazione del self-update Setup non trovata.");
+var setupSelfUpdateStartInfo = (ProcessStartInfo?)setupSelfUpdateStartInfoMethod.Invoke(null, [@"C:\Temp\UpdateCenter-Setup-v1.1.4.exe"])
+    ?? throw new InvalidOperationException("Preparazione del self-update Setup non disponibile.");
+var expectedSetupArguments = new[] { "/VERYSILENT", "/NORESTART", "/CLOSEAPPLICATIONS", "/SUPPRESSMSGBOXES", "/SELFUPDATE" };
+if (!setupSelfUpdateStartInfo.UseShellExecute ||
+    !setupSelfUpdateStartInfo.Verb.Equals("runas", StringComparison.OrdinalIgnoreCase) ||
+    expectedSetupArguments.Except(setupSelfUpdateStartInfo.ArgumentList, StringComparer.OrdinalIgnoreCase).Any() ||
+    setupSelfUpdateStartInfo.ArgumentList.Count(argument => argument.Equals("/SELFUPDATE", StringComparison.OrdinalIgnoreCase)) != 1)
+    throw new InvalidOperationException("Il self-update Setup non passa una sola volta gli argomenti richiesti.");
+
+var installerScriptPath = Path.Combine(Directory.GetCurrentDirectory(), "installer.iss");
+if (!File.Exists(installerScriptPath))
+    throw new InvalidOperationException("Script Inno Setup non trovato per il controllo self-update.");
+var installerScript = File.ReadAllText(installerScriptPath);
+const string selfUpdateRunEntry = "Filename: \"{app}\\{#MyAppExeName}\"; WorkingDir: \"{app}\"; Flags: nowait runasoriginaluser; Check: IsSelfUpdate";
+if (!installerScript.Contains("function IsSelfUpdate: Boolean;", StringComparison.Ordinal) ||
+    !installerScript.Contains("ParamCount", StringComparison.Ordinal) ||
+    !installerScript.Contains("ParamStr(Index)", StringComparison.Ordinal) ||
+    !installerScript.Contains("'/SELFUPDATE'", StringComparison.Ordinal) ||
+    installerScript.Split('\n').Count(line => line.Trim().Equals(selfUpdateRunEntry, StringComparison.Ordinal)) != 1)
+    throw new InvalidOperationException("Il rilancio Inno Setup non è limitato a un solo self-update riuscito.");
+const string manualRunEntry = "Filename: \"{app}\\{#MyAppExeName}\"; Description: \"{cm:LaunchUpdateCenter}\"; WorkingDir: \"{app}\"; Flags: nowait postinstall skipifsilent";
+if (!installerScript.Contains(manualRunEntry, StringComparison.Ordinal) ||
+    !IsSupportedUpdateTarget("UpdateCenter-v1.1.4-Portable.exe"))
+    throw new InvalidOperationException("Il comportamento del Setup manuale o del percorso Portable è regredito.");
+
 var settings = new AppSettings();
 if (!settings.CheckAppUpdatesAutomatically)
     throw new InvalidOperationException("Il controllo automatico deve essere attivo per impostazione predefinita.");

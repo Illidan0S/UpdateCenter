@@ -153,17 +153,7 @@ public sealed class AppUpdateService
             progress?.Report(new AppUpdateDownloadProgress(100, "Download verificato · preparazione del riavvio…"));
             if (update.IsInstallerPackage)
             {
-                var installerStart = new ProcessStartInfo
-                {
-                    FileName = finalPath,
-                    WorkingDirectory = AppPaths.UpdatesDirectory,
-                    UseShellExecute = true,
-                    Verb = "runas"
-                };
-                installerStart.ArgumentList.Add("/VERYSILENT");
-                installerStart.ArgumentList.Add("/NORESTART");
-                installerStart.ArgumentList.Add("/CLOSEAPPLICATIONS");
-                installerStart.ArgumentList.Add("/SUPPRESSMSGBOXES");
+                var installerStart = CreateSetupSelfUpdateStartInfo(finalPath);
                 _ = Process.Start(installerStart)
                     ?? throw new InvalidOperationException("Impossibile avviare l'installer dell'aggiornamento.");
                 LogService.Write($"Installer dell'app v{update.AvailableVersion} scaricato e avviato.");
@@ -325,6 +315,23 @@ public sealed class AppUpdateService
             Math.Max(assemblyVersion?.Major ?? 0, 0),
             Math.Max(assemblyVersion?.Minor ?? 0, 0),
             Math.Max(assemblyVersion?.Build ?? 0, 0));
+    }
+
+    private static ProcessStartInfo CreateSetupSelfUpdateStartInfo(string installerPath)
+    {
+        var installerStart = new ProcessStartInfo
+        {
+            FileName = installerPath,
+            WorkingDirectory = AppPaths.UpdatesDirectory,
+            UseShellExecute = true,
+            Verb = "runas"
+        };
+        installerStart.ArgumentList.Add("/VERYSILENT");
+        installerStart.ArgumentList.Add("/NORESTART");
+        installerStart.ArgumentList.Add("/CLOSEAPPLICATIONS");
+        installerStart.ArgumentList.Add("/SUPPRESSMSGBOXES");
+        installerStart.ArgumentList.Add("/SELFUPDATE");
+        return installerStart;
     }
 
     private static Uri ValidateGitHubDownloadUri(string value)

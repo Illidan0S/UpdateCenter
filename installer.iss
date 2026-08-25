@@ -65,6 +65,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDi
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchUpdateCenter}"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Flags: nowait runasoriginaluser; Check: IsSelfUpdate
 
 [CustomMessages]
 italian.LaunchUpdateCenter=Avvia Update Center
@@ -73,6 +74,21 @@ italian.RemoveUserData=Vuoi eliminare anche impostazioni, cronologia e log local
 english.RemoveUserData=Do you also want to delete Update Center settings, history, and local logs?
 
 [Code]
+function IsSelfUpdate: Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(Index), '/SELFUPDATE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
