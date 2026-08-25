@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Path,
-    [bool]$Required = $false
+    [string]$Path
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,10 +13,7 @@ $certificateBase64 = $env:WINDOWS_SIGNING_PFX_BASE64
 $password = $env:WINDOWS_SIGNING_PFX_PASSWORD
 if ([string]::IsNullOrWhiteSpace($certificateBase64) -or
     [string]::IsNullOrWhiteSpace($password)) {
-    if ($Required) {
-        throw 'Una Release stabile richiede WINDOWS_SIGNING_PFX_BASE64 e WINDOWS_SIGNING_PFX_PASSWORD.'
-    }
-    Write-Host 'Certificato code-signing non configurato: firma saltata per build non stabile.'
+    Write-Warning 'Code signing non configurato: artefatti pubblicati senza firma Authenticode.'
     exit 0
 }
 

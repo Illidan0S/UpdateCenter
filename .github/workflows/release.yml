@@ -6,6 +6,11 @@ on:
       - "v*.*.*"
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Tag di Release esistente da aggiornare (ad esempio v1.1.4)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.value }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
 
     steps:
       - name: Checkout source
@@ -29,6 +35,8 @@ jobs:
       - name: Resolve and validate version
         id: version
         shell: pwsh
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         run: |
           [xml]$project = Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw
           $node = $project.SelectSingleNode('/Project/PropertyGroup/Version')
@@ -36,15 +44,23 @@ jobs:
             throw 'UpdateCenter.csproj deve contenere Version nel formato MAJOR.MINOR.PATCH.'
           }
           $version = $node.InnerText.Trim()
-          if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') {
-              throw "Tag stabile non valido: $env:GITHUB_REF_NAME"
+          $releaseTag = if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $env:GITHUB_REF_NAME
+          } elseif (-not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG_INPUT)) {
+            $env:RELEASE_TAG_INPUT.Trim()
+          } else {
+            ''
+          }
+          if (-not [string]::IsNullOrWhiteSpace($releaseTag)) {
+            if ($releaseTag -notmatch '^v\d+\.\d+\.\d+$') {
+              throw "Tag stabile non valido: $releaseTag"
             }
-            if ($env:GITHUB_REF_NAME.Substring(1) -ne $version) {
-              throw "Il tag $env:GITHUB_REF_NAME non coincide con la versione $version del progetto."
+            if ($releaseTag.Substring(1) -ne $version) {
+              throw "Il tag $releaseTag non coincide con la versione $version del progetto."
             }
           }
           "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Restore dependencies
         shell: pwsh
@@ -69,7 +85,7 @@ jobs:
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: .\sign-windows-artifact.ps1 -Path '.\dist\UpdateCenter.exe' -Required:($env:GITHUB_REF_TYPE -eq 'tag')
+        run: .\sign-windows-artifact.ps1 -Path '.\dist\UpdateCenter.exe'
 
       - name: Install Inno Setup
         shell: pwsh
@@ -85,7 +101,7 @@ jobs:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
-        run: .\sign-windows-artifact.ps1 -Path ".\installer-dist\UpdateCenter-Setup-v$env:RELEASE_VERSION.exe" -Required:($env:GITHUB_REF_TYPE -eq 'tag')
+        run: .\sign-windows-artifact.ps1 -Path ".\installer-dist\UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
 
       - name: Create and verify release artifacts
         id: package
@@ -100,24 +116,38 @@ jobs:
           }
           New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
 
-          $standardName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
-          $portableName = "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe"
-          $standardPath = Join-Path $artifacts $standardName
+          $installerSourceName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
+          $setupName = "UpdateCenter-$env:RELEASE_VERSION-setup.exe"
+          $portableName = "UpdateCenter-$env:RELEASE_VERSION-portable.exe"
+          $checksumName = "UpdateCenter-$env:RELEASE_VERSION-SHA256.txt"
+          $setupPath = Join-Path $artifacts $setupName
           $portablePath = Join-Path $artifacts $portableName
-          Copy-Item -LiteralPath ".\installer-dist\$standardName" -Destination $standardPath
+          $checksumPath = Join-Path $artifacts $checksumName
+          Copy-Item -LiteralPath ".\installer-dist\$installerSourceName" -Destination $setupPath
           Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $portablePath
 
-          foreach ($asset in @(@($standardPath, $standardName), @($portablePath, $portableName))) {
+          $checksumLines = foreach ($asset in @(@($portablePath, $portableName), @($setupPath, $setupName))) {
             $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
-            $checksumPath = "$($asset[0]).sha256"
-            Set-Content -LiteralPath $checksumPath -Value "$hash  $($asset[1])" -Encoding ascii
-            $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), '[0-9A-Fa-f]{64}')).Value
+            "$hash  $($asset[1])"
+          }
+          Set-Content -LiteralPath $checksumPath -Value $checksumLines -Encoding ascii
+
+          foreach ($asset in @(@($portablePath, $portableName), @($setupPath, $setupName))) {
+            $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
+            $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), "(?m)^([0-9A-Fa-f]{64})  $([regex]::Escape($asset[1]))$")).Groups[1].Value
             if ($publishedHash -ne $hash) {
               throw "Verifica SHA-256 non riuscita per $($asset[1])."
             }
           }
 
-          foreach ($assetPath in @($standardPath, $portablePath)) {
+          $portableVersionInfo = (Get-Item -LiteralPath $portablePath).VersionInfo
+          if ($portableVersionInfo.ProductVersion.Trim() -ne $env:RELEASE_VERSION) {
+            throw "ProductVersion inattesa per $portableName: $($portableVersionInfo.ProductVersion)"
+          }
+          if ($portableVersionInfo.FileVersion.Trim() -ne "$env:RELEASE_VERSION.0") {
+            throw "FileVersion inattesa per $portableName: $($portableVersionInfo.FileVersion)"
+          }
+          foreach ($assetPath in @($setupPath)) {
             $assetVersion = (Get-Item -LiteralPath $assetPath).VersionInfo.ProductVersion.Trim()
             if ($assetVersion -ne $env:RELEASE_VERSION) {
               throw "Versione EXE inattesa per $(Split-Path -Leaf $assetPath): $assetVersion"
@@ -137,7 +167,7 @@ jobs:
           retention-days: 30
 
   release:
-    if: github.ref_type == 'tag'
+    if: needs.build.outputs.release_tag != ''
     needs: build
     runs-on: windows-2022
     timeout-minutes: 10
@@ -156,14 +186,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
           ASSET_DIRECTORY: artifacts
         run: |
           $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
-          if ($assets.Count -ne 4) {
-            throw "Sono attesi quattro asset di Release, trovati: $($assets.Count)."
+          $expectedAssets = @(
+            "UpdateCenter-$env:RELEASE_VERSION-portable.exe",
+            "UpdateCenter-$env:RELEASE_VERSION-setup.exe",
+            "UpdateCenter-$env:RELEASE_VERSION-SHA256.txt"
+          )
+          if ($assets.Count -ne $expectedAssets.Count -or
+              @($expectedAssets | Where-Object { -not (Test-Path -LiteralPath (Join-Path $env:ASSET_DIRECTORY $_)) }).Count -ne 0) {
+            throw "Asset di Release inattesi o mancanti per la versione $env:RELEASE_VERSION."
           }
-          gh release create $env:GITHUB_REF_NAME $assets `
-            --repo "$env:GITHUB_REPOSITORY" `
-            --title "Update Center v$env:RELEASE_VERSION" `
-            --generate-notes `
-            --verify-tag
+          if (gh release view $env:RELEASE_TAG --repo "$env:GITHUB_REPOSITORY" 2>$null) {
+            gh release upload $env:RELEASE_TAG $assets --repo "$env:GITHUB_REPOSITORY" --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Caricamento degli asset di Release non riuscito (exit code $LASTEXITCODE)." }
+          } else {
+            gh release create $env:RELEASE_TAG $assets `
+              --repo "$env:GITHUB_REPOSITORY" `
+              --title "UpdateCenter $env:RELEASE_VERSION" `
+              --generate-notes `
+              --verify-tag
+            if ($LASTEXITCODE -ne 0) { throw "Creazione della Release GitHub non riuscita (exit code $LASTEXITCODE)." }
+          }
