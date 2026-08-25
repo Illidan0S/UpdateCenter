@@ -116,34 +116,37 @@ jobs:
           }
           New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
 
-          $installerSourceName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
-          $setupName = "UpdateCenter-$env:RELEASE_VERSION-setup.exe"
-          $portableName = "UpdateCenter-$env:RELEASE_VERSION-portable.exe"
-          $checksumName = "UpdateCenter-$env:RELEASE_VERSION-SHA256.txt"
+          $setupName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
+          $portableName = "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe"
+          $setupChecksumName = "$setupName.sha256"
+          $portableChecksumName = "$portableName.sha256"
           $setupPath = Join-Path $artifacts $setupName
           $portablePath = Join-Path $artifacts $portableName
-          $checksumPath = Join-Path $artifacts $checksumName
-          Copy-Item -LiteralPath ".\installer-dist\$installerSourceName" -Destination $setupPath
+          $setupChecksumPath = Join-Path $artifacts $setupChecksumName
+          $portableChecksumPath = Join-Path $artifacts $portableChecksumName
+          Copy-Item -LiteralPath ".\installer-dist\$setupName" -Destination $setupPath
           Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination $portablePath
 
-          $checksumLines = foreach ($asset in @(@($portablePath, $portableName), @($setupPath, $setupName))) {
-            $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
-            "$hash  $($asset[1])"
+          $releaseAssets = @(
+            [pscustomobject]@{ Path = $setupPath; Name = $setupName; ChecksumPath = $setupChecksumPath; ChecksumName = $setupChecksumName },
+            [pscustomobject]@{ Path = $portablePath; Name = $portableName; ChecksumPath = $portableChecksumPath; ChecksumName = $portableChecksumName }
+          )
+          foreach ($asset in $releaseAssets) {
+            $hash = (Get-FileHash -LiteralPath $asset.Path -Algorithm SHA256).Hash
+            Set-Content -LiteralPath $asset.ChecksumPath -Value "$hash  $($asset.Name)" -Encoding ascii
           }
-          Set-Content -LiteralPath $checksumPath -Value $checksumLines -Encoding ascii
 
-          $publishedHashes = @{}
-          foreach ($line in Get-Content -LiteralPath $checksumPath) {
-            if ($line -notmatch '^(?<hash>[0-9A-Fa-f]{64})  (?<name>.+)$') {
-              throw "Formato SHA-256 non valido: $line"
+          foreach ($asset in $releaseAssets) {
+            $checksumLines = @(Get-Content -LiteralPath $asset.ChecksumPath)
+            if ($checksumLines.Count -ne 1 -or $checksumLines[0] -notmatch '^(?<hash>[0-9A-Fa-f]{64})  (?<name>.+)$') {
+              throw "Formato SHA-256 non valido: $($asset.ChecksumName)"
             }
-            $publishedHashes[$Matches.name] = $Matches.hash
-          }
-          foreach ($asset in @(@($portablePath, $portableName), @($setupPath, $setupName))) {
-            $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
-            $publishedHash = $publishedHashes[$asset[1]]
-            if ($publishedHash -ne $hash) {
-              throw "Verifica SHA-256 non riuscita per $($asset[1])."
+            if ($Matches.name -ne $asset.Name) {
+              throw "Nome artefatto inatteso in $($asset.ChecksumName)."
+            }
+            $hash = (Get-FileHash -LiteralPath $asset.Path -Algorithm SHA256).Hash
+            if ($Matches.hash -ne $hash) {
+              throw "Verifica SHA-256 non riuscita per $($asset.Name)."
             }
           }
 
@@ -198,9 +201,10 @@ jobs:
         run: |
           $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
           $expectedAssets = @(
-            "UpdateCenter-$env:RELEASE_VERSION-portable.exe",
-            "UpdateCenter-$env:RELEASE_VERSION-setup.exe",
-            "UpdateCenter-$env:RELEASE_VERSION-SHA256.txt"
+            "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe",
+            "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe.sha256",
+            "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe",
+            "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe.sha256"
           )
           if ($assets.Count -ne $expectedAssets.Count -or
               @($expectedAssets | Where-Object { -not (Test-Path -LiteralPath (Join-Path $env:ASSET_DIRECTORY $_)) }).Count -ne 0) {
