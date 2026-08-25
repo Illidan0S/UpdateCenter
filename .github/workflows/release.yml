@@ -142,10 +142,10 @@ jobs:
 
           $portableVersionInfo = (Get-Item -LiteralPath $portablePath).VersionInfo
           if ($portableVersionInfo.ProductVersion.Trim() -ne $env:RELEASE_VERSION) {
-            throw "ProductVersion inattesa per $portableName: $($portableVersionInfo.ProductVersion)"
+            throw "ProductVersion inattesa per ${portableName}: $($portableVersionInfo.ProductVersion)"
           }
           if ($portableVersionInfo.FileVersion.Trim() -ne "$env:RELEASE_VERSION.0") {
-            throw "FileVersion inattesa per $portableName: $($portableVersionInfo.FileVersion)"
+            throw "FileVersion inattesa per ${portableName}: $($portableVersionInfo.FileVersion)"
           }
           foreach ($assetPath in @($setupPath)) {
             $assetVersion = (Get-Item -LiteralPath $assetPath).VersionInfo.ProductVersion.Trim()
