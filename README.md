@@ -10,8 +10,11 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 
 ## Funzioni principali
 
-- Aggiornamento controllato dei software tramite WinGet.
+- Aggiornamento controllato dei software tramite WinGet, con verifica più affidabile dell’installazione completata.
+- Gestione sicura delle applicazioni aperte che bloccano un aggiornamento, con possibilità di chiuderle e riprovare.
+- Possibilità di continuare con l’installer normale quando serve un intervento dell’utente.
 - Ricerca di driver compatibili da fonti ufficiali e verificate.
+- Gestione più affidabile degli aggiornamenti di driver e chipset.
 - Diagnosi dei driver problematici segnalati da Gestione dispositivi.
 - Controllo e installazione dei runtime condivisi: DirectX, Visual C++, .NET, Vulkan, PhysX, WebView2 e altri.
 - Filtri per software, driver, runtime ed errori.
@@ -22,6 +25,7 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 - Salute dello storage con unità fisiche, volumi associati, capacità, stato e temperatura quando disponibile.
 - Collegamento diretto a NVIDIA App o alla pagina ufficiale per i driver GPU NVIDIA.
 - Cronologia degli aggiornamenti, log locali e nessuna telemetria.
+- Messaggi più chiari e diagnostica più utile in caso di problemi.
 - Controllo automatico delle nuove versioni di Update Center con verifica SHA-256 e autosostituzione sicura anche della portable.
 - Gestione dei computer nella rete locale tramite modalità Controller e Agent, con autorizzazione dei dispositivi e revoca immediata dell’accesso.
 - Scansione e gestione remota degli aggiornamenti, con avanzamento e riepilogo separati per ciascun computer collegato.
