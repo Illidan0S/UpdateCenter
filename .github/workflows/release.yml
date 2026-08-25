@@ -132,9 +132,16 @@ jobs:
           }
           Set-Content -LiteralPath $checksumPath -Value $checksumLines -Encoding ascii
 
+          $publishedHashes = @{}
+          foreach ($line in Get-Content -LiteralPath $checksumPath) {
+            if ($line -notmatch '^(?<hash>[0-9A-Fa-f]{64})  (?<name>.+)$') {
+              throw "Formato SHA-256 non valido: $line"
+            }
+            $publishedHashes[$Matches.name] = $Matches.hash
+          }
           foreach ($asset in @(@($portablePath, $portableName), @($setupPath, $setupName))) {
             $hash = (Get-FileHash -LiteralPath $asset[0] -Algorithm SHA256).Hash
-            $publishedHash = ([regex]::Match((Get-Content -LiteralPath $checksumPath -Raw), "(?m)^([0-9A-Fa-f]{64})  $([regex]::Escape($asset[1]))$")).Groups[1].Value
+            $publishedHash = $publishedHashes[$asset[1]]
             if ($publishedHash -ne $hash) {
               throw "Verifica SHA-256 non riuscita per $($asset[1])."
             }
