@@ -106,11 +106,23 @@ try
     {
         var initialHeartbeat = JsonStorage.Read<UpdateRunStatus>(heartbeatStatusPath)?.LastHeartbeatUtc
             ?? throw new InvalidOperationException("Heartbeat iniziale non pubblicato.");
-        Thread.Sleep(80);
-        var refreshedHeartbeat = JsonStorage.Read<UpdateRunStatus>(heartbeatStatusPath)
-            ?? throw new InvalidOperationException("Heartbeat periodico non pubblicato.");
-        if (refreshedHeartbeat.LastHeartbeatUtc <= initialHeartbeat ||
-            refreshedHeartbeat.LastProgressUtc != fixedProgressUtc)
+        UpdateRunStatus? refreshedHeartbeat = null;
+        var stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < TimeSpan.FromSeconds(2))
+        {
+            Thread.Sleep(25);
+            refreshedHeartbeat = JsonStorage.Read<UpdateRunStatus>(heartbeatStatusPath);
+            if (refreshedHeartbeat != null && refreshedHeartbeat.LastHeartbeatUtc > initialHeartbeat)
+                break;
+        }
+
+        if (refreshedHeartbeat == null)
+            throw new InvalidOperationException("Heartbeat periodico non pubblicato entro il timeout.");
+
+        if (refreshedHeartbeat.LastHeartbeatUtc <= initialHeartbeat)
+            throw new InvalidOperationException($"Heartbeat periodico non aggiornato entro il timeout (iniziale: {initialHeartbeat:o}, attuale: {refreshedHeartbeat.LastHeartbeatUtc:o}).");
+
+        if (refreshedHeartbeat.LastProgressUtc != fixedProgressUtc)
             throw new InvalidOperationException("Heartbeat e progresso non sono mantenuti separati.");
     }
 }
