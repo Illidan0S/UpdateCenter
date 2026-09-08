@@ -287,7 +287,9 @@ public sealed class WindowsUpdateService
             if (selectedUpdate is null)
                 return Failed(
                     planItem,
-                    "L'aggiornamento non è più proposto da Windows Update. Esegui una nuova scansione.",
+                    LocalizationService.Text(
+                        "L'aggiornamento non è più proposto da Windows Update. Esegui una nuova scansione.",
+                        "The update is no longer offered by Windows Update. Run a new scan."),
                     "windows-update-search");
 
             if (!Convert.ToBoolean(selectedUpdate.EulaAccepted))
@@ -299,7 +301,7 @@ public sealed class WindowsUpdateService
             dynamic collection = collectionObject;
             collection.Add(selectedUpdate);
 
-            progress?.Invoke(35, "Download del driver tramite Windows Update...");
+            progress?.Invoke(35, LocalizationService.Text("Download del driver tramite Windows Update...", "Downloading driver via Windows Update..."));
             dynamic downloader = session.CreateUpdateDownloader();
             downloader.Updates = collection;
             dynamic downloadResult = downloader.Download();
@@ -307,19 +309,19 @@ public sealed class WindowsUpdateService
             if (downloadCode is not (2 or 3))
                 return Failed(
                     planItem,
-                    $"Download del driver non riuscito (codice {downloadCode}).",
+                    LocalizationService.Text($"Download del driver non riuscito (codice {downloadCode}).", $"Driver download failed (code {downloadCode})."),
                     "windows-update-download",
                     downloadCode,
                     $"Windows Update DownloadResultCode={downloadCode}.");
 
-            progress?.Invoke(72, "Installazione del driver tramite Windows Update...");
+            progress?.Invoke(72, LocalizationService.Text("Installazione del driver tramite Windows Update...", "Installing driver via Windows Update..."));
             dynamic installer = session.CreateUpdateInstaller();
             installer.Updates = collection;
             dynamic installResult = installer.Install();
             int resultCode = Convert.ToInt32(installResult.ResultCode);
             bool reboot = Convert.ToBoolean(installResult.RebootRequired);
             bool installerSucceeded = resultCode is 2 or 3;
-            progress?.Invoke(96, "Verifica del risultato restituito da Windows Update...");
+            progress?.Invoke(96, LocalizationService.Text("Verifica del risultato restituito da Windows Update...", "Verifying result returned by Windows Update..."));
 
             var isInstalledAvailable = TryBool(
                 () => Convert.ToBoolean(selectedUpdate.IsInstalled), out var reportedInstalled);
@@ -327,7 +329,7 @@ public sealed class WindowsUpdateService
             string applicabilityDiagnostics;
             try
             {
-                progress?.Invoke(98, "Nuova scansione di applicabilità del driver...");
+                progress?.Invoke(98, LocalizationService.Text("Nuova scansione di applicabilità del driver...", "Rescanning driver applicability..."));
                 verificationSearchResultObject = searcher.Search(DriverSearchCriteria);
                 dynamic verificationSearchResult = verificationSearchResultObject;
                 var found = false;
@@ -365,12 +367,12 @@ public sealed class WindowsUpdateService
                             ? UpdateVerificationStatuses.Failed
                             : UpdateVerificationStatuses.Unavailable,
                 Message = targetReached
-                    ? "Il driver non è più applicabile ed è verificato da Windows Update."
+                    ? LocalizationService.Text("Il driver non è più applicabile ed è verificato da Windows Update.", "The driver is no longer applicable and is verified by Windows Update.")
                     : reboot
-                        ? "La verifica finale richiede il riavvio."
+                        ? LocalizationService.Text("La verifica finale richiede il riavvio.", "Final verification requires a restart.")
                         : stillApplicable == true
-                            ? "Dopo una nuova scansione il driver risulta ancora applicabile."
-                            : "Lo stato post-installazione non è tecnicamente verificabile."
+                            ? LocalizationService.Text("Dopo una nuova scansione il driver risulta ancora applicabile.", "After rescanning, the driver is still applicable.")
+                            : LocalizationService.Text("Lo stato post-installazione non è tecnicamente verificabile.", "Post-installation state is not technically verifiable.")
             };
             var decision = UpdateResultPolicy.Resolve(installerSucceeded, reboot, verification);
 
@@ -388,12 +390,12 @@ public sealed class WindowsUpdateService
                 RestartRequired = reboot,
                 Outcome = decision.Outcome,
                 Message = decision.Verified
-                    ? "Driver installato e verificato da Windows Update."
+                    ? LocalizationService.Text("Driver installato e verificato da Windows Update.", "Driver installed and verified by Windows Update.")
                     : decision.VerificationStatus.Equals(UpdateVerificationStatuses.PendingRestart, StringComparison.Ordinal)
-                        ? "Windows Update ha completato l'installazione; la verifica finale richiede il riavvio."
+                        ? LocalizationService.Text("Windows Update ha completato l'installazione; la verifica finale richiede il riavvio.", "Windows Update completed the installation; final verification requires a restart.")
                         : decision.Success
-                            ? "Windows Update segnala installazione completata, ma lo stato installato non è ancora verificabile."
-                            : $"Installazione non riuscita (codice {resultCode}).",
+                            ? LocalizationService.Text("Windows Update segnala installazione completata, ma lo stato installato non è ancora verificabile.", "Windows Update reports installation completed, but the installed state is not yet verifiable.")
+                            : LocalizationService.Text($"Installazione non riuscita (codice {resultCode}).", $"Installation failed (code {resultCode})."),
                 Diagnostics =
                     $"Windows Update DownloadResultCode={downloadCode}; InstallResultCode={resultCode}; " +
                     $"IsInstalledAvailable={isInstalledAvailable}; IsInstalled={reportedInstalled}; " +

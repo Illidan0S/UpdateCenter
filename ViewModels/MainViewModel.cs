@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Data;
@@ -59,9 +59,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         AppPaths.EnsureCreated();
         Settings = JsonStorage.LoadSettings();
         if (Settings.LastAppUpdateCheckUtc is DateTime lastUpdateCheck)
-            _appUpdateStatus = LocalizationService.IsEnglish
-                ? $"Last check: {lastUpdateCheck.ToLocalTime():MM/dd/yyyy HH:mm}."
-                : $"Ultimo controllo: {lastUpdateCheck.ToLocalTime():dd/MM/yyyy HH:mm}.";
+            _appUpdateStatus = T(
+                $"Ultimo controllo: {lastUpdateCheck.ToLocalTime():dd/MM/yyyy HH:mm}.",
+                $"Last check: {lastUpdateCheck.ToLocalTime():MM/dd/yyyy HH:mm}.");
         foreach (var entry in JsonStorage.LoadHistory()) History.Add(entry);
         UpdatesView = CollectionViewSource.GetDefaultView(Updates);
         UpdatesView.Filter = FilterUpdate;
@@ -120,13 +120,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string StatusText
     {
-        get => _statusText;
+        get => LocalizationService.Translate(_statusText);
         private set { _statusText = value; OnPropertyChanged(); }
     }
 
     public string CurrentItemText
     {
-        get => _currentItemText;
+        get => LocalizationService.Translate(_currentItemText);
         private set { _currentItemText = value; OnPropertyChanged(); }
     }
 
@@ -139,6 +139,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int AvailableCount => Updates.Count;
     public int SelectedCount => Updates.Count(x => x.CanInstall && x.IsSelected);
     public int VisibleUpdateCount => UpdatesView.Cast<object>().Count();
+    public string SelectedCountLabel => LocalizationService.Text($"{SelectedCount} selezionati", $"{SelectedCount} selected");
+    public string VisibleUpdateCountLabel => LocalizationService.Text($"{VisibleUpdateCount} risultati visibili", $"{VisibleUpdateCount} visible results");
     public int SoftwareUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Software);
     public int RuntimeUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Runtime);
     public int DriverCount => DriverInventory.Count;
@@ -208,7 +210,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             : T("La pausa viene applicata dopo l'elemento corrente.", "Pause takes effect after the current item.");
     public string AppUpdateStatus
     {
-        get => _appUpdateStatus;
+        get => LocalizationService.Translate(_appUpdateStatus);
         private set { _appUpdateStatus = value; OnPropertyChanged(); }
     }
     public string LastAppUpdateCheckLabel => Settings.LastAppUpdateCheckUtc is DateTime timestamp
@@ -246,19 +248,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string HardwareCheckStatus
     {
-        get => _hardwareCheckStatus;
+        get => LocalizationService.Translate(_hardwareCheckStatus);
         private set { _hardwareCheckStatus = value; OnPropertyChanged(); }
     }
 
     public string GameDependencyStatus
     {
-        get => _gameDependencyStatus;
+        get => LocalizationService.Translate(_gameDependencyStatus);
         private set { _gameDependencyStatus = value; OnPropertyChanged(); }
     }
 
     public string StorageHealthStatus
     {
-        get => _storageHealthStatus;
+        get => LocalizationService.Translate(_storageHealthStatus);
         private set { _storageHealthStatus = value; OnPropertyChanged(); }
     }
 
@@ -387,13 +389,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ApplyHardware(hardwareScan);
                 var sourceLabel = string.Join(", ", driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase));
                 var verifiedCount = microsoftDriverCount + catalogDriverCount;
-                HardwareCheckStatus = LocalizationService.IsEnglish
-                    ? verifiedCount > 0
-                        ? $"{verifiedCount} verified driver updates ({microsoftDriverCount} Microsoft, {catalogDriverCount} manufacturers). Sources: {sourceLabel}."
-                        : $"No verified installable drivers. Checked {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} automatic sources; {hardwareScan.VendorTools.Count} manual manufacturer checks are available without extra apps."
-                    : verifiedCount > 0
-                        ? $"{verifiedCount} aggiornamenti driver verificati ({microsoftDriverCount} Microsoft, {catalogDriverCount} produttori). Fonti: {sourceLabel}."
-                        : $"Nessun driver installabile verificato. Controllate {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} fonti automatiche; disponibili {hardwareScan.VendorTools.Count} controlli manuali ufficiali senza app aggiuntive.";
+                HardwareCheckStatus = verifiedCount > 0
+                    ? T(
+                        $"{verifiedCount} aggiornamenti driver verificati ({microsoftDriverCount} Microsoft, {catalogDriverCount} produttori). Fonti: {sourceLabel}.",
+                        $"{verifiedCount} verified driver updates ({microsoftDriverCount} Microsoft, {catalogDriverCount} manufacturers). Sources: {sourceLabel}.")
+                    : T(
+                        $"Nessun driver installabile verificato. Controllate {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} fonti automatiche; disponibili {hardwareScan.VendorTools.Count} controlli manuali ufficiali senza app aggiuntive.",
+                        $"No verified installable drivers. Checked {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} automatic sources; {hardwareScan.VendorTools.Count} manual manufacturer checks are available without extra apps.");
             }
 
             Progress = 90;
@@ -437,16 +439,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ? T("Scansione incompleta", "Incomplete scan")
                 : Updates.Count == 0
                     ? T("Il PC risulta aggiornato", "The PC is up to date")
-                    : LocalizationService.IsEnglish
-                        ? $"{Updates.Count} updates available"
-                        : $"{Updates.Count} aggiornamenti disponibili";
+                    : T($"{Updates.Count} aggiornamenti disponibili", $"{Updates.Count} updates available");
             CurrentItemText = warnings.Count == 0
                 ? T(
                     "Scansione completata usando WinGet, Windows Update e il catalogo verificato dei produttori.",
                     "Scan completed using WinGet, Windows Update and the verified manufacturer catalog.")
-                : LocalizationService.IsEnglish
-                    ? $"Scan completed with warnings: {string.Join(" · ", warnings)}"
-                    : $"Scansione completata con avvisi: {string.Join(" · ", warnings)}";
+                : T(
+                    $"Scansione completata con avvisi: {string.Join(" · ", warnings)}",
+                    $"Scan completed with warnings: {string.Join(" · ", warnings)}");
             _hasCurrentScan = true;
             Settings.LastScanUtc = DateTime.UtcNow;
             JsonStorage.SaveSettings(Settings);
@@ -501,15 +501,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (Settings.IgnoredAppVersion.Equals(update.AvailableVersion.ToString(), StringComparison.OrdinalIgnoreCase))
             {
-                AppUpdateStatus = LocalizationService.IsEnglish
-                    ? $"Version v{update.AvailableVersion} is ignored."
-                    : $"La versione v{update.AvailableVersion} è stata ignorata.";
+                AppUpdateStatus = T(
+                    $"La versione v{update.AvailableVersion} è stata ignorata.",
+                    $"Version v{update.AvailableVersion} is ignored.");
                 return null;
             }
 
-            AppUpdateStatus = LocalizationService.IsEnglish
-                ? $"Update Center v{update.AvailableVersion} is available."
-                : $"Disponibile Update Center v{update.AvailableVersion}.";
+            AppUpdateStatus = T(
+                $"Disponibile Update Center v{update.AvailableVersion}.",
+                $"Update Center v{update.AvailableVersion} is available.");
             return update;
         }
         catch (Exception ex)
@@ -536,9 +536,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         Settings.IgnoredAppVersion = version.ToString();
         JsonStorage.SaveSettings(Settings);
-        AppUpdateStatus = LocalizationService.IsEnglish
-            ? $"Version v{version} will no longer be offered."
-            : $"La versione v{version} non verrà più proposta.";
+        AppUpdateStatus = T(
+            $"La versione v{version} non verrà più proposta.",
+            $"Version v{version} will no longer be offered.");
     }
 
     public async Task LoadHardwareOverviewAsync(bool force = false)
@@ -635,7 +635,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         ? 0
                         : (status.CurrentIndex + itemFraction) * 100d / status.Total;
                     Progress = Math.Max(Progress, completedPercentage);
-                    CurrentItemText = status.Message;
+                    CurrentItemText = LocalizationService.Translate(status.Message);
                     StatusText = IsUpdatePaused
                         ? T("Aggiornamenti in pausa", "Updates paused")
                         : string.IsNullOrWhiteSpace(status.CurrentName)
@@ -655,7 +655,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 : result.Results.Any(x => !x.Verified)
                     ? T("Completato · verifica richiesta", "Completed · verification required")
                     : T("Aggiornamenti completati", "Updates completed");
-            CurrentItemText = result.Message;
+            CurrentItemText = LocalizationService.Translate(result.Message);
             return result;
         }
         catch (OperationCanceledException ex)
@@ -723,19 +723,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (IsBusy) return;
         IsBusy = true;
-        HardwareCheckStatus = "Verifica del driver riparato in corso…";
+        HardwareCheckStatus = T("Verifica del driver riparato in corso…", "Verifying repaired driver…");
         try
         {
             var scan = await _hardwareInventory.ScanAsync(CancellationToken.None);
             ClearDriverInventory();
             ApplyHardware(scan);
             HardwareCheckStatus = scan.Problems.Count == 0
-                ? "Windows non segnala problemi attivi nei dispositivi."
-                : $"Windows segnala ancora {scan.Problems.Count} problemi nei dispositivi.";
+                ? T("Windows non segnala problemi attivi nei dispositivi.", "Windows reports no active device issues.")
+                : T($"Windows segnala ancora {scan.Problems.Count} problemi nei dispositivi.", $"Windows still reports {scan.Problems.Count} device issues.");
         }
         catch (Exception ex)
         {
-            HardwareCheckStatus = $"Verifica dei driver non riuscita: {ex.Message}";
+            HardwareCheckStatus = T($"Verifica dei driver non riuscita: {ex.Message}", $"Driver verification failed: {ex.Message}");
             LogService.Write("Verifica successiva alla riparazione driver non riuscita.", ex);
         }
         finally
@@ -831,7 +831,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                             ? T("Aggiornato", "Updated")
                             : T("Completato · da verificare", "Completed · verify")
             };
-            item.ResultDetails = runResult.Message;
+            item.ResultDetails = LocalizationService.Translate(runResult.Message);
             item.Diagnostics = runResult.Diagnostics;
             if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) ||
                 runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
@@ -848,8 +848,18 @@ public sealed class MainViewModel : INotifyPropertyChanged
         NotifyCounts();
     }
 
+    internal static string GetHistoryResultLabel(ItemRunResult runResult) =>
+        runResult.Outcome switch
+        {
+            UpdateOutcomes.NotApplicable => LocalizationService.Text("Non applicabile", "Not applicable"),
+            UpdateOutcomes.ManualRequired => LocalizationService.Text("Manuale", "Manual"),
+            _ => (runResult.TerminalDisposition == ItemTerminalDisposition.Succeeded || (runResult.TerminalDisposition == ItemTerminalDisposition.None && runResult.Success))
+                ? (runResult.Verified ? LocalizationService.Text("Riuscito", "Succeeded") : LocalizationService.Text("Completato · da verificare", "Completed · verify"))
+                : LocalizationService.Text("Fallito", "Failed")
+        };
+
     internal static bool ShouldRemoveCompletedUpdate(ItemRunResult result) =>
-        result.Success &&
+        (result.TerminalDisposition == ItemTerminalDisposition.Succeeded || (result.TerminalDisposition == ItemTerminalDisposition.None && result.Success)) &&
         result.Verified &&
         !result.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) &&
         !result.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal);
@@ -935,9 +945,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ? current == 0
                     ? T("Nessun aggiornamento driver ancora applicabile.",
                         "No driver update is still applicable.")
-                    : LocalizationService.IsEnglish
-                        ? $"{current} driver updates are still applicable after verification."
-                        : $"{current} aggiornamenti driver risultano ancora applicabili dopo la verifica."
+                    : T(
+                        $"{current} aggiornamenti driver risultano ancora applicabili dopo la verifica.",
+                        $"{current} driver updates are still applicable after verification.")
                 : T(
                     "Elenco driver aggiornato; alcune sorgenti non hanno completato la verifica.",
                     "Driver list refreshed; some sources did not complete verification.");
@@ -967,7 +977,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         OnPropertyChanged(nameof(AvailableCount));
         OnPropertyChanged(nameof(SelectedCount));
+        OnPropertyChanged(nameof(SelectedCountLabel));
         OnPropertyChanged(nameof(VisibleUpdateCount));
+        OnPropertyChanged(nameof(VisibleUpdateCountLabel));
         OnPropertyChanged(nameof(SoftwareUpdateCount));
         OnPropertyChanged(nameof(RuntimeUpdateCount));
         OnPropertyChanged(nameof(DriverCount));
@@ -982,7 +994,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(VendorCheckCount));
         OnPropertyChanged(nameof(CanUpdate));
         OnPropertyChanged(nameof(HomeScanSummary));
+        OnPropertyChanged(nameof(HistoryCountLabel));
     }
+
+    public string HistoryCountLabel => LocalizationService.Text(
+        $"{History.Count} operazioni registrate",
+        $"{History.Count} operations recorded");
 
     public void SaveSettings()
     {
@@ -993,15 +1010,31 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void NotifyLanguageChanged()
     {
-        StatusText = LocalizationService.Translate(StatusText);
-        CurrentItemText = LocalizationService.Translate(CurrentItemText);
-        AppUpdateStatus = LocalizationService.Translate(AppUpdateStatus);
+        OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(CurrentItemText));
+        OnPropertyChanged(nameof(AppUpdateStatus));
         foreach (var item in Updates) item.RefreshLocalizedProperties();
+        foreach (var entry in History) entry.NotifyLanguageChanged();
+        HardwareInfo.NotifyLanguageChanged();
+        foreach (var driver in DriverInventory) driver.NotifyLanguageChanged();
+        foreach (var problem in DriverProblems) problem.NotifyLanguageChanged();
+        foreach (var tool in VendorTools) tool.NotifyLanguageChanged();
+        if (StorageDevices.Count > 0)
+        {
+            StorageRows.Clear();
+            foreach (var row in StorageTableRowFactory.CreateRows(StorageDevices)) StorageRows.Add(row);
+        }
         Network.NotifyLanguageChanged();
         OnPropertyChanged(nameof(LastScanLabel));
         OnPropertyChanged(nameof(HomeScanSummary));
         OnPropertyChanged(nameof(LastAppUpdateCheckLabel));
         OnPropertyChanged(nameof(AppUpdateStatus));
+        OnPropertyChanged(nameof(HardwareCheckStatus));
+        OnPropertyChanged(nameof(GameDependencyStatus));
+        OnPropertyChanged(nameof(StorageHealthStatus));
+        OnPropertyChanged(nameof(HistoryCountLabel));
+        OnPropertyChanged(nameof(SelectedCountLabel));
+        OnPropertyChanged(nameof(VisibleUpdateCountLabel));
         NotifyCounts();
     }
 
@@ -1116,6 +1149,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         TryRefreshCollectionView(UpdatesView, "updates");
         OnPropertyChanged(nameof(VisibleUpdateCount));
+        OnPropertyChanged(nameof(VisibleUpdateCountLabel));
     }
 
     private bool FilterDriverInventory(object value)
@@ -1193,12 +1227,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 Kind = runResult.Kind,
                 FromVersion = item?.InstalledVersion ?? "",
                 ToVersion = item?.AvailableVersion ?? "",
-                Result = runResult.Outcome switch
-                {
-                    UpdateOutcomes.NotApplicable => "Non applicabile",
-                    UpdateOutcomes.ManualRequired => "Manuale",
-                    _ => runResult.InstallerSucceeded ? "Riuscito" : "Fallito"
-                },
+                Result = GetHistoryResultLabel(runResult),
                 Details = BuildReadableHistoryDetails(item, runResult),
                 Diagnostics = runResult.Diagnostics
             };
@@ -1209,39 +1238,61 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     private static string BuildReadableHistoryDetails(UpdateItem? item, ItemRunResult runResult)
     {
-        var fromVersion = string.IsNullOrWhiteSpace(item?.InstalledVersion) ? "versione precedente non rilevata" : item.InstalledVersion;
-        var toVersion = string.IsNullOrWhiteSpace(item?.AvailableVersion) ? "versione più recente disponibile" : item.AvailableVersion;
-        var source = string.IsNullOrWhiteSpace(item?.Source) ? "fonte di aggiornamento configurata" : item.Source;
-        var technicalDetail = string.IsNullOrWhiteSpace(runResult.Message) ? "Nessun dettaglio tecnico aggiuntivo." : runResult.Message.Trim();
+        var fromVersion = string.IsNullOrWhiteSpace(item?.InstalledVersion)
+            ? LocalizationService.Text("versione precedente non rilevata", "previous version not detected")
+            : item.InstalledVersion;
+        var toVersion = string.IsNullOrWhiteSpace(item?.AvailableVersion)
+            ? LocalizationService.Text("versione più recente disponibile", "latest available version")
+            : item.AvailableVersion;
+        var source = string.IsNullOrWhiteSpace(item?.Source)
+            ? LocalizationService.Text("fonte di aggiornamento configurata", "configured update source")
+            : item.Source;
+        var technicalDetail = string.IsNullOrWhiteSpace(runResult.Message)
+            ? LocalizationService.Text("Nessun dettaglio tecnico aggiuntivo.", "No additional technical details.")
+            : LocalizationService.TranslateHistoryDetails(runResult.Message.Trim());
 
         if (runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
-            return $"{runResult.Name} non è applicabile a questo PC secondo WinGet. " +
-                   $"La segnalazione da {fromVersion} a {toVersion} resterà esclusa finché una delle due versioni non cambia. " +
-                   $"Dettaglio: {technicalDetail}";
+            return LocalizationService.IsEnglish
+                ? $"{runResult.Name} is not applicable to this PC according to WinGet. " +
+                  $"The report from {fromVersion} to {toVersion} will remain excluded until one of the two versions changes. " +
+                  $"Detail: {technicalDetail}"
+                : $"{runResult.Name} non è applicabile a questo PC secondo WinGet. " +
+                  $"La segnalazione da {fromVersion} a {toVersion} resterà esclusa finché una delle due versioni non cambia. " +
+                  $"Dettaglio: {technicalDetail}";
 
         if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
-            return $"{runResult.Name} richiede un aggiornamento manuale perché il pacchetto installato e quello nuovo " +
-                   $"non supportano un upgrade automatico compatibile. Dettaglio: {technicalDetail}";
+            return LocalizationService.IsEnglish
+                ? $"{runResult.Name} requires a manual update because the installed package and the new one " +
+                  $"do not support a compatible automatic upgrade. Detail: {technicalDetail}"
+                : $"{runResult.Name} richiede un aggiornamento manuale perché il pacchetto installato e quello nuovo " +
+                  $"non supportano un upgrade automatico compatibile. Dettaglio: {technicalDetail}";
 
         if (runResult.InstallerSucceeded)
         {
             var restart = runResult.RestartRequired
-                ? " Per completare l'operazione è richiesto il riavvio di Windows."
-                : " Non è richiesto alcun riavvio.";
+                ? LocalizationService.Text(" Per completare l'operazione è richiesto il riavvio di Windows.", " A Windows restart is required to complete the operation.")
+                : LocalizationService.Text(" Non è richiesto alcun riavvio.", " No restart is required.");
             if (runResult.Verified)
-                return $"{runResult.Name} è stato aggiornato e verificato da {fromVersion} a {toVersion} usando {source}.{restart} Dettaglio tecnico: {technicalDetail}";
+                return LocalizationService.IsEnglish
+                    ? $"{runResult.Name} was updated and verified from {fromVersion} to {toVersion} using {source}.{restart} Technical detail: {technicalDetail}"
+                    : $"{runResult.Name} è stato aggiornato e verificato da {fromVersion} a {toVersion} usando {source}.{restart} Dettaglio tecnico: {technicalDetail}";
 
             var verification = runResult.VerificationStatus switch
             {
-                UpdateVerificationStatuses.PendingRestart => "La verifica finale richiede il riavvio.",
-                UpdateVerificationStatuses.Failed => "L'installer è terminato, ma la verifica finale non ha confermato l'aggiornamento.",
-                _ => "L'installer è terminato, ma la verifica finale non è disponibile."
+                UpdateVerificationStatuses.PendingRestart => LocalizationService.Text("La verifica finale richiede il riavvio.", "Final verification requires a restart."),
+                UpdateVerificationStatuses.Failed => LocalizationService.Text("L'installer è terminato, ma la verifica finale non ha confermato l'aggiornamento.", "The installer finished, but final verification did not confirm the update."),
+                _ => LocalizationService.Text("L'installer è terminato, ma la verifica finale non è disponibile.", "The installer finished, but final verification is not available.")
             };
-            return $"{runResult.Name}: {verification}{restart} Dettaglio tecnico: {technicalDetail}";
+            return LocalizationService.IsEnglish
+                ? $"{runResult.Name}: {verification}{restart} Technical detail: {technicalDetail}"
+                : $"{runResult.Name}: {verification}{restart} Dettaglio tecnico: {technicalDetail}";
         }
 
-        return $"L'aggiornamento di {runResult.Name} da {fromVersion} a {toVersion} non è riuscito. " +
-               $"L'elemento resta disponibile per un nuovo tentativo. Motivo: {technicalDetail}";
+        return LocalizationService.IsEnglish
+            ? $"Update of {runResult.Name} from {fromVersion} to {toVersion} failed. " +
+              $"The item remains available for a retry. Reason: {technicalDetail}"
+            : $"L'aggiornamento di {runResult.Name} da {fromVersion} a {toVersion} non è riuscito. " +
+              $"L'elemento resta disponibile per un nuovo tentativo. Motivo: {technicalDetail}";
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

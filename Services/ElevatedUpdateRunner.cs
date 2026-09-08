@@ -7,6 +7,8 @@ namespace UpdateCenter.Services;
 
 public static class ElevatedUpdateRunner
 {
+    internal const int StatusChannelFailureExitCode = 3;
+
     public static int Run(string planPath, bool requireAdministrator)
     {
         if (!OperatingSystem.IsWindows()) return 2;
@@ -18,7 +20,7 @@ public static class ElevatedUpdateRunner
         {
             ValidatePlanPath(planPath);
             plan = JsonStorage.Read<UpdatePlan>(planPath)
-                ?? throw new InvalidOperationException("Piano di aggiornamento non valido.");
+                ?? throw new InvalidOperationException(LocalizationService.Text("Piano di aggiornamento non valido.", "Invalid update plan."));
             ValidateStatusPath(plan.StatusFile);
             ValidatePausePath(plan.PauseFile);
 
@@ -26,20 +28,20 @@ public static class ElevatedUpdateRunner
             {
                 State = "Running",
                 Total = plan.Items.Count,
-                Message = "Preparazione aggiornamenti…",
+                Message = LocalizationService.Text("Preparazione aggiornamenti…", "Preparing updates…"),
                 RestorePointRequested = plan.CreateRestorePoint
             };
             publisher = new RunnerStatusPublisher(plan.StatusFile, status);
 
             if (requireAdministrator && !IsAdministrator())
-                throw new UnauthorizedAccessException("I privilegi di amministratore non sono stati concessi.");
+                throw new UnauthorizedAccessException(LocalizationService.Text("I privilegi di amministratore non sono stati concessi.", "Administrator privileges were not granted."));
 
             if (plan.CreateRestorePoint)
             {
                 publisher.Update(current =>
                 {
                     current.Phase = "restore-point";
-                    current.Message = "Creazione del punto di ripristino…";
+                    current.Message = LocalizationService.Text("Creazione del punto di ripristino…", "Creating restore point…");
                 }, markProgress: true);
                 var restorePointCreated = TryCreateRestorePoint(out var restoreMessage);
                 publisher.Update(current =>
@@ -62,7 +64,7 @@ public static class ElevatedUpdateRunner
                     current.Phase = "Preparazione";
                     current.CurrentItemProgress = 1;
                     current.CurrentItemStartedUtc = DateTime.UtcNow;
-                    current.Message = $"Aggiornamento di {item.Name}…";
+                    current.Message = LocalizationService.IsEnglish ? $"Updating {item.Name}…" : $"Aggiornamento di {item.Name}…";
                 }, markProgress: true);
 
                 void ReportItemProgress(int percent, string message) =>
@@ -78,12 +80,12 @@ public static class ElevatedUpdateRunner
                 }
                 else
                 {
-                    ReportItemProgress(12, "Avvio dell'aggiornamento software con WinGet...");
+                    ReportItemProgress(12, LocalizationService.Text("Avvio dell'aggiornamento software con WinGet...", "Starting software update with WinGet..."));
                     result = InstallSoftware(item, plan.SilentSoftwareInstall);
                 }
 
                 LogService.WriteEvent(
-                    "update",
+                    "update-attempt",
                     string.IsNullOrWhiteSpace(result.Phase) ? "result" : result.Phase,
                     result.Success
                         ? "success"
@@ -109,14 +111,14 @@ public static class ElevatedUpdateRunner
                 }, markProgress: true);
             }
 
-            publisher.Update(current =>
+            publisher.Complete(current =>
             {
                 current.State = "Completed";
                 current.CurrentName = "";
                 current.Message = current.Results.All(x => x.Success)
                     ? "Tutti gli aggiornamenti selezionati sono terminati."
                     : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
-            }, markProgress: true);
+            });
             return status.Results.All(x => x.Success) ? 0 : 1;
         }
         catch (Exception ex)
@@ -124,17 +126,15 @@ public static class ElevatedUpdateRunner
             LogService.Write("Esecuzione elevata interrotta.", ex);
             if (publisher is not null)
             {
-                try
+                publisher.TryPublishFailure(current =>
                 {
-                    publisher.Update(current =>
-                    {
-                        current.State = "Failed";
-                        current.Message = ex.Message;
-                    });
-                }
-                catch { }
+                    current.State = "Failed";
+                    current.Message = "Il canale di stato dell'aggiornamento non è disponibile.";
+                });
             }
-            return 1;
+            return ex is UpdateStatusChannelException or AtomicWriteException or UnauthorizedAccessException
+                ? StatusChannelFailureExitCode
+                : 1;
         }
         finally
         {
@@ -418,31 +418,61 @@ public static class ElevatedUpdateRunner
         private readonly string _statusPath;
         private readonly UpdateRunStatus _status;
         private readonly TimeSpan _heartbeatInterval;
+        private readonly Action<string, UpdateRunStatus, string> _statusWriter;
         private readonly CancellationTokenSource _stop = new();
         private readonly Task _heartbeatTask;
+        private Exception? _lastFailure;
+        private int _consecutiveFailures;
 
         public RunnerStatusPublisher(
             string statusPath,
             UpdateRunStatus status,
-            TimeSpan? heartbeatInterval = null)
+            TimeSpan? heartbeatInterval = null,
+            Action<string, UpdateRunStatus, string>? statusWriter = null)
         {
             _statusPath = statusPath;
             _status = status;
             _heartbeatInterval = heartbeatInterval ?? HeartbeatInterval;
-            Update(_ => { });
+            _statusWriter = statusWriter ?? ((path, current, stage) => JsonStorage.WriteAtomic(
+                path, current, $"status-{stage}", new AtomicFileOperations(), Thread.Sleep));
+            lock (_sync)
+            {
+                Stamp(markProgress: false);
+                PublishRequired("initial");
+            }
             _heartbeatTask = Task.Run(PublishHeartbeatAsync);
         }
 
-        public void Update(Action<UpdateRunStatus> update, bool markProgress = false)
+        public void Update(
+            Action<UpdateRunStatus> update,
+            bool markProgress = false,
+            string stage = "progress")
         {
             lock (_sync)
             {
                 update(_status);
-                var now = DateTime.UtcNow;
-                _status.LastHeartbeatUtc = now;
-                if (markProgress)
-                    _status.LastProgressUtc = now;
-                JsonStorage.WriteAtomic(_statusPath, _status);
+                Stamp(markProgress);
+                _ = TryPublish(stage);
+            }
+        }
+
+        public void Complete(Action<UpdateRunStatus> update)
+        {
+            lock (_sync)
+            {
+                update(_status);
+                Stamp(markProgress: true);
+                PublishRequired("final");
+            }
+        }
+
+        public bool TryPublishFailure(Action<UpdateRunStatus> update)
+        {
+            lock (_sync)
+            {
+                update(_status);
+                Stamp(markProgress: false);
+                return TryPublish("final-failure");
             }
         }
 
@@ -460,7 +490,7 @@ public static class ElevatedUpdateRunner
                 _status.LastHeartbeatUtc = now;
                 if (changed)
                     _status.LastProgressUtc = now;
-                JsonStorage.WriteAtomic(_statusPath, _status);
+                _ = TryPublish("progress");
             }
         }
 
@@ -471,20 +501,66 @@ public static class ElevatedUpdateRunner
             {
                 while (await timer.WaitForNextTickAsync(_stop.Token).ConfigureAwait(false))
                 {
-                    try { Update(_ => { }); }
-                    catch (Exception ex)
-                    {
-                        LogService.WriteEvent(
-                            "watchdog", "runner-heartbeat", "write-failure",
-                            resultCode: ex.HResult,
-                            details: ex.Message,
-                            exception: ex);
-                    }
+                    Update(_ => { }, stage: "heartbeat");
                 }
             }
             catch (OperationCanceledException) when (_stop.IsCancellationRequested)
             {
             }
+        }
+
+        private void Stamp(bool markProgress)
+        {
+            var now = DateTime.UtcNow;
+            _status.LastHeartbeatUtc = now;
+            if (markProgress)
+                _status.LastProgressUtc = now;
+        }
+
+        private bool TryPublish(string stage)
+        {
+            try
+            {
+                _statusWriter(_statusPath, _status, stage);
+                if (_consecutiveFailures > 0)
+                    LogPublication(stage, "recovered", _lastFailure, _consecutiveFailures);
+                _consecutiveFailures = 0;
+                _lastFailure = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _lastFailure = ex;
+                _consecutiveFailures++;
+                LogPublication(stage, "failed", ex, _consecutiveFailures);
+                return false;
+            }
+        }
+
+        private void PublishRequired(string stage)
+        {
+            if (TryPublish(stage)) return;
+            throw new UpdateStatusChannelException(
+                stage,
+                _statusPath,
+                _consecutiveFailures,
+                "Il canale di stato dell'aggiornamento non è disponibile.",
+                _lastFailure!);
+        }
+
+        private void LogPublication(string stage, string outcome, Exception? exception, int failures)
+        {
+            var attempts = exception is AtomicWriteException atomic ? atomic.Attempts : 1;
+            var hresult = exception?.HResult ?? 0;
+            LogService.WriteEvent(
+                "status-channel",
+                stage,
+                outcome,
+                resultCode: exception is null ? null : hresult,
+                details: $"path={_statusPath}; exception={exception?.GetType().Name ?? "none"}; " +
+                         $"hresult=0x{hresult:X8}; win32={hresult & 0xFFFF}; retryCount={Math.Max(0, attempts - 1)}; " +
+                         $"consecutiveFailures={failures}; outcome={outcome}",
+                exception: exception);
         }
 
         public void Dispose()
@@ -517,6 +593,26 @@ public static class ElevatedUpdateRunner
         DriverPackageType = item.DriverPackageType,
         CompatibleHardwareIds = item.CompatibleHardwareIds
     };
+}
+
+internal sealed class UpdateStatusChannelException : IOException
+{
+    public UpdateStatusChannelException(
+        string stage,
+        string path,
+        int failureCount,
+        string message,
+        Exception innerException) : base(message, innerException)
+    {
+        Stage = stage;
+        Path = path;
+        FailureCount = failureCount;
+        HResult = innerException.HResult;
+    }
+
+    public string Stage { get; }
+    public string Path { get; }
+    public int FailureCount { get; }
 }
 
 internal readonly record struct UpdateWatchdogThresholds(
@@ -605,6 +701,8 @@ public sealed class UpdateCoordinator
         CancellationToken cancellationToken,
         IWinGetProcessRecoveryPrompt? processRecoveryPrompt)
     {
+        var observer = progress;
+        progress = status => ReportProgressSafely(observer, status);
         if (selectedItems.Any(x => !x.CanInstall))
             throw new InvalidOperationException(
                 "Gli elementi non installabili automaticamente non possono essere avviati.");
@@ -618,6 +716,7 @@ public sealed class UpdateCoordinator
             Total = selectedItems.Count,
             Message = "Preparazione aggiornamenti…"
         };
+        var terminalLedger = new UpdateSessionResultLedger();
 
         try
         {
@@ -626,21 +725,27 @@ public sealed class UpdateCoordinator
                 var softwareResult = await RunBatchAsync(
                     software, settings, pauseController, requireAdministrator: false, aggregate.Results.Count,
                     aggregate, progress, cancellationToken);
-                if (processRecoveryPrompt is not null)
+                var softwareTerminalResults = new List<ItemRunResult>();
+                for (var index = 0; index < softwareResult.Results.Count; index++)
                 {
-                    for (var index = 0; index < softwareResult.Results.Count; index++)
+                    var initialResult = softwareResult.Results[index];
+                    var item = FindItem(software, initialResult)
+                        ?? throw new InvalidOperationException(
+                            $"Il runner ha restituito un risultato per un item non pianificato: {initialResult.Id}.");
+                    var stateMachine = new ItemExecutionStateMachine();
+                    stateMachine.BeginInitialAttempt();
+                    var finalResult = initialResult;
+                    if (processRecoveryPrompt is not null &&
+                        initialResult.FailureReason.Equals(UpdateFailureReasons.FilesInUse, StringComparison.Ordinal))
                     {
-                        var initialResult = softwareResult.Results[index];
-                        var item = software.FirstOrDefault(candidate =>
-                            candidate.Id.Equals(initialResult.Id, StringComparison.OrdinalIgnoreCase));
-                        if (item is null) continue;
-
-                        var finalResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+                        stateMachine.BeginRecovery();
+                        finalResult = await WinGetSingleRetryPolicy.ExecuteAsync(
                             item,
                             initialResult,
                             () => _processRecovery.PrepareRetry(item, initialResult, processRecoveryPrompt),
                             async () =>
                             {
+                                stateMachine.BeginRetry();
                                 var retryBatch = await RunBatchAsync(
                                     [item], settings, pauseController, requireAdministrator: false,
                                     completedBeforeBatch: Math.Min(index, Math.Max(0, aggregate.Total - 1)),
@@ -653,10 +758,15 @@ public sealed class UpdateCoordinator
                                 item, retryResult, processRecoveryPrompt, preparedContext),
                             () => Task.Run(() =>
                                 ElevatedUpdateRunner.InstallSoftwareInteractive(item)));
-                        softwareResult.Results[index] = finalResult;
                     }
+                    finalResult = stateMachine.Complete(finalResult);
+                    terminalLedger.Record(finalResult);
+                    softwareTerminalResults.Add(finalResult);
                 }
-                MergeBatch(aggregate, softwareResult);
+                softwareResult.Results = softwareTerminalResults;
+                MergeBatchMetadata(aggregate, softwareResult);
+                aggregate.Results = terminalLedger.Results.ToList();
+                progress(aggregate);
             }
 
             if (drivers.Count > 0)
@@ -664,21 +774,45 @@ public sealed class UpdateCoordinator
                 var driverResult = await RunBatchAsync(
                     drivers, settings, pauseController, requireAdministrator: true, aggregate.Results.Count,
                     aggregate, progress, cancellationToken);
-                MergeBatch(aggregate, driverResult);
+                foreach (var directResult in driverResult.Results)
+                {
+                    if (FindItem(drivers, directResult) is null)
+                        throw new InvalidOperationException(
+                            $"Il runner ha restituito un risultato driver non pianificato: {directResult.Id}.");
+                    var stateMachine = new ItemExecutionStateMachine();
+                    stateMachine.BeginInitialAttempt();
+                    terminalLedger.Record(stateMachine.Complete(directResult));
+                }
+                MergeBatchMetadata(aggregate, driverResult);
+                aggregate.Results = terminalLedger.Results.ToList();
+                progress(aggregate);
             }
 
+            var summary = UpdateSessionSummary.From(aggregate.Results);
             aggregate.State = "Completed";
-            aggregate.CurrentIndex = aggregate.Results.Count;
+            aggregate.CurrentIndex = summary.ProcessedTerminalCount;
             aggregate.CurrentName = "";
-            aggregate.Message = aggregate.Results.All(x => x.Success)
-                ? "Tutti gli aggiornamenti selezionati sono terminati."
-                : "Operazione terminata: alcuni aggiornamenti richiedono attenzione.";
+            aggregate.Message = summary.ProcessedTerminalCount == 0
+                ? LocalizationService.Text("Nessun aggiornamento è stato eseguito.", "No updates were performed.")
+                : summary.HasProblems
+                    ? LocalizationService.Text("Operazione terminata: alcuni aggiornamenti richiedono attenzione.", "Operation finished: some updates require attention.")
+                    : LocalizationService.Text("Tutti gli aggiornamenti selezionati sono terminati.", "All selected updates finished.");
             progress(aggregate);
             return aggregate;
         }
         finally
         {
             pauseController.Cleanup();
+        }
+    }
+
+    internal static void ReportProgressSafely(Action<UpdateRunStatus> observer, UpdateRunStatus status)
+    {
+        try { observer(status); }
+        catch (Exception ex)
+        {
+            LogService.WriteEvent("ui", "progress", "ui-error", exception: ex,
+                details: "Il risultato tecnico è conservato; aggiornamento della vista non riuscito.");
         }
     }
 
@@ -737,6 +871,7 @@ public sealed class UpdateCoordinator
             UpdateRunStatus? latest = null;
             var runnerStartedUtc = DateTime.UtcNow;
             DateTime? warnedProgressTimestamp = null;
+            string? forcedFailureMessage = null;
             var thresholds = UpdateWatchdogThresholds.Default;
             while (!process.HasExited)
             {
@@ -769,7 +904,8 @@ public sealed class UpdateCoordinator
                             current.CurrentItemId,
                             details: BuildWatchdogDiagnostics(process.Id, current, decision, timeoutMessage));
                         try { process.Kill(true); } catch { }
-                        throw new TimeoutException(timeoutMessage);
+                        forcedFailureMessage = timeoutMessage;
+                        break;
                     }
                 }
                 else if (DateTime.UtcNow - runnerStartedUtc > thresholds.HeartbeatTimeout)
@@ -784,13 +920,33 @@ public sealed class UpdateCoordinator
                 await Task.Delay(350, cancellationToken);
             }
 
-            UpdateRunStatus final = JsonStorage.Read<UpdateRunStatus>(statusPath)
-                ?? latest
-                ?? throw new InvalidOperationException("Il processo di aggiornamento non ha restituito uno stato.");
-            if (final.State.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
-                final.State.Equals("Starting", StringComparison.OrdinalIgnoreCase))
+            if (forcedFailureMessage is not null && !process.HasExited)
+                await process.WaitForExitAsync(cancellationToken);
+
+            var final = JsonStorage.Read<UpdateRunStatus>(statusPath) ?? latest;
+            if (final is null)
+            {
                 throw new InvalidOperationException(
-                    $"Il processo di aggiornamento di {final.CurrentName} si è chiuso prima di restituire un risultato.");
+                    process.ExitCode == ElevatedUpdateRunner.StatusChannelFailureExitCode
+                        ? LocalizationService.Text("Il runner non ha potuto inizializzare il canale di stato protetto.", "The runner could not initialize the protected status channel.")
+                        : LocalizationService.Text("Il processo di aggiornamento non ha restituito uno stato.", "The update process did not return a status."));
+            }
+            var incompleteState = final.State.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
+                                  final.State.Equals("Starting", StringComparison.OrdinalIgnoreCase) ||
+                                  final.State.Equals("Paused", StringComparison.OrdinalIgnoreCase);
+            if (forcedFailureMessage is not null ||
+                process.ExitCode == ElevatedUpdateRunner.StatusChannelFailureExitCode ||
+                final.State.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
+                incompleteState)
+            {
+                var reason = forcedFailureMessage ??
+                             LocalizationService.Text("Il runner si è interrotto per un errore infrastrutturale del canale di stato.", "The runner stopped due to an infrastructure error in the status channel.");
+                final = BuildControlledBatchFailure(selectedItems, final, reason);
+            }
+            else
+            {
+                final = EnsureCompletedBatchCardinality(selectedItems, final);
+            }
             progress(BuildAggregateProgress(aggregate, final, completedBeforeBatch));
             return final;
         }
@@ -822,16 +978,113 @@ public sealed class UpdateCoordinator
         RestorePointRequested = aggregate.RestorePointRequested || batch.RestorePointRequested,
         RestorePointCreated = aggregate.RestorePointCreated || batch.RestorePointCreated,
         RestartRequired = aggregate.RestartRequired || batch.RestartRequired,
-        Results = aggregate.Results.Concat(batch.Results).ToList()
+        Results = aggregate.Results.ToList()
     };
 
-    private static void MergeBatch(UpdateRunStatus aggregate, UpdateRunStatus batch)
+    private static void MergeBatchMetadata(UpdateRunStatus aggregate, UpdateRunStatus batch)
     {
-        aggregate.Results.AddRange(batch.Results);
         aggregate.RestorePointRequested |= batch.RestorePointRequested;
         aggregate.RestorePointCreated |= batch.RestorePointCreated;
         aggregate.RestartRequired |= batch.RestartRequired;
     }
+
+    private static UpdateItem? FindItem(
+        IEnumerable<UpdateItem> items,
+        ItemRunResult result) =>
+        items.FirstOrDefault(item =>
+            item.Id.Equals(result.Id, StringComparison.OrdinalIgnoreCase) &&
+            item.Kind.ToString().Equals(result.Kind, StringComparison.OrdinalIgnoreCase));
+
+    internal static UpdateRunStatus EnsureCompletedBatchCardinality(
+        IReadOnlyList<UpdateItem> selectedItems,
+        UpdateRunStatus status)
+    {
+        var duplicate = status.Results
+            .GroupBy(ResultKey, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+        var unexpected = status.Results.FirstOrDefault(result =>
+            selectedItems.All(item => !ResultMatches(item, result)));
+        var missing = selectedItems.Where(item =>
+            status.Results.All(result => !ResultMatches(item, result))).ToList();
+        if (duplicate is null && unexpected is null && missing.Count == 0 &&
+            status.Results.Count == selectedItems.Count)
+            return status;
+
+        var reason = duplicate is not null
+            ? $"Il runner ha pubblicato risultati duplicati per {duplicate.Key}."
+            : unexpected is not null
+                ? $"Il runner ha pubblicato un risultato non pianificato per {unexpected.Id}."
+                : $"Il runner non ha pubblicato il risultato terminale di {missing.FirstOrDefault()?.Name ?? "un item pianificato"}.";
+        status = BuildControlledBatchFailure(
+            selectedItems,
+            status,
+            reason,
+            missing.FirstOrDefault() ?? selectedItems.FirstOrDefault());
+        foreach (var item in missing.Skip(1))
+            status.Results.Add(CreateInfrastructureFailure(item, reason));
+        return status;
+    }
+
+    internal static UpdateRunStatus BuildControlledBatchFailure(
+        IReadOnlyList<UpdateItem> selectedItems,
+        UpdateRunStatus status,
+        string reason,
+        UpdateItem? preferredItem = null)
+    {
+        var started = preferredItem ?? selectedItems.FirstOrDefault(item =>
+            item.Id.Equals(status.CurrentItemId, StringComparison.OrdinalIgnoreCase));
+        if (started is null && status.Results.Count > 0)
+        {
+            var last = status.Results[^1];
+            started = selectedItems.FirstOrDefault(item => ResultMatches(item, last));
+        }
+        if (started is null)
+            throw new InvalidOperationException(
+                "Il runner si è interrotto prima di iniziare un item. " + reason);
+
+        status.Results = status.Results
+            .Where(result => selectedItems.Any(item => ResultMatches(item, result)))
+            .GroupBy(ResultKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.Last())
+            .ToList();
+        var existing = status.Results.FirstOrDefault(result => ResultMatches(started, result));
+        if (existing is null)
+            status.Results.Add(CreateInfrastructureFailure(started, reason));
+        else
+        {
+            existing.Diagnostics = string.IsNullOrWhiteSpace(existing.Diagnostics)
+                ? reason
+                : existing.Diagnostics + Environment.NewLine + Environment.NewLine + reason;
+        }
+
+        status.State = "Failed";
+        status.Message = LocalizationService.Text("Operazione interrotta da un errore infrastrutturale controllato.", "Operation stopped by a controlled infrastructure error.");
+        status.CurrentItemStartedUtc = null;
+        return status;
+    }
+
+    private static ItemRunResult CreateInfrastructureFailure(UpdateItem item, string reason) => new()
+    {
+        Id = item.Id,
+        Name = item.Name,
+        Kind = item.Kind.ToString(),
+        Success = false,
+        InstallerSucceeded = false,
+        Verified = false,
+        VerificationStatus = UpdateVerificationStatuses.NotRun,
+        Phase = "status-channel",
+        FailureReason = UpdateFailureReasons.Infrastructure,
+        Outcome = UpdateOutcomes.Failed,
+        Message = LocalizationService.Text("Aggiornamento interrotto da un errore infrastrutturale controllato.", "Update stopped by a controlled infrastructure error."),
+        Diagnostics = reason
+    };
+
+    private static bool ResultMatches(UpdateItem item, ItemRunResult result) =>
+        item.Id.Equals(result.Id, StringComparison.OrdinalIgnoreCase) &&
+        item.Kind.ToString().Equals(result.Kind, StringComparison.OrdinalIgnoreCase);
+
+    private static string ResultKey(ItemRunResult result) =>
+        $"{result.Kind.Trim()}\u001f{result.Id.Trim()}";
 
     private static string BuildWatchdogDiagnostics(
         int runnerProcessId,

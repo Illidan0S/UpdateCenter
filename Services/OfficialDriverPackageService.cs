@@ -104,7 +104,7 @@ public static class OfficialDriverPackageService
                             Phase = currentPhase,
                             Outcome = UpdateOutcomes.Completed,
                             RestartRequired = restartRequired,
-                            Message = "PnPUtil ha restituito un errore, ma la versione target del driver risulta installata.",
+                            Message = LocalizationService.Text("PnPUtil ha restituito un errore, ma la versione target del driver risulta installata.", "PnPUtil returned an error, but the target driver version is installed."),
                             Diagnostics = string.Join(Environment.NewLine, installerDiagnostics) +
                                           Environment.NewLine + "Verifica post-installazione: " +
                                           verificationAfterError.Diagnostics
@@ -125,7 +125,7 @@ public static class OfficialDriverPackageService
             }
 
             currentPhase = "official-inf-verification";
-            progress?.Invoke(99, "Verifica finale della versione installata...");
+            progress?.Invoke(99, LocalizationService.Text("Verifica finale della versione installata...", "Final verification of installed version..."));
             var verification = VerifyInstalledDriver(item, restartRequired);
             var decision = UpdateResultPolicy.Resolve(true, restartRequired, verification);
             return new ItemRunResult
@@ -142,8 +142,12 @@ public static class OfficialDriverPackageService
                 Outcome = decision.Outcome,
                 RestartRequired = restartRequired,
                 Message = verification.Verified
-                    ? $"Driver INF ufficiale installato e verificato ({string.Join(", ", messages)}). Nessuna app del produttore è stata eseguita."
-                    : $"Driver INF ufficiale installato ({string.Join(", ", messages)}). {verification.Message}",
+                    ? LocalizationService.Text(
+                        $"Driver INF ufficiale installato e verificato ({string.Join(", ", messages)}). Nessuna app del produttore è stata eseguita.",
+                        $"Official INF driver installed and verified ({string.Join(", ", messages)}). No manufacturer app was run.")
+                    : LocalizationService.Text(
+                        $"Driver INF ufficiale installato ({string.Join(", ", messages)}). {verification.Message}",
+                        $"Official INF driver installed ({string.Join(", ", messages)}). {verification.Message}"),
                 Diagnostics = string.Join(Environment.NewLine, installerDiagnostics) +
                               (string.IsNullOrWhiteSpace(verification.Diagnostics)
                                   ? ""
@@ -395,8 +399,8 @@ public static class OfficialDriverPackageService
                         ? UpdateVerificationStatuses.PendingRestart
                         : UpdateVerificationStatuses.Failed,
                     Message = restartRequired
-                        ? "La verifica dell'inventario verrà completata dopo il riavvio."
-                        : "Il dispositivo aggiornato non è stato ritrovato nell'inventario hardware.",
+                        ? LocalizationService.Text("La verifica dell'inventario verrà completata dopo il riavvio.", "Inventory verification will be completed after restart.")
+                        : LocalizationService.Text("Il dispositivo aggiornato non è stato ritrovato nell'inventario hardware.", "Updated device was not found in the hardware inventory."),
                     Diagnostics = "Nessun dispositivo compatibile trovato nella verifica post-installazione."
                 };
             }
@@ -415,10 +419,10 @@ public static class OfficialDriverPackageService
                         ? UpdateVerificationStatuses.PendingRestart
                         : UpdateVerificationStatuses.Failed,
                 Message = verified
-                    ? "Versione driver verificata nell'inventario hardware."
+                    ? LocalizationService.Text("Versione driver verificata nell'inventario hardware.", "Driver version verified in hardware inventory.")
                     : restartRequired
-                        ? "La nuova versione non è ancora visibile; verifica da completare dopo il riavvio."
-                        : "La versione attesa non risulta installata nell'inventario hardware.",
+                        ? LocalizationService.Text("La nuova versione non è ancora visibile; verifica da completare dopo il riavvio.", "The new version is not yet visible; verification to be completed after restart.")
+                        : LocalizationService.Text("La versione attesa non risulta installata nell'inventario hardware.", "The expected version does not appear installed in the hardware inventory."),
                 Diagnostics = "Versioni rilevate: " + string.Join(", ",
                     candidates.Select(x => $"{x.DeviceName}={x.InstalledVersion}"))
             };
@@ -432,8 +436,8 @@ public static class OfficialDriverPackageService
                     ? UpdateVerificationStatuses.PendingRestart
                     : UpdateVerificationStatuses.Unavailable,
                 Message = restartRequired
-                    ? "Verifica finale rinviata al riavvio."
-                    : "Verifica finale dell'inventario non disponibile.",
+                    ? LocalizationService.Text("Verifica finale rinviata al riavvio.", "Final verification postponed until restart.")
+                    : LocalizationService.Text("Verifica finale dell'inventario non disponibile.", "Final inventory verification not available."),
                 Diagnostics = ex.ToString()
             };
         }

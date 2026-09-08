@@ -1,3 +1,4 @@
+﻿using UpdateCenter.Services;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
@@ -31,32 +32,49 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
     private bool _hasGpuTemperature;
     private string _monitoringStatus = "Preparazione del monitoraggio…";
 
-    public string CpuName { get => _cpuName; private set => Set(ref _cpuName, value); }
+    public string CpuName { get => LocalizationService.Translate(_cpuName); private set => Set(ref _cpuName, value); }
     public string CpuCores { get => _cpuCores; private set => Set(ref _cpuCores, value); }
-    public string GpuName { get => _gpuName; private set => Set(ref _gpuName, value); }
-    public string GpuConfiguration { get => _gpuConfiguration; private set => Set(ref _gpuConfiguration, value); }
-    public string VramTotal { get => _vramTotal; private set => Set(ref _vramTotal, value); }
-    public string VramDetails { get => _vramDetails; private set => Set(ref _vramDetails, value); }
-    public string GpuMemoryUsageHeading { get => _gpuMemoryUsageHeading; private set => Set(ref _gpuMemoryUsageHeading, value); }
+    public string GpuName { get => LocalizationService.Translate(_gpuName); private set => Set(ref _gpuName, value); }
+    public string GpuConfiguration { get => LocalizationService.Translate(_gpuConfiguration); private set => Set(ref _gpuConfiguration, value); }
+    public string VramTotal { get => LocalizationService.Translate(_vramTotal); private set => Set(ref _vramTotal, value); }
+    public string VramDetails { get => LocalizationService.Translate(_vramDetails); private set => Set(ref _vramDetails, value); }
+    public string GpuMemoryUsageHeading { get => LocalizationService.Translate(_gpuMemoryUsageHeading); private set => Set(ref _gpuMemoryUsageHeading, value); }
     public string RamTotal { get => _ramTotal; private set => Set(ref _ramTotal, value); }
     public string Resolution { get => _resolution; private set => Set(ref _resolution, value); }
     public string RefreshRate { get => _refreshRate; private set => Set(ref _refreshRate, value); }
-    public string OperatingSystem { get => _operatingSystem; private set => Set(ref _operatingSystem, value); }
+    public string OperatingSystem { get => LocalizationService.Translate(_operatingSystem); private set => Set(ref _operatingSystem, value); }
     public string ComputerModel { get => _computerModel; private set => Set(ref _computerModel, value); }
     public double CpuUsage { get => _cpuUsage; private set { if (Set(ref _cpuUsage, value)) OnPropertyChanged(nameof(CpuUsageLabel)); } }
     public double RamUsage { get => _ramUsage; private set { if (Set(ref _ramUsage, value)) OnPropertyChanged(nameof(RamUsageLabel)); } }
     public double GpuUsage { get => _gpuUsage; private set { if (Set(ref _gpuUsage, value)) OnPropertyChanged(nameof(GpuUsageLabel)); } }
-    public string RamUsed { get => _ramUsed; private set => Set(ref _ramUsed, value); }
-    public string VramUsed { get => _vramUsed; private set => Set(ref _vramUsed, value); }
-    public string GpuMetricsSource { get => _gpuMetricsSource; private set => Set(ref _gpuMetricsSource, value); }
-    public string CpuTemperature { get => _cpuTemperature; private set => Set(ref _cpuTemperature, value); }
-    public string GpuTemperature { get => _gpuTemperature; private set => Set(ref _gpuTemperature, value); }
+    public string RamUsed { get => LocalizationService.Translate(_ramUsed); private set => Set(ref _ramUsed, value); }
+    public string VramUsed { get => LocalizationService.Translate(_vramUsed); private set => Set(ref _vramUsed, value); }
+    public string GpuMetricsSource { get => LocalizationService.Translate(_gpuMetricsSource); private set => Set(ref _gpuMetricsSource, value); }
+    public string CpuTemperature { get => LocalizationService.Translate(_cpuTemperature); private set => Set(ref _cpuTemperature, value); }
+    public string GpuTemperature { get => LocalizationService.Translate(_gpuTemperature); private set => Set(ref _gpuTemperature, value); }
     public bool HasCpuTemperature { get => _hasCpuTemperature; private set => Set(ref _hasCpuTemperature, value); }
     public bool HasGpuTemperature { get => _hasGpuTemperature; private set => Set(ref _hasGpuTemperature, value); }
-    public string MonitoringStatus { get => _monitoringStatus; set => Set(ref _monitoringStatus, value); }
+    public string MonitoringStatus { get => LocalizationService.Translate(_monitoringStatus); set => Set(ref _monitoringStatus, value); }
     public string CpuUsageLabel => $"{CpuUsage:0}%";
     public string RamUsageLabel => $"{RamUsage:0}%";
     public string GpuUsageLabel => $"{GpuUsage:0}%";
+
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(CpuName));
+        OnPropertyChanged(nameof(GpuName));
+        OnPropertyChanged(nameof(GpuConfiguration));
+        OnPropertyChanged(nameof(VramTotal));
+        OnPropertyChanged(nameof(VramDetails));
+        OnPropertyChanged(nameof(GpuMemoryUsageHeading));
+        OnPropertyChanged(nameof(GpuMetricsSource));
+        OnPropertyChanged(nameof(CpuTemperature));
+        OnPropertyChanged(nameof(GpuTemperature));
+        OnPropertyChanged(nameof(MonitoringStatus));
+        OnPropertyChanged(nameof(OperatingSystem));
+        OnPropertyChanged(nameof(RamUsed));
+        OnPropertyChanged(nameof(VramUsed));
+    }
 
     public void ApplyOverview(HardwareOverviewSnapshot snapshot)
     {
@@ -104,23 +122,29 @@ public sealed class SystemHardwareInfo : INotifyPropertyChanged
         var sharedLimit = metrics.SharedGpuMemoryLimitBytes;
         var sharedLabel = shared > 0
             ? sharedLimit > 0
-                ? $"{FormatBytes(shared)} di {FormatBytes(sharedLimit)} condivisi"
-                : $"{FormatBytes(shared)} condivisi"
+                ? LocalizationService.Text(
+                    $"{FormatBytes(shared)} di {FormatBytes(sharedLimit)} condivisi",
+                    $"{FormatBytes(shared)} of {FormatBytes(sharedLimit)} shared")
+                : LocalizationService.Text(
+                    $"{FormatBytes(shared)} condivisi",
+                    $"{FormatBytes(shared)} shared")
             : "";
 
         return _gpuMemoryDisplayMode switch
         {
             GpuMemoryDisplayMode.Integrated => !string.IsNullOrWhiteSpace(sharedLabel)
                 ? sharedLabel
-                : _vramUnavailableReason,
+                : LocalizationService.Translate(_vramUnavailableReason),
             GpuMemoryDisplayMode.Discrete => dedicated > 0
                 ? FormatBytes(dedicated)
-                : !string.IsNullOrWhiteSpace(sharedLabel) ? sharedLabel : _vramUnavailableReason,
+                : !string.IsNullOrWhiteSpace(sharedLabel) ? sharedLabel : LocalizationService.Translate(_vramUnavailableReason),
             _ when dedicated > 0 && !string.IsNullOrWhiteSpace(sharedLabel) =>
-                $"Dedicata: {FormatBytes(dedicated)} · Condivisa: {sharedLabel}",
+                LocalizationService.Text(
+                    $"Dedicata: {FormatBytes(dedicated)} · Condivisa: {sharedLabel}",
+                    $"Dedicated: {FormatBytes(dedicated)} · Shared: {sharedLabel}"),
             _ when dedicated > 0 => FormatBytes(dedicated),
             _ when !string.IsNullOrWhiteSpace(sharedLabel) => sharedLabel,
-            _ => _vramUnavailableReason
+            _ => LocalizationService.Translate(_vramUnavailableReason)
         };
     }
 

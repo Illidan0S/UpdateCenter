@@ -48,7 +48,8 @@ internal sealed class WpfWinGetProcessRecoveryPrompt(Window owner) : IWinGetProc
     {
         var externalNames = candidates
             .Where(candidate => candidate.Classification ==
-                                WinGetBlockerClassification.ExternalConfirmedBlocker)
+                                WinGetBlockerClassification.ExternalConfirmed ||
+                                candidate.Classification == WinGetBlockerClassification.RecurringProcess)
             .Select(candidate => candidate.ProcessName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -88,6 +89,19 @@ internal sealed class WpfWinGetProcessRecoveryPrompt(Window owner) : IWinGetProc
             LocalizationService.Text("Termina e riprova", "Terminate and retry"));
     }
 
+    public bool ConfirmTemporaryServiceStop(UpdateItem item, WinGetServiceCandidate service) =>
+        Show(
+            LocalizationService.Text("Componente in background", "Background component"),
+            LocalizationService.Text(
+                $"{service.DisplayName} viene eseguito in background e impedisce l'aggiornamento di {item.Name}. " +
+                "UpdateCenter può interromperlo temporaneamente e riavviarlo al termine.",
+                $"{service.DisplayName} runs in the background and is blocking the {item.Name} update. " +
+                "UpdateCenter can stop it temporarily and restart it when finished."),
+            [],
+            LocalizationService.Text(
+                "Interrompi temporaneamente e riprova",
+                "Stop temporarily and retry"));
+
     public bool ConfirmInteractiveInstaller(UpdateItem item) =>
         Show(
             LocalizationService.Text("Installer interattivo", "Interactive installer"),
@@ -119,8 +133,8 @@ internal sealed class WpfWinGetProcessRecoveryPrompt(Window owner) : IWinGetProc
         var processText = candidates.Count == 0
             ? ""
             : LocalizationService.Text("Processi rilevati: ", "Detected processes: ") +
-              string.Join(", ", candidates.Select(candidate =>
-                  $"{candidate.ProcessName} (PID {candidate.ProcessId})"));
+              string.Join(", ", candidates.Select(candidate => candidate.ProcessName)
+                  .Distinct(StringComparer.OrdinalIgnoreCase));
         var dialog = new WinGetProcessRecoveryWindow(title, message, processText, confirmText)
         {
             Owner = owner

@@ -11,6 +11,12 @@ using UpdateCenter.Contracts;
 using UpdateCenter.RemoteClient;
 using UpdateCenter.ViewModels;
 
+if (args.Contains("--release-audit", StringComparer.Ordinal))
+{
+    await ReleaseAuditTests.RunAsync();
+    return;
+}
+
 if (args.Length == 2 && args[0].Equals("--hold-restart-manager-file", StringComparison.Ordinal))
 {
     using var heldFile = new FileStream(args[1], FileMode.Open, FileAccess.ReadWrite, FileShare.None);
@@ -44,8 +50,11 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.4")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla release 1.1.4.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.5")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla release 1.1.5.");
+var applicationVersionInfo = FileVersionInfo.GetVersionInfo(typeof(AppSettings).Assembly.Location);
+if (applicationVersionInfo.FileVersion != "1.1.5.0" || applicationVersionInfo.ProductVersion != "1.1.5")
+    throw new InvalidOperationException("FileVersion/ProductVersion non corrispondono alla release 1.1.5.");
 
 var defaultVerification = new UpdateVerificationResult();
 if (defaultVerification.Verified || defaultVerification.IsDefinitive ||
@@ -110,6 +119,88 @@ finally
     try { File.Delete(heartbeatStatusPath); } catch { }
 }
 
+var atomicRetryPath = Path.Combine(
+    Path.GetTempPath(), $"updatecenter-atomic-retry-{Guid.NewGuid():N}.json");
+try
+{
+    var atomicTransientOperations = new FakeAtomicFileOperations(
+        failuresBeforeSuccess: 1,
+        new IOException("Sharing violation simulata.", unchecked((int)0x80070020)));
+    JsonStorage.WriteAtomic(
+        atomicRetryPath,
+        new UpdateRunStatus { State = "Completed", Message = "retry-ok" },
+        "status-final",
+        atomicTransientOperations,
+        _ => { });
+    var atomicallyWritten = JsonStorage.Read<UpdateRunStatus>(atomicRetryPath);
+    if (atomicTransientOperations.MoveCalls != 2 || atomicallyWritten?.Message != "retry-ok")
+        throw new InvalidOperationException("La pubblicazione atomica non recupera una sharing violation transitoria.");
+}
+finally
+{
+    try { File.Delete(atomicRetryPath); } catch { }
+}
+
+var persistentWriteCalls = 0;
+using (var persistentPublisher = new ElevatedUpdateRunner.RunnerStatusPublisher(
+           Path.Combine(Path.GetTempPath(), $"updatecenter-status-persistent-{Guid.NewGuid():N}.json"),
+           new UpdateRunStatus { State = "Running" },
+           TimeSpan.FromHours(1),
+           (_, _, _) =>
+           {
+               persistentWriteCalls++;
+               if (persistentWriteCalls > 1)
+                   throw new UnauthorizedAccessException("Access denied simulato.");
+           }))
+{
+    persistentPublisher.ReportProgress(25, "progress simulato");
+    try
+    {
+        persistentPublisher.Complete(status => status.State = "Completed");
+        throw new InvalidOperationException("L'errore persistente del canale status non è stato segnalato.");
+    }
+    catch (UpdateStatusChannelException ex) when (
+        ex.Stage == "final" && ex.InnerException is UnauthorizedAccessException &&
+        (ex.HResult & 0xFFFF) == 5)
+    {
+    }
+}
+
+var concurrentStatusPath = Path.Combine(
+    Path.GetTempPath(), $"updatecenter-status-concurrent-{Guid.NewGuid():N}.json");
+try
+{
+    JsonStorage.WriteAtomic(concurrentStatusPath, new UpdateRunStatus { State = "Running", CurrentIndex = 0 });
+    var invalidReads = 0;
+    var reader = Task.Run(() =>
+    {
+        for (var index = 0; index < 300; index++)
+        {
+            if (JsonStorage.Read<UpdateRunStatus>(concurrentStatusPath) is null)
+                Interlocked.Increment(ref invalidReads);
+        }
+    });
+    for (var index = 1; index <= 100; index++)
+        JsonStorage.WriteAtomic(concurrentStatusPath, new UpdateRunStatus { State = "Running", CurrentIndex = index });
+    await reader;
+    var concurrentFinal = JsonStorage.Read<UpdateRunStatus>(concurrentStatusPath);
+    if (invalidReads != 0 || concurrentFinal?.CurrentIndex != 100)
+        throw new InvalidOperationException(
+            $"Il reader concorrente ha osservato JSON parziale o corrotto: invalidReads={invalidReads}; final={concurrentFinal?.CurrentIndex}.");
+}
+finally
+{
+    try { File.Delete(concurrentStatusPath); } catch { }
+}
+
+AppPaths.EnsureCreated();
+var localAppData = Path.GetFullPath(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) + Path.DirectorySeparatorChar;
+var statusRoot = Path.GetFullPath(AppPaths.DataDirectory) + Path.DirectorySeparatorChar;
+if (!statusRoot.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase) ||
+    statusRoot.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Il canale status usa una directory world-writable o fuori dal profilo chiamante.");
+
 var unavailableDecision = UpdateResultPolicy.Resolve(
     installerSucceeded: true,
     restartRequired: false,
@@ -155,7 +246,9 @@ var verifiedRun = new ItemRunResult
     Success = true,
     InstallerSucceeded = true,
     Verified = true,
-    Outcome = UpdateOutcomes.Completed
+    Outcome = UpdateOutcomes.Completed,
+    ExecutionState = ItemExecutionState.Terminal,
+    TerminalDisposition = ItemTerminalDisposition.Succeeded
 };
 var unverifiedRun = new ItemRunResult
 {
@@ -163,7 +256,9 @@ var unverifiedRun = new ItemRunResult
     InstallerSucceeded = true,
     Verified = false,
     VerificationStatus = UpdateVerificationStatuses.Unavailable,
-    Outcome = UpdateOutcomes.Completed
+    Outcome = UpdateOutcomes.Completed,
+    ExecutionState = ItemExecutionState.Terminal,
+    TerminalDisposition = ItemTerminalDisposition.Succeeded
 };
 if (!MainViewModel.ShouldRemoveCompletedUpdate(verifiedRun) ||
     MainViewModel.ShouldRemoveCompletedUpdate(unverifiedRun))
@@ -454,7 +549,8 @@ var packageBlocker = new RestartManagerBlocker(
     true,
     RestartManagerRebootReason.None,
     obsPath,
-    [obsPath]);
+    [obsPath],
+    Liveness: RestartManagerProcessLiveness.Live);
 var externalBlocker = new RestartManagerBlocker(
     4321,
     "Plugin host esterno",
@@ -464,7 +560,8 @@ var externalBlocker = new RestartManagerBlocker(
     false,
     RestartManagerRebootReason.None,
     @"C:\Tools\plugin-host.exe",
-    [obsHookPath]);
+    [obsHookPath],
+    Liveness: RestartManagerProcessLiveness.Live);
 var unknownBlocker = new RestartManagerBlocker(
     5432,
     "Processo senza evidenza",
@@ -474,7 +571,8 @@ var unknownBlocker = new RestartManagerBlocker(
     false,
     RestartManagerRebootReason.None,
     @"C:\Tools\unknown.exe",
-    []);
+    [],
+    Liveness: RestartManagerProcessLiveness.Live);
 var serviceBlocker = new RestartManagerBlocker(
     888,
     "Servizio condiviso",
@@ -484,7 +582,16 @@ var serviceBlocker = new RestartManagerBlocker(
     false,
     RestartManagerRebootReason.None,
     @"C:\Windows\System32\svchost.exe",
-    [obsHookPath]);
+    [obsHookPath],
+    ServiceMappings:
+    [
+        new WindowsServiceProcessSnapshot(
+            "SharedService", "Servizio condiviso", 888,
+            WindowsServiceControl.ServiceWin32ShareProcess,
+            WindowsServiceControl.ServiceRunning,
+            @"C:\Windows\System32\svchost.exe", 3)
+    ],
+    Liveness: RestartManagerProcessLiveness.Live);
 
 var packageDecision = WinGetRecoveryDecisionPolicy.Evaluate(
     SuccessfulRestartManagerQuery(obsPath, packageBlocker), recoveryContext);
@@ -499,11 +606,11 @@ var noBlockerDecision = WinGetRecoveryDecisionPolicy.Evaluate(
 if (packageDecision.Action != WinGetRecoveryAction.CloseConfirmedBlockers ||
     packageDecision.Blockers.Single().Classification != WinGetBlockerClassification.PackageOwned ||
     externalDecision.Action != WinGetRecoveryAction.CloseConfirmedBlockers ||
-    externalDecision.Blockers.Single().Classification != WinGetBlockerClassification.ExternalConfirmedBlocker ||
+    externalDecision.Blockers.Single().Classification != WinGetBlockerClassification.ExternalConfirmed ||
     unknownDecision.Action != WinGetRecoveryAction.ManualIntervention ||
     unknownDecision.Blockers.Single().Classification != WinGetBlockerClassification.Unknown ||
     serviceDecision.Action != WinGetRecoveryAction.ManualIntervention ||
-    serviceDecision.Blockers.Single().Classification != WinGetBlockerClassification.SystemOrService ||
+    serviceDecision.Blockers.Single().Classification != WinGetBlockerClassification.SystemOrShared ||
     noBlockerDecision.Action != WinGetRecoveryAction.Retry)
     throw new InvalidOperationException("La policy Restart Manager dei blocker non è conservativa.");
 
@@ -511,7 +618,10 @@ var noBlockerOperations = new FakeWinGetProcessOperations(recoveryContext, [], [
 var noBlockerPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: false);
 var noBlockerService = new WinGetProcessRecoveryService(
     noBlockerOperations,
-    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsPath)));
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath),
+        SuccessfulRestartManagerQuery(obsPath)),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var noBlockerPreparation = noBlockerService.PrepareRetry(blockedItem, blockedResult, noBlockerPrompt);
 if (!noBlockerPreparation.ShouldRetry || noBlockerOperations.CloseCalls != 0)
     throw new InvalidOperationException("L'assenza di blocker Restart Manager non autorizza il retry diretto.");
@@ -522,7 +632,10 @@ var gracefulService = new WinGetProcessRecoveryService(
     gracefulOperations,
     new FakeRestartManagerService(
         SuccessfulRestartManagerQuery(obsPath, packageBlocker),
-        SuccessfulRestartManagerQuery(obsPath)));
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath),
+        SuccessfulRestartManagerQuery(obsPath)),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var gracefulPreparation = gracefulService.PrepareRetry(blockedItem, blockedResult, gracefulPrompt);
 if (!gracefulPreparation.ShouldRetry || gracefulOperations.CloseCalls != 1 ||
     gracefulOperations.KillCalls != 0)
@@ -534,7 +647,8 @@ var residualService = new WinGetProcessRecoveryService(
     residualOperations,
     new FakeRestartManagerService(
         SuccessfulRestartManagerQuery(obsPath, packageBlocker),
-        SuccessfulRestartManagerQuery(obsPath, packageBlocker)));
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker)),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var residualPreparation = residualService.PrepareRetry(blockedItem, blockedResult, residualPrompt);
 if (residualPreparation.ShouldRetry || residualOperations.CloseCalls != 1 ||
     residualOperations.KillCalls != 0 || residualPrompt.KillPrompts != 1)
@@ -547,7 +661,11 @@ var forcedService = new WinGetProcessRecoveryService(
     new FakeRestartManagerService(
         SuccessfulRestartManagerQuery(obsPath, packageBlocker),
         SuccessfulRestartManagerQuery(obsPath, packageBlocker),
-        SuccessfulRestartManagerQuery(obsPath)));
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath),
+        SuccessfulRestartManagerQuery(obsPath)),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var forcedPreparation = forcedService.PrepareRetry(blockedItem, blockedResult, forcedPrompt);
 if (!forcedPreparation.ShouldRetry || forcedOperations.CloseCalls != 1 ||
     forcedOperations.KillCalls != 1 || forcedPrompt.KillPrompts != 1)
@@ -559,7 +677,10 @@ var externalService = new WinGetProcessRecoveryService(
     externalOperations,
     new FakeRestartManagerService(
         SuccessfulRestartManagerQuery(obsHookPath, externalBlocker),
-        SuccessfulRestartManagerQuery(obsHookPath)));
+        SuccessfulRestartManagerQuery(obsHookPath, externalBlocker),
+        SuccessfulRestartManagerQuery(obsHookPath),
+        SuccessfulRestartManagerQuery(obsHookPath)),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var externalPreparation = externalService.PrepareRetry(blockedItem, blockedResult, externalPrompt);
 if (!externalPreparation.ShouldRetry || externalOperations.CloseCalls != 1 ||
     externalOperations.KillCalls != 0 || externalPrompt.ManualPrompts != 0)
@@ -569,7 +690,8 @@ var unknownOperations = new FakeWinGetProcessOperations(recoveryContext, [], [])
 var unknownPrompt = new FakeWinGetRecoveryPrompt(confirmClose: true, confirmKill: true);
 var unknownService = new WinGetProcessRecoveryService(
     unknownOperations,
-    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsHookPath, unknownBlocker)));
+    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsHookPath, unknownBlocker)),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var unknownPreparation = unknownService.PrepareRetry(blockedItem, blockedResult, unknownPrompt);
 if (unknownPreparation.ShouldRetry || unknownOperations.CloseCalls != 0 ||
     unknownOperations.KillCalls != 0 || unknownPrompt.ManualPrompts != 1)
@@ -588,12 +710,281 @@ var unavailableService = new WinGetProcessRecoveryService(
         Blockers: [],
         RebootReason: RestartManagerRebootReason.None,
         ErrorCode: 1,
-        Diagnostics: "Restart Manager non disponibile.")));
+        Diagnostics: "Restart Manager non disponibile.")),
+    pollingDelay: new FakeRecoveryPollingDelay());
 var unavailablePreparation = unavailableService.PrepareRetry(blockedItem, blockedResult, unavailablePrompt);
 if (unavailablePreparation.ShouldRetry || !unavailablePreparation.ShouldRunInteractive ||
     unavailableOperations.CloseCalls != 0 || unavailableOperations.KillCalls != 0 ||
     unavailablePrompt.InteractivePrompts != 1)
     throw new InvalidOperationException("Il fallback interattivo non è disponibile senza blocker identificabili.");
+
+// A: un blocker transitorio deve risultare pulito solo dopo due scansioni consecutive.
+var transientOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var transientService = new WinGetProcessRecoveryService(
+    transientOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath),
+        SuccessfulRestartManagerQuery(obsPath)),
+    pollingDelay: new FakeRecoveryPollingDelay());
+var transientPreparation = transientService.PrepareRetry(
+    blockedItem, blockedResult, new FakeWinGetRecoveryPrompt(true, false));
+if (!transientPreparation.ShouldRetry || transientOperations.CloseCalls != 0 ||
+    !transientPreparation.Diagnostics.Contains("Due query consecutive", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Un blocker transitorio non viene stabilizzato su due scansioni pulite.");
+
+// B/C: il path esatto è identità stabile; il solo display name non lo è.
+var recurringPidBlocker = packageBlocker with { ProcessId = 200 };
+var firstClassified = WinGetRecoveryDecisionPolicy.ClassifyBlocker(packageBlocker with { ProcessId = 100 }, recoveryContext);
+var recurringClassified = WinGetRecoveryDecisionPolicy.MarkRecurring(
+    WinGetRecoveryDecisionPolicy.ClassifyBlocker(recurringPidBlocker, recoveryContext),
+    [firstClassified]);
+if (recurringClassified.Classification != WinGetBlockerClassification.RecurringProcess ||
+    !recurringClassified.Recreated)
+    throw new InvalidOperationException("Due PID con lo stesso executable path non sono correlati come recurring process.");
+var unknownSameNameFirst = unknownBlocker with { ProcessId = 100, ExecutablePath = "", EvidenceResources = [obsHookPath] };
+var unknownSameNameSecond = unknownSameNameFirst with { ProcessId = 200 };
+var unknownNameClassified = WinGetRecoveryDecisionPolicy.MarkRecurring(
+    WinGetRecoveryDecisionPolicy.ClassifyBlocker(unknownSameNameSecond, recoveryContext),
+    [WinGetRecoveryDecisionPolicy.ClassifyBlocker(unknownSameNameFirst, recoveryContext)]);
+if (unknownNameClassified.Classification != WinGetBlockerClassification.Unknown || unknownNameClassified.Recreated)
+    throw new InvalidOperationException("Il solo display name è stato usato come identità stabile.");
+
+// RM stale/dead: un record residuo verificato morto non è un blocker vivo.
+var livePid100 = packageBlocker with { ProcessId = 100 };
+var deadGhostPid100 = livePid100 with
+{
+    ExecutablePath = "",
+    Liveness = RestartManagerProcessLiveness.DeadOrStale,
+    LivenessDiagnostics = "OpenProcess conferma che PID 100 non esiste più."
+};
+var staleOperations = new FakeWinGetProcessOperations(
+    recoveryContext,
+    [new WinGetProcessCandidate(100, "obs64", obsPath)],
+    []);
+var staleService = new WinGetProcessRecoveryService(
+    staleOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, deadGhostPid100),
+        SuccessfulRestartManagerQuery(obsPath, deadGhostPid100)),
+    pollingDelay: new FakeRecoveryPollingDelay());
+var stalePreparation = staleService.PrepareRetry(
+    blockedItem, blockedResult, new FakeWinGetRecoveryPrompt(true, true));
+if (!stalePreparation.ShouldRetry || staleOperations.KillCalls != 1 ||
+    !stalePreparation.Diagnostics.Contains("DeadOrStale", StringComparison.Ordinal))
+    throw new InvalidOperationException("Un PID RM dead/stale causa ancora ManualIntervention prima delle due scansioni clean.");
+
+var recurringPid200 = livePid100 with { ProcessId = 200 };
+var recurringOperations = new FakeWinGetProcessOperations(
+    recoveryContext,
+    [new WinGetProcessCandidate(100, "obs64", obsPath)],
+    []);
+var recurringService = new WinGetProcessRecoveryService(
+    recurringOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, livePid100),
+        SuccessfulRestartManagerQuery(obsPath, recurringPid200),
+        SuccessfulRestartManagerQuery(obsPath, recurringPid200)),
+    pollingDelay: new FakeRecoveryPollingDelay());
+var recurringPreparation = recurringService.PrepareRetry(
+    blockedItem, blockedResult, new FakeWinGetRecoveryPrompt(true, true));
+if (recurringPreparation.ShouldRetry ||
+    !recurringPreparation.Diagnostics.Contains(nameof(WinGetBlockerClassification.RecurringProcess), StringComparison.Ordinal))
+    throw new InvalidOperationException("Un nuovo PID vivo con executable path identico non viene classificato RECURRING_PROCESS.");
+
+var liveWithoutPath = unknownBlocker with
+{
+    ProcessId = 100,
+    ExecutablePath = "",
+    EvidenceResources = [obsHookPath],
+    Liveness = RestartManagerProcessLiveness.Live
+};
+var liveWithoutPathDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsHookPath, liveWithoutPath), recoveryContext);
+if (liveWithoutPathDecision.Action != WinGetRecoveryAction.ManualIntervention ||
+    liveWithoutPathDecision.Blockers.Single().Classification != WinGetBlockerClassification.Unknown)
+    throw new InvalidOperationException("Un PID vivo senza path risolvibile non resta UNKNOWN/conservativo.");
+
+var unknownLiveness = packageBlocker with
+{
+    ProcessId = 100,
+    Liveness = RestartManagerProcessLiveness.Unknown,
+    LivenessDiagnostics = "Access denied simulato."
+};
+var unknownLivenessDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsPath, unknownLiveness), recoveryContext);
+if (unknownLivenessDecision.Action != WinGetRecoveryAction.ManualIntervention)
+    throw new InvalidOperationException("LivenessUnknown non impedisce la remediation automatica.");
+
+var ghostAndLiveDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsHookPath, deadGhostPid100, externalBlocker), recoveryContext);
+if (ghostAndLiveDecision.Action == WinGetRecoveryAction.Retry)
+    throw new InvalidOperationException("Un dead RM ghost ha nascosto un blocker vivo differente.");
+
+var rebootDecisionRm = WinGetRecoveryDecisionPolicy.Evaluate(
+    new RestartManagerQueryResult(
+        Available: true,
+        Succeeded: true,
+        Resources: [obsPath],
+        Blockers: [deadGhostPid100],
+        RebootReason: RestartManagerRebootReason.PermissionDenied,
+        ErrorCode: 0,
+        Diagnostics: "Reboot reason simulata."),
+    recoveryContext);
+if (rebootDecisionRm.Action != WinGetRecoveryAction.RestartRequired)
+    throw new InvalidOperationException("Una reboot reason RM non impedisce il retry.");
+
+var thirdPartyServiceSnapshot = new WindowsServiceProcessSnapshot(
+    "VendorAgent", "Vendor Background Agent", 700,
+    WindowsServiceControl.ServiceWin32OwnProcess,
+    WindowsServiceControl.ServiceRunning,
+    @"C:\Vendor\Agent.exe", 1);
+var dedicatedServiceBlocker = new RestartManagerBlocker(
+    700, "Vendor Background Agent", "VendorAgent",
+    RestartManagerApplicationType.Service, 0, false,
+    RestartManagerRebootReason.None, @"C:\Vendor\Agent.exe", [obsHookPath],
+    ServiceMappings: [thirdPartyServiceSnapshot],
+    Liveness: RestartManagerProcessLiveness.Live);
+var directServiceDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsHookPath, dedicatedServiceBlocker), recoveryContext);
+if (directServiceDecision.Action != WinGetRecoveryAction.StopConfirmedService ||
+    directServiceDecision.Blockers.Single().Classification != WinGetBlockerClassification.ThirdPartyService)
+    throw new InvalidOperationException("Il service short name verificato non classifica un servizio dedicato third-party.");
+
+// E: una catena parent conduce a un servizio solo quando il mapping PID/service è univoco.
+var parentServiceBlocker = externalBlocker with
+{
+    ProcessId = 701,
+    ParentProcessId = 700,
+    ParentChain =
+    [
+        new RestartManagerParentSnapshot(
+            700, 4, @"C:\Vendor\Agent.exe", [thirdPartyServiceSnapshot])
+    ]
+};
+var parentServiceDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsHookPath, parentServiceBlocker), recoveryContext);
+if (parentServiceDecision.Action != WinGetRecoveryAction.StopConfirmedService ||
+    parentServiceDecision.Blockers.Single().Identity.Kind != WinGetStableIdentityKind.ParentService)
+    throw new InvalidOperationException("La parent chain univoca non viene correlata al servizio dedicato.");
+
+// F/K: mapping condiviso, sistema e unknown non autorizzano stop o kill.
+var ambiguousService = thirdPartyServiceSnapshot with
+{
+    ServiceType = WindowsServiceControl.ServiceWin32ShareProcess,
+    ServicesInProcess = 2
+};
+var ambiguousBlocker = dedicatedServiceBlocker with { ServiceMappings = [ambiguousService] };
+var ambiguousDecision = WinGetRecoveryDecisionPolicy.Evaluate(
+    SuccessfulRestartManagerQuery(obsHookPath, ambiguousBlocker), recoveryContext);
+if (ambiguousDecision.Action != WinGetRecoveryAction.ManualIntervention ||
+    ambiguousDecision.Blockers.Single().Classification != WinGetBlockerClassification.SystemOrShared)
+    throw new InvalidOperationException("Un mapping service shared/ambiguo ha autorizzato una remediation automatica.");
+
+// G/H: un servizio fermato viene sempre riportato a Running, anche se WinGet fallisce.
+foreach (var retrySucceeds in new[] { true, false })
+{
+    var lifecycleControl = new FakeWindowsServiceControl(thirdPartyServiceSnapshot);
+    var lifecycleRecovery = new WinGetProcessRecoveryService(
+        new FakeWinGetProcessOperations(recoveryContext, [], []),
+        new FakeRestartManagerService(
+            SuccessfulRestartManagerQuery(obsHookPath, dedicatedServiceBlocker),
+            SuccessfulRestartManagerQuery(obsHookPath, dedicatedServiceBlocker),
+            SuccessfulRestartManagerQuery(obsHookPath),
+            SuccessfulRestartManagerQuery(obsHookPath)),
+        lifecycleControl,
+        new FakeRecoveryPollingDelay());
+    var lifecyclePrompt = new FakeWinGetRecoveryPrompt(
+        confirmClose: false, confirmKill: false, confirmServiceStop: true);
+    var lifecycleResult = await WinGetSingleRetryPolicy.ExecuteAsync(
+        blockedItem,
+        CloneBlockedResult(blockedResult),
+        () => lifecycleRecovery.PrepareRetry(blockedItem, blockedResult, lifecyclePrompt),
+        () => Task.FromResult(new ItemRunResult
+        {
+            Id = blockedItem.Id,
+            Success = retrySucceeds,
+            FailureReason = retrySucceeds ? UpdateFailureReasons.None : "GenericFailure",
+            Diagnostics = retrySucceeds ? "Retry riuscito." : "WinGet fallito dopo lo stop."
+        }));
+    if (lifecycleControl.StopCalls != 1 || lifecycleControl.StartCalls != 1 ||
+        !lifecycleResult.Diagnostics.Contains("Ripristino servizio", StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException("Il servizio non viene sempre ripristinato nel finally del retry.");
+}
+var exceptionLifecycleControl = new FakeWindowsServiceControl(thirdPartyServiceSnapshot);
+var exceptionObserved = false;
+try
+{
+    await WinGetSingleRetryPolicy.ExecuteAsync(
+        blockedItem,
+        CloneBlockedResult(blockedResult),
+        () => new WinGetRecoveryPreparation(
+            true,
+            "Servizio già fermato per il test.",
+            recoveryContext,
+            Lease: new WinGetServiceRecoveryLease(
+                exceptionLifecycleControl, "VendorAgent", true, TimeSpan.FromSeconds(1))),
+        () => Task.FromException<ItemRunResult>(new InvalidOperationException("Errore simulato.")));
+}
+catch (InvalidOperationException ex) when (ex.Message == "Errore simulato.")
+{
+    exceptionObserved = true;
+}
+if (!exceptionObserved || exceptionLifecycleControl.StartCalls != 1)
+    throw new InvalidOperationException("Un'eccezione durante WinGet lascia il servizio fermo.");
+
+// I/J: un blocker rimosso consente un solo retry; se resta si usa il fallback senza retry inutile.
+var singleRetryOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var singleRetryRecovery = new WinGetProcessRecoveryService(
+    singleRetryOperations,
+    new FakeRestartManagerService(
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath, packageBlocker),
+        SuccessfulRestartManagerQuery(obsPath),
+        SuccessfulRestartManagerQuery(obsPath)),
+    pollingDelay: new FakeRecoveryPollingDelay());
+var automaticRetryCount = 0;
+await WinGetSingleRetryPolicy.ExecuteAsync(
+    blockedItem,
+    CloneBlockedResult(blockedResult),
+    () => singleRetryRecovery.PrepareRetry(
+        blockedItem, blockedResult, new FakeWinGetRecoveryPrompt(true, false)),
+    () =>
+    {
+        automaticRetryCount++;
+        return Task.FromResult(new ItemRunResult { Id = blockedItem.Id, Success = true });
+    });
+if (automaticRetryCount != 1)
+    throw new InvalidOperationException("La remediation pulita non rispetta il limite di un retry WinGet.");
+
+var persistentOperations = new FakeWinGetProcessOperations(recoveryContext, [obsCandidate], [obsCandidate]);
+var persistentPrompt = new FakeWinGetRecoveryPrompt(
+    confirmClose: true, confirmKill: false, confirmInteractive: true);
+var persistentRecovery = new WinGetProcessRecoveryService(
+    persistentOperations,
+    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsPath, packageBlocker)),
+    pollingDelay: new FakeRecoveryPollingDelay());
+var persistentPreparation = persistentRecovery.PrepareRetry(blockedItem, blockedResult, persistentPrompt);
+if (persistentPreparation.ShouldRetry || !persistentPreparation.ShouldRunInteractive ||
+    persistentOperations.KillCalls != 0 || persistentPrompt.InteractivePrompts != 1)
+    throw new InvalidOperationException("Un blocker persistente non passa al fallback sicuro.");
+
+var protectedOperations = new FakeWinGetProcessOperations(recoveryContext, [], []);
+var protectedPrompt = new FakeWinGetRecoveryPrompt(false, false, confirmInteractive: true);
+var protectedRecovery = new WinGetProcessRecoveryService(
+    protectedOperations,
+    new FakeRestartManagerService(SuccessfulRestartManagerQuery(obsHookPath, serviceBlocker)),
+    pollingDelay: new FakeRecoveryPollingDelay());
+_ = protectedRecovery.PrepareRetry(blockedItem, blockedResult, protectedPrompt);
+if (protectedOperations.CloseCalls != 0 || protectedOperations.KillCalls != 0)
+    throw new InvalidOperationException("SYSTEM_OR_SHARED ha autorizzato close/kill.");
 
 var realItalianBlockedResult = new ItemRunResult
 {
@@ -703,10 +1094,10 @@ var postRetryInteractiveResult = await WinGetSingleRetryPolicy.ExecuteAsync(
         interactiveFallbackCount++;
         return Task.FromResult(evaluatedInteractiveResult);
     });
-if (!postRetryInteractiveResult.Success || !postRetryInteractiveResult.Verified ||
-    interactiveRetryCount != 1 || interactiveDiagnosisCount != 1 || interactiveFallbackCount != 1 ||
-    !postRetryInteractiveResult.Diagnostics.Contains("Installer interattivo", StringComparison.Ordinal))
-    throw new InvalidOperationException("Il fallback interattivo post-retry non è singolo o non conserva la verifica.");
+if (postRetryInteractiveResult.Success ||
+    interactiveRetryCount != 1 || interactiveDiagnosisCount != 1 || interactiveFallbackCount != 0 ||
+    !postRetryInteractiveResult.Diagnostics.Contains("Retry unico", StringComparison.Ordinal))
+    throw new InvalidOperationException("È stato eseguito più di un tentativo WinGet dopo il fallimento iniziale.");
 
 var verifiedRetryCount = 0;
 var verifiedRetryResult = await WinGetSingleRetryPolicy.ExecuteAsync(
@@ -729,6 +1120,91 @@ var verifiedRetryResult = await WinGetSingleRetryPolicy.ExecuteAsync(
 if (!verifiedRetryResult.Success || !verifiedRetryResult.Verified || verifiedRetryCount != 1 ||
     !verifiedRetryResult.Diagnostics.Contains("ResultCode=1", StringComparison.Ordinal))
     throw new InvalidOperationException("Il target verificato dopo retry non prevale sull'exit code anomalo.");
+
+var failedStateMachine = new ItemExecutionStateMachine();
+failedStateMachine.BeginInitialAttempt();
+var terminalFailed = failedStateMachine.Complete(new ItemRunResult
+{
+    Id = "Example.Failed",
+    Name = "Installer fallito",
+    Kind = nameof(UpdateKind.Software),
+    Success = false,
+    InstallerSucceeded = false,
+    Outcome = UpdateOutcomes.Failed
+});
+var failedSummary = UpdateSessionSummary.From([terminalFailed]);
+if (failedSummary.ProcessedTerminalCount != 1 || failedSummary.FailedCount != 1 ||
+    failedSummary.SucceededCount != 0 ||
+    MainViewModel.GetHistoryResultLabel(terminalFailed) != "Fallito" ||
+    MainViewModel.ShouldRemoveCompletedUpdate(terminalFailed))
+    throw new InvalidOperationException("Un installer fallito non produce un unico terminal Failed coerente con History e summary.");
+
+var recoveredStateMachine = new ItemExecutionStateMachine();
+recoveredStateMachine.BeginInitialAttempt();
+recoveredStateMachine.BeginRecovery();
+recoveredStateMachine.BeginRetry();
+var terminalRecovered = recoveredStateMachine.Complete(new ItemRunResult
+{
+    Id = "Example.Recovered",
+    Name = "Recovery riuscita",
+    Kind = nameof(UpdateKind.Software),
+    Success = true,
+    InstallerSucceeded = true,
+    Verified = true,
+    VerificationStatus = UpdateVerificationStatuses.Verified,
+    Outcome = UpdateOutcomes.Completed,
+    Diagnostics = "Tentativo iniziale fallito conservato solo in diagnostica."
+});
+var recoveredLedger = new UpdateSessionResultLedger();
+recoveredLedger.Record(terminalRecovered);
+var recoveredSummary = UpdateSessionSummary.From(recoveredLedger.Results);
+if (recoveredSummary.ProcessedTerminalCount != 1 || recoveredSummary.SucceededCount != 1 ||
+    MainViewModel.GetHistoryResultLabel(terminalRecovered) != "Riuscito" ||
+    recoveredLedger.Results.Count != 1)
+    throw new InvalidOperationException("Initial failure + recovery/retry success non converge a un solo terminal Succeeded.");
+
+var notApplicableStateMachine = new ItemExecutionStateMachine();
+notApplicableStateMachine.BeginInitialAttempt();
+var terminalNotApplicable = notApplicableStateMachine.Complete(new ItemRunResult
+{
+    Id = "Example.NotApplicable",
+    Name = "Non applicabile",
+    Kind = nameof(UpdateKind.Software),
+    Success = false,
+    Outcome = UpdateOutcomes.NotApplicable
+});
+var mixedSummary = UpdateSessionSummary.From([terminalRecovered, terminalFailed, terminalNotApplicable]);
+if (mixedSummary.ProcessedTerminalCount != 3 || mixedSummary.SucceededCount != 1 ||
+    mixedSummary.FailedCount != 1 || mixedSummary.NotAutomaticallyApplicableCount != 1 ||
+    !mixedSummary.HasProblems)
+    throw new InvalidOperationException("Il riepilogo terminale misto non mantiene i contatori 1/1/1.");
+
+var failedStillVisible = new UpdateItem
+{
+    Id = terminalFailed.Id,
+    Name = terminalFailed.Name,
+    Kind = UpdateKind.Software
+};
+if (MainViewModel.ShouldRemoveCompletedUpdate(terminalFailed) || failedStillVisible.Id != terminalFailed.Id)
+    throw new InvalidOperationException("Un item Failed non resta disponibile senza perdere il risultato della sessione.");
+
+var partialChild = UpdateCoordinator.BuildControlledBatchFailure(
+    [failedStillVisible],
+    new UpdateRunStatus
+    {
+        State = "Failed",
+        CurrentItemId = failedStillVisible.Id,
+        CurrentName = failedStillVisible.Name,
+        CurrentItemStartedUtc = DateTime.UtcNow,
+        Results = []
+    },
+    "Status publisher persistente simulato.");
+var partialStateMachine = new ItemExecutionStateMachine();
+partialStateMachine.BeginInitialAttempt();
+var partialTerminal = partialStateMachine.Complete(partialChild.Results.Single());
+var partialSummary = UpdateSessionSummary.From([partialTerminal]);
+if (partialSummary.ProcessedTerminalCount != 1 || partialSummary.FailedCount != 1)
+    throw new InvalidOperationException("Un child Failed parziale può ancora produrre un riepilogo 0/0/0.");
 
 await VerifyRestartManagerIntegrationAsync();
 
@@ -1235,6 +1711,15 @@ static async Task VerifyRestartManagerIntegrationAsync()
         if (!whileLocked.Succeeded || whileLocked.Blockers.All(x => x.ProcessId != helper.Id))
             throw new InvalidOperationException(
                 $"Restart Manager non ha restituito il PID helper {helper.Id}. {whileLocked.Diagnostics}");
+        var helperBlocker = whileLocked.Blockers.Single(x => x.ProcessId == helper.Id);
+        if (string.IsNullOrWhiteSpace(helperBlocker.ExecutablePath) ||
+            helperBlocker.Liveness != RestartManagerProcessLiveness.Live ||
+            helperBlocker.ProcessStartTimeFileTime <= 0 ||
+            helperBlocker.ParentProcessId <= 0 || helperBlocker.ParentChain is null ||
+            helperBlocker.ServiceMappings is null ||
+            !helperBlocker.EvidenceResources.Contains(lockedFile, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                "Lo snapshot immediato Restart Manager non conserva path, parent o risorsa registrata.");
         var sharedContext = new WinGetRecoveryContext(
             "Test.SharedPackage",
             [Path.Combine(testDirectory, "primary-install-root")],
@@ -1247,7 +1732,7 @@ static async Task VerifyRestartManagerIntegrationAsync()
         var helperClassification = sharedDecision.Blockers
             .Single(x => x.Blocker.ProcessId == helper.Id)
             .Classification;
-        if (helperClassification != WinGetBlockerClassification.ExternalConfirmedBlocker)
+        if (helperClassification != WinGetBlockerClassification.ExternalConfirmed)
             throw new InvalidOperationException(
                 $"Il locker della shared resource è stato classificato come {helperClassification}.");
 
@@ -1328,7 +1813,8 @@ sealed class FakeRestartManagerService(params RestartManagerQueryResult[] result
 sealed class FakeWinGetRecoveryPrompt(
     bool confirmClose,
     bool confirmKill,
-    bool confirmInteractive = false) : IWinGetProcessRecoveryPrompt
+    bool confirmInteractive = false,
+    bool confirmServiceStop = false) : IWinGetProcessRecoveryPrompt
 {
     public int KillPrompts { get; private set; }
 
@@ -1346,6 +1832,13 @@ sealed class FakeWinGetRecoveryPrompt(
 
     public int ManualPrompts { get; private set; }
     public int InteractivePrompts { get; private set; }
+    public int ServiceStopPrompts { get; private set; }
+
+    public bool ConfirmTemporaryServiceStop(UpdateItem item, WinGetServiceCandidate service)
+    {
+        ServiceStopPrompts++;
+        return confirmServiceStop;
+    }
 
     public bool ConfirmInteractiveInstaller(UpdateItem item)
     {
@@ -1354,4 +1847,51 @@ sealed class FakeWinGetRecoveryPrompt(
     }
 
     public void ShowManualCloseRequired(UpdateItem item, string detail) => ManualPrompts++;
+}
+
+sealed class FakeRecoveryPollingDelay : IWinGetRecoveryPollingDelay
+{
+    public void Wait(TimeSpan delay) { }
+}
+
+sealed class FakeAtomicFileOperations(
+    int failuresBeforeSuccess,
+    Exception failure) : IAtomicFileOperations
+{
+    private readonly AtomicFileOperations _inner = new();
+
+    public int MoveCalls { get; private set; }
+
+    public void WriteAndFlush(string path, string contents) => _inner.WriteAndFlush(path, contents);
+
+    public void MoveReplace(string source, string destination)
+    {
+        MoveCalls++;
+        if (MoveCalls <= failuresBeforeSuccess)
+            throw failure;
+        _inner.MoveReplace(source, destination);
+    }
+
+    public void DeleteIfExists(string path) => _inner.DeleteIfExists(path);
+}
+
+sealed class FakeWindowsServiceControl(WindowsServiceProcessSnapshot service)
+    : IWindowsServiceControl
+{
+    public int StopCalls { get; private set; }
+    public int StartCalls { get; private set; }
+
+    public WindowsServiceProcessSnapshot? Query(string serviceName) => service;
+
+    public WindowsServiceControlResult StopAndWait(string serviceName, TimeSpan timeout)
+    {
+        StopCalls++;
+        return new WindowsServiceControlResult(true, $"Servizio {serviceName} Stopped.");
+    }
+
+    public WindowsServiceControlResult StartAndWait(string serviceName, TimeSpan timeout)
+    {
+        StartCalls++;
+        return new WindowsServiceControlResult(true, $"Servizio {serviceName} Running.");
+    }
 }

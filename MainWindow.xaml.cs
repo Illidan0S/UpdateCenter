@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -250,8 +250,8 @@ public partial class MainWindow : Window
         if (!selected.Any(x => x.IsSelected && x.CanInstall))
         {
             MessageBox.Show(
-                "Dopo aver escluso gli aggiornamenti con rimozione preventiva non rimangono elementi da installare.",
-                "Gestione rete",
+                LocalizationService.Text("Dopo aver escluso gli aggiornamenti con rimozione preventiva non rimangono elementi da installare.", "After excluding updates with prior removal, no items remain to install."),
+                LocalizationService.Text("Gestione rete", "Network management"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
             return;
@@ -273,7 +273,9 @@ public partial class MainWindow : Window
         var executable = Environment.ProcessPath;
         if (string.IsNullOrWhiteSpace(executable))
         {
-            MessageBox.Show("Impossibile individuare l'eseguibile di Update Center.", "Gestione rete");
+            MessageBox.Show(
+                LocalizationService.Text("Impossibile individuare l'eseguibile di Update Center.", "Cannot locate the Update Center executable."),
+                LocalizationService.Text("Gestione rete", "Network management"));
             return;
         }
 
@@ -295,8 +297,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"Impossibile aprire la configurazione del componente di rete:\n\n{ex.Message}",
-                "Gestione rete", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(
+                LocalizationService.Text($"Impossibile aprire la configurazione del componente di rete:\n\n{ex.Message}", $"Cannot open network component configuration:\n\n{ex.Message}"),
+                LocalizationService.Text("Gestione rete", "Network management"),
+                MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
     private void SelectAll_Click(object sender, RoutedEventArgs e) => _viewModel.SetAllSelected(true);
@@ -419,11 +423,17 @@ public partial class MainWindow : Window
     private void LanguageChoice_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioButton { Tag: string language }) return;
-        _viewModel.Settings.LanguageMode = LocalizationService.Normalize(language);
-        LocalizationService.Initialize(_viewModel.Settings.LanguageMode);
+        var normalized = LocalizationService.Normalize(language);
+        if (_viewModel.Settings.LanguageMode == normalized && LocalizationService.CurrentLanguage == normalized)
+        {
+            UpdateLanguageChoices();
+            return;
+        }
+
+        _viewModel.Settings.LanguageMode = normalized;
+        LocalizationService.Initialize(normalized);
         _viewModel.SaveSettings();
         LocalizationService.ApplyTo(this);
-        ApplyResponsiveLayout();
         UpdateLanguageChoices();
         _viewModel.NotifyLanguageChanged();
     }
@@ -641,16 +651,20 @@ public partial class MainWindow : Window
 
         var confirmation = MessageBox.Show(
             this,
-            $"Update Center riapplicherà il pacchetto driver già registrato e scelto da Windows per:\n\n" +
-            $"{problem.DeviceName}\n{problem.InstalledInfName}\n\n" +
-            "Il dispositivo verrà riavviato e controllato nuovamente. Il pacchetto non verrà eliminato dal sistema. Continuare?",
-            "Riparazione driver con Windows",
+            LocalizationService.Text(
+                $"Update Center riapplicherà il pacchetto driver già registrato e scelto da Windows per:\n\n" +
+                $"{problem.DeviceName}\n{problem.InstalledInfName}\n\n" +
+                "Il dispositivo verrà riavviato e controllato nuovamente. Il pacchetto non verrà eliminato dal sistema. Continuare?",
+                $"Update Center will reapply the driver package already registered and selected by Windows for:\n\n" +
+                $"{problem.DeviceName}\n{problem.InstalledInfName}\n\n" +
+                "The device will be restarted and checked again. The package will not be removed from the system. Continue?"),
+            LocalizationService.Text("Riparazione driver con Windows", "Windows driver repair"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
         if (confirmation != MessageBoxResult.Yes) return;
 
         _driverRepairInProgress = true;
-        repairButton.Content = "Riparazione in corso…";
+        repairButton.Content = LocalizationService.Text("Riparazione in corso…", "Repairing…");
         repairButton.IsEnabled = false;
         Mouse.OverrideCursor = Cursors.Wait;
         try
@@ -661,8 +675,10 @@ public partial class MainWindow : Window
                 problem.InstalledInfName);
             MessageBox.Show(
                 this,
-                result.Message,
-                result.Success ? "Driver riparato" : "Driver ancora da controllare",
+                LocalizationService.Translate(result.Message),
+                result.Success
+                    ? LocalizationService.Text("Driver riparato", "Driver repaired")
+                    : LocalizationService.Text("Driver ancora da controllare", "Driver still needs checking"),
                 MessageBoxButton.OK,
                 result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
             await _viewModel.RefreshDriverDiagnosticsAsync();
@@ -674,8 +690,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             MessageBox.Show(
-                $"Riparazione non riuscita:\n\n{ex.Message}",
-                "Riparazione driver",
+                LocalizationService.Text($"Riparazione non riuscita:\n\n{ex.Message}", $"Repair failed:\n\n{ex.Message}"),
+                LocalizationService.Text("Riparazione driver", "Driver repair"),
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
@@ -692,8 +708,10 @@ public partial class MainWindow : Window
     {
         if (_viewModel.IsBusy) return;
         MessageBox.Show(
-            $"Update Center cercherà un driver compatibile e verificato per {problem.DeviceName} tramite Windows Update e il catalogo ufficiale dei produttori.",
-            "Ricerca driver",
+            LocalizationService.Text(
+                $"Update Center cercherà un driver compatibile e verificato per {problem.DeviceName} tramite Windows Update e il catalogo ufficiale dei produttori.",
+                $"Update Center will search for a compatible and verified driver for {problem.DeviceName} via Windows Update and the official vendor catalog."),
+            LocalizationService.Text("Ricerca driver", "Driver search"),
             MessageBoxButton.OK,
             MessageBoxImage.Information);
         ShowPage(HomePage, "Home");
@@ -766,7 +784,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "Protezione sistema non aperta", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(ex.Message, LocalizationService.Text("Protezione sistema non aperta", "System Protection not opened"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -797,7 +815,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "Collegamento non aperto", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(ex.Message, LocalizationService.Text("Collegamento non aperto", "Link not opened"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -809,7 +827,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "Gestione attività non aperta", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(ex.Message, LocalizationService.Text("Gestione attività non aperta", "Task Manager not opened"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 
@@ -822,19 +840,19 @@ public partial class MainWindow : Window
             if (button is not null)
             {
                 button.IsEnabled = false;
-                button.Content = "Raccolta informazioni…";
+                button.Content = LocalizationService.Text("Raccolta informazioni…", "Gathering info…");
             }
-            _viewModel.HardwareInfo.MonitoringStatus = "Raccolta delle informazioni hardware locali…";
+            _viewModel.HardwareInfo.MonitoringStatus = LocalizationService.Text("Raccolta delle informazioni hardware locali…", "Gathering local hardware information…");
             await _viewModel.EnsureQuickHardwareDataAsync();
             Clipboard.SetText(HardwareClipboardService.Build(
                 _viewModel.HardwareInfo,
                 _viewModel.DriverInventory,
                 _viewModel.StorageDevices));
-            _viewModel.HardwareInfo.MonitoringStatus = "Riepilogo hardware copiato negli appunti.";
+            _viewModel.HardwareInfo.MonitoringStatus = LocalizationService.Text("Riepilogo hardware copiato negli appunti.", "Hardware summary copied to clipboard.");
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "Copia non riuscita", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(ex.Message, LocalizationService.Text("Copia non riuscita", "Copy failed"), MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
         {
@@ -902,12 +920,13 @@ public partial class MainWindow : Window
         }
 
         HistoryDetailTitle.Text = _pendingHistoryEntry.Name;
-        var readableDetails = string.IsNullOrWhiteSpace(_pendingHistoryEntry.Details)
-            ? "Nessun dettaglio disponibile per questa operazione."
-            : _pendingHistoryEntry.Details;
+        var readableDetails = string.IsNullOrWhiteSpace(_pendingHistoryEntry.DisplayDetails)
+            ? LocalizationService.Text("Nessun dettaglio disponibile per questa operazione.", "No details available for this operation.")
+            : _pendingHistoryEntry.DisplayDetails;
+        var diagLabel = LocalizationService.Text("Diagnostica tecnica", "Technical diagnostics");
         HistoryDetailText.Text = string.IsNullOrWhiteSpace(_pendingHistoryEntry.Diagnostics)
             ? readableDetails
-            : $"{readableDetails}\n\n--- Diagnostica tecnica ---\n{_pendingHistoryEntry.Diagnostics}";
+            : $"{readableDetails}\n\n--- {diagLabel} ---\n{_pendingHistoryEntry.Diagnostics}";
         HistoryDetailStatus.Text = "";
         HistoryDetailPopup.PlacementTarget = _pendingHistoryElement;
         HistoryDetailPopup.IsOpen = true;
@@ -918,11 +937,11 @@ public partial class MainWindow : Window
         try
         {
             Clipboard.SetText(HistoryDetailText.Text);
-            HistoryDetailStatus.Text = "Dettaglio copiato negli appunti.";
+            HistoryDetailStatus.Text = LocalizationService.Text("Dettaglio copiato negli appunti.", "Details copied to clipboard.");
         }
         catch (Exception ex)
         {
-            HistoryDetailStatus.Text = "Copia non riuscita.";
+            HistoryDetailStatus.Text = LocalizationService.Text("Copia non riuscita.", "Copy failed.");
             LogService.Write("Impossibile copiare un dettaglio della cronologia.", ex);
         }
     }
@@ -959,8 +978,10 @@ public partial class MainWindow : Window
 
     private void ClearHistory_Click(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show("Cancellare la cronologia visibile? I log tecnici resteranno disponibili.",
-                "Cancella cronologia", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        if (MessageBox.Show(
+                LocalizationService.Text("Cancellare la cronologia visibile? I log tecnici resteranno disponibili.", "Clear visible history? Technical logs will remain available."),
+                LocalizationService.Text("Cancella cronologia", "Clear history"),
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
             return;
         _viewModel.ClearHistory();
     }

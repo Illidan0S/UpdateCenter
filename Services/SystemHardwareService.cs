@@ -1,4 +1,4 @@
-using Microsoft.Win32;
+﻿using Microsoft.Win32;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -155,7 +155,7 @@ public sealed class SystemHardwareService
         var gpuUsage = gpuMetrics.Usage;
         var dedicatedGpuMemoryUsed = gpuMetrics.DedicatedUsageBytes;
         var sharedGpuMemoryUsed = gpuMetrics.SharedUsageBytes;
-        var gpuMetricsSource = "Rilevata tramite Windows";
+        var gpuMetricsSource = LocalizationService.Text("Rilevata tramite Windows", "Detected through Windows");
         var (cpuTemperature, gpuTemperature) = ReadTemperatures();
         var nvidia = TryReadNvidiaMetrics();
         if (nvidia is not null)
@@ -169,8 +169,10 @@ public sealed class SystemHardwareService
 
         var temperaturesAvailable = cpuTemperature.HasValue || gpuTemperature.HasValue;
         var status = temperaturesAvailable
-            ? "Dati aggiornati automaticamente ogni 3 secondi."
-            : "Utilizzo aggiornato ogni 3 secondi · sensori temperatura non esposti dal firmware/driver.";
+            ? LocalizationService.Text("Dati aggiornati automaticamente ogni 3 secondi.", "Data refreshes automatically every 3 seconds.")
+            : LocalizationService.Text(
+                "Utilizzo aggiornato ogni 3 secondi · sensori temperatura non esposti dal firmware/driver.",
+                "Usage refreshes every 3 seconds · temperature sensors are not exposed by firmware/driver.");
 
         return new HardwareMetricsSnapshot(
             cpuUsage,
@@ -218,10 +220,12 @@ public sealed class SystemHardwareService
     private static (double? Usage, string Used) ReadMemoryUsage()
     {
         var status = new MemoryStatusEx();
-        if (!GlobalMemoryStatusEx(status)) return (null, "Non disponibile");
+        if (!GlobalMemoryStatusEx(status)) return (null, LocalizationService.Text("Non disponibile", "Not available"));
         var used = status.TotalPhysical - status.AvailablePhysical;
         var usage = status.TotalPhysical == 0 ? 0 : used * 100d / status.TotalPhysical;
-        return (usage, $"{FormatBytes((long)used)} di {FormatBytes((long)status.TotalPhysical)}");
+        return (usage, LocalizationService.Text(
+            $"{FormatBytes((long)used)} di {FormatBytes((long)status.TotalPhysical)}",
+            $"{FormatBytes((long)used)} of {FormatBytes((long)status.TotalPhysical)}"));
     }
 
     private static GpuPerformanceMetrics ReadGpuPerformanceCounters()

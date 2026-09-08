@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Text;
@@ -15,6 +14,23 @@ internal enum RestartManagerApplicationType
     Explorer = 4,
     Console = 5,
     Critical = 1000
+}
+
+internal enum RestartManagerProcessLiveness
+{
+    Live,
+    DeadOrStale,
+    Unknown
+}
+
+internal sealed record RestartManagerLivenessResult(
+    RestartManagerProcessLiveness State,
+    int ErrorCode,
+    string Diagnostics);
+
+internal interface IWindowsProcessLivenessService
+{
+    RestartManagerLivenessResult Check(int processId, long expectedStartTimeFileTime);
 }
 
 [Flags]
@@ -37,7 +53,13 @@ internal sealed record RestartManagerBlocker(
     bool Restartable,
     RestartManagerRebootReason RebootReason,
     string ExecutablePath,
-    IReadOnlyList<string> EvidenceResources);
+    IReadOnlyList<string> EvidenceResources,
+    int ParentProcessId = 0,
+    IReadOnlyList<RestartManagerParentSnapshot>? ParentChain = null,
+    IReadOnlyList<WindowsServiceProcessSnapshot>? ServiceMappings = null,
+    long ProcessStartTimeFileTime = 0,
+    RestartManagerProcessLiveness Liveness = RestartManagerProcessLiveness.Unknown,
+    string LivenessDiagnostics = "");
 
 internal sealed record RestartManagerQueryResult(
     bool Available,
@@ -60,6 +82,22 @@ internal sealed class WindowsRestartManagerService : IWindowsRestartManagerServi
     private const int SessionKeyLength = 32;
     private const int RegistrationBatchSize = 64;
     private const int MaximumListAttempts = 5;
+    private readonly IWindowsBlockerSnapshotService _snapshotService;
+    private readonly IWindowsProcessLivenessService _livenessService;
+
+    public WindowsRestartManagerService() : this(
+        new WindowsBlockerSnapshotService(),
+        new WindowsProcessLivenessService())
+    {
+    }
+
+    internal WindowsRestartManagerService(
+        IWindowsBlockerSnapshotService snapshotService,
+        IWindowsProcessLivenessService? livenessService = null)
+    {
+        _snapshotService = snapshotService;
+        _livenessService = livenessService ?? new WindowsProcessLivenessService();
+    }
 
     public RestartManagerQueryResult Query(IReadOnlyCollection<string> resources)
     {
@@ -148,7 +186,7 @@ internal sealed class WindowsRestartManagerService : IWindowsRestartManagerServi
         }
     }
 
-    private static RestartManagerQueryResult ReadBlockers(
+    private RestartManagerQueryResult ReadBlockers(
         uint sessionHandle,
         IReadOnlyList<string> resources)
     {
@@ -202,38 +240,46 @@ internal sealed class WindowsRestartManagerService : IWindowsRestartManagerServi
             "RmGetList ha continuato a restituire ERROR_MORE_DATA durante una lista di processi in cambiamento.");
     }
 
-    private static RestartManagerBlocker ToBlocker(
+    private RestartManagerBlocker ToBlocker(
         RestartManagerProcessInfo info,
         RestartManagerRebootReason rebootReason,
         IReadOnlyList<string> evidenceResources)
     {
         var processId = unchecked((int)info.Process.ProcessId);
+        var serviceName = info.ServiceShortName?.Trim() ?? "";
+        var processStartTime = ToFileTime(info.Process.ProcessStartTime);
+        var liveness = _livenessService.Check(processId, processStartTime);
+        var snapshot = new WindowsBlockerNativeSnapshot("", 0, [], []);
+        if (liveness.State == RestartManagerProcessLiveness.Live)
+        {
+            snapshot = _snapshotService.Capture(processId, serviceName);
+            var afterSnapshot = _livenessService.Check(processId, processStartTime);
+            if (afterSnapshot.State != RestartManagerProcessLiveness.Live)
+            {
+                liveness = afterSnapshot;
+                snapshot = new WindowsBlockerNativeSnapshot("", 0, [], []);
+            }
+        }
         return new RestartManagerBlocker(
             processId,
             info.ApplicationName?.Trim() ?? "",
-            info.ServiceShortName?.Trim() ?? "",
+            serviceName,
             info.ApplicationType,
             info.ApplicationStatus,
             info.Restartable,
             rebootReason,
-            TryResolveExecutablePath(processId),
-            evidenceResources);
+            snapshot.ExecutablePath,
+            evidenceResources,
+            snapshot.ParentProcessId,
+            snapshot.ParentChain,
+            snapshot.Services,
+            processStartTime,
+            liveness.State,
+            liveness.Diagnostics);
     }
 
-    private static string TryResolveExecutablePath(int processId)
-    {
-        if (processId <= 0)
-            return "";
-        try
-        {
-            using var process = Process.GetProcessById(processId);
-            return Path.GetFullPath(process.MainModule?.FileName ?? "");
-        }
-        catch
-        {
-            return "";
-        }
-    }
+    private static long ToFileTime(FILETIME value) =>
+        ((long)value.dwHighDateTime << 32) | (uint)value.dwLowDateTime;
 
     private static List<string> NormalizeResources(IEnumerable<string> resources)
     {
@@ -290,7 +336,29 @@ internal sealed class WindowsRestartManagerService : IWindowsRestartManagerServi
         $"{blocker.ApplicationName} (PID {blocker.ProcessId}, tipo={blocker.ApplicationType}, " +
         $"servizio={blocker.ServiceShortName}, restartable={blocker.Restartable}, " +
         $"status=0x{blocker.ApplicationStatus:X}, reboot={blocker.RebootReason}, " +
-        $"path={blocker.ExecutablePath}, evidence={string.Join("; ", blocker.EvidenceResources)})";
+        $"liveness={blocker.Liveness}, rmStartTime={blocker.ProcessStartTimeFileTime}, " +
+        $"livenessDiagnostics={blocker.LivenessDiagnostics}, " +
+        $"path={blocker.ExecutablePath}, parentPid={blocker.ParentProcessId}, " +
+        $"parentChain={DescribeParents(blocker.ParentChain)}, " +
+        $"serviceMapping={DescribeServices(blocker.ServiceMappings)}, " +
+        $"evidence={string.Join("; ", blocker.EvidenceResources)})";
+
+    private static string DescribeParents(IReadOnlyList<RestartManagerParentSnapshot>? parents) =>
+        parents is null or { Count: 0 }
+            ? "nessuna"
+            : string.Join(" -> ", parents.Select(parent =>
+                $"PID {parent.ProcessId} parent={parent.ParentProcessId} path={parent.ExecutablePath} " +
+                $"services=[{DescribeServices(parent.Services)}]"));
+
+    private static string DescribeServices(IReadOnlyList<WindowsServiceProcessSnapshot>? services) =>
+        services is null or { Count: 0 }
+            ? "nessuno"
+            : string.Join(", ", services.Select(service =>
+                $"{service.ServiceName} (display={service.DisplayName}, PID={service.ProcessId}, " +
+                $"type=0x{service.ServiceType:X}, state={service.CurrentState}, " +
+                $"flags=0x{service.ServiceFlags:X}, dedicated={service.IsDedicated}, " +
+                $"shared={service.IsShared}, systemProcess={service.RunsInSystemProcess}, " +
+                $"path={service.ExecutablePath})"));
 
     private static string FormatWin32Error(string operation, int error) =>
         $"{operation} non riuscito: Win32={error} ({new Win32Exception(error).Message}).";

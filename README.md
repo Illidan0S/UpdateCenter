@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.1.4**.
+Versione pubblica attuale: **1.1.5**.
 
 Rafforzata la gestione degli esiti di installazione: verifica post-installazione per WinGet e driver, aggiornamento coerente degli elenchi e protezione dai refresh WPF durante transazioni di modifica.
 

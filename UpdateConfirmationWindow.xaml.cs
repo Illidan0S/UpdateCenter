@@ -25,8 +25,8 @@ public partial class UpdateConfirmationWindow : Window
         ItemsGrid.ItemsSource = items;
 
         SummaryText.Text = items.Count == 1
-            ? $"1 aggiornamento selezionato"
-            : $"{items.Count} aggiornamenti selezionati";
+            ? LocalizationService.Text("1 aggiornamento selezionato", "1 update selected")
+            : LocalizationService.Text($"{items.Count} aggiornamenti selezionati", $"{items.Count} updates selected");
         ImportantCountText.Text = items.Count(x => x.IsImportant).ToString();
         SoftwareCountText.Text = items.Count(x => x.Kind is UpdateKind.Software or UpdateKind.Runtime).ToString();
         DriverCountText.Text = items.Count(x => x.Kind == UpdateKind.Driver).ToString();
@@ -38,8 +38,8 @@ public partial class UpdateConfirmationWindow : Window
             BlockingList.ItemsSource = preflight.BlockingIssues;
             BlockingPanel.Visibility = Visibility.Visible;
             ConfirmButton.IsEnabled = false;
-            ConfirmButton.Content = "Controlli non superati";
-            FooterInfoText.Text = "Correggi i problemi indicati e riprova.";
+            ConfirmButton.Content = LocalizationService.Text("Controlli non superati", "Pre-checks failed");
+            FooterInfoText.Text = LocalizationService.Text("Correggi i problemi indicati e riprova.", "Resolve the indicated issues and retry.");
         }
 
         if (_requiresRiskConfirmation)
@@ -49,16 +49,16 @@ public partial class UpdateConfirmationWindow : Window
             if (_preflightCanContinue)
             {
                 ConfirmButton.IsEnabled = false;
-                ConfirmButton.Content = "Conferma il rischio";
-                FooterInfoText.Text = "La conferma aggiuntiva è necessaria per gli installer con rimozione preventiva.";
+                ConfirmButton.Content = LocalizationService.Text("Conferma il rischio", "Confirm risk");
+                FooterInfoText.Text = LocalizationService.Text("La conferma aggiuntiva è necessaria per gli installer con rimozione preventiva.", "Additional confirmation is required for installers with prior removal.");
             }
         }
 
         RestorePointText.Text = restorePointWillBeCreated
-            ? "Verrà richiesto un solo punto di ripristino per l'intero gruppo prima di installare driver o aggiornamenti importanti."
+            ? LocalizationService.Text("Verrà richiesto un solo punto di ripristino per l'intero gruppo prima di installare driver o aggiornamenti importanti.", "A single restore point will be requested for the whole group before installing drivers or important updates.")
             : restorePointEnabled
-                ? "Non necessario: il gruppo contiene soltanto aggiornamenti software non classificati come importanti."
-                : "Disattivato nelle Impostazioni.";
+                ? LocalizationService.Text("Non necessario: il gruppo contiene soltanto aggiornamenti software non classificati come importanti.", "Not needed: the group contains only software updates not classified as important.")
+                : LocalizationService.Text("Disattivato nelle Impostazioni.", "Disabled in Settings.");
 
         if (preflight.Warnings.Count > 0)
         {
@@ -77,11 +77,12 @@ public partial class UpdateConfirmationWindow : Window
         Loaded += (_, _) => LocalizationService.ApplyTo(this);
         ItemsGrid.ItemsSource = items;
         DeviceColumn.Visibility = Visibility.Visible;
-        DiskHeadingText.Text = "PACCHETTI / SPAZIO PER PC";
+        DiskHeadingText.Text = LocalizationService.Text("PACCHETTI / SPAZIO PER PC", "PACKAGES / SPACE PER PC");
 
+        var pcCount = items.Select(x => x.AgentId).Distinct().Count();
         SummaryText.Text = items.Count == 1
-            ? "1 aggiornamento remoto selezionato"
-            : $"{items.Count} aggiornamenti remoti selezionati su {items.Select(x => x.AgentId).Distinct().Count()} PC";
+            ? LocalizationService.Text("1 aggiornamento remoto selezionato", "1 remote update selected")
+            : LocalizationService.Text($"{items.Count} aggiornamenti remoti selezionati su {pcCount} PC", $"{items.Count} remote updates selected on {pcCount} PCs");
         ImportantCountText.Text = items.Count(x => x.IsImportant).ToString();
         SoftwareCountText.Text = items.Count(x => x.Kind is "Software" or "Runtime").ToString();
         DriverCountText.Text = items.Count(x => x.Kind == "Driver").ToString();
@@ -90,9 +91,12 @@ public partial class UpdateConfirmationWindow : Window
         PowerStatusText.Text = remoteSummary.PowerStatus;
         DiskStatusText.Text = remoteSummary.DiskStatus;
 
-        RestorePointText.Text = "Gli aggiornamenti vengono eseguiti separatamente su ogni PC. " +
-                               "Le protezioni configurate localmente restano applicate sul relativo dispositivo.";
-        FooterInfoText.Text = "L'avvio e l'avanzamento resteranno separati per ciascun PC.";
+        RestorePointText.Text = LocalizationService.Text(
+            "Gli aggiornamenti vengono eseguiti separatamente su ogni PC. Le protezioni configurate localmente restano applicate sul relativo dispositivo.",
+            "Updates run separately on each PC. Locally configured protections remain applied on the respective device.");
+        FooterInfoText.Text = LocalizationService.Text(
+            "L'avvio e l'avanzamento resteranno separati per ciascun PC.",
+            "Startup and progress will remain separate for each PC.");
 
         if (remoteSummary.Warnings.Count > 0)
         {
@@ -106,8 +110,8 @@ public partial class UpdateConfirmationWindow : Window
             RiskConfirmationPanel.Visibility = Visibility.Visible;
             ExcludeRiskItemsButton.Visibility = Visibility.Visible;
             ConfirmButton.IsEnabled = false;
-            ConfirmButton.Content = "Conferma il rischio";
-            FooterInfoText.Text = "Puoi includere gli elementi rischiosi oppure continuare escludendoli.";
+            ConfirmButton.Content = LocalizationService.Text("Conferma il rischio", "Confirm risk");
+            FooterInfoText.Text = LocalizationService.Text("Puoi includere gli elementi rischiosi oppure continuare escludendoli.", "You can include risky items or continue excluding them.");
         }
     }
 
@@ -125,8 +129,10 @@ public partial class UpdateConfirmationWindow : Window
     {
         ConfirmButton.IsEnabled = _preflightCanContinue && RiskAcceptanceCheckBox.IsChecked == true;
         ConfirmButton.Content = !_preflightCanContinue
-            ? "Controlli non superati"
-            : ConfirmButton.IsEnabled ? "Conferma e aggiorna" : "Conferma il rischio";
+            ? LocalizationService.Text("Controlli non superati", "Pre-checks failed")
+            : ConfirmButton.IsEnabled
+                ? LocalizationService.Text("Conferma e aggiorna", "Confirm and update")
+                : LocalizationService.Text("Conferma il rischio", "Confirm risk");
     }
     private void ExcludeRiskItems_Click(object sender, RoutedEventArgs e)
     {

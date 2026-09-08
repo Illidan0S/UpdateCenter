@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace UpdateCenter.Models;
@@ -25,7 +25,7 @@ public static class DriverInstallModes
 public sealed class UpdateItem : INotifyPropertyChanged
 {
     private bool _isSelected = true;
-    private string _status = Services.LocalizationService.Text("Da aggiornare", "Update available");
+    private string _status = "Da aggiornare";
     private string _resultDetails = "";
     private string _diagnostics = "";
     private double _progress;
@@ -148,7 +148,7 @@ public sealed class UpdateItem : INotifyPropertyChanged
 
     public string Status
     {
-        get => _status;
+        get => Services.LocalizationService.Translate(_status);
         set
         {
             _status = value;
@@ -159,7 +159,7 @@ public sealed class UpdateItem : INotifyPropertyChanged
 
     public string ResultDetails
     {
-        get => _resultDetails;
+        get => Services.LocalizationService.Translate(_resultDetails);
         set
         {
             _resultDetails = value ?? "";
@@ -189,7 +189,8 @@ public sealed class UpdateItem : INotifyPropertyChanged
 
     public void RefreshLocalizedProperties()
     {
-        Status = UpdateCenter.Services.LocalizationService.Translate(Status);
+        OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(ResultDetails));
         OnPropertyChanged(nameof(KindLabel));
         OnPropertyChanged(nameof(PriorityLabel));
         OnPropertyChanged(nameof(PriorityDescription));

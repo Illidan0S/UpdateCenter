@@ -9,7 +9,16 @@ internal sealed record WinGetProcessCandidate(
     int ProcessId,
     string ProcessName,
     string ExecutablePath,
-    WinGetBlockerClassification Classification = WinGetBlockerClassification.PackageOwned);
+    WinGetBlockerClassification Classification = WinGetBlockerClassification.PackageOwned,
+    string StableIdentity = "");
+
+internal sealed record WinGetServiceCandidate(
+    string ServiceName,
+    string DisplayName,
+    string ExecutablePath,
+    bool WasRunning,
+    bool IsDedicated,
+    string StableIdentity);
 
 internal sealed record WinGetRecoveryContext(
     string PackageId,
@@ -23,19 +32,39 @@ internal sealed record WinGetRecoveryContext(
 internal enum WinGetBlockerClassification
 {
     PackageOwned,
-    ExternalConfirmedBlocker,
-    SystemOrService,
+    ExternalConfirmed,
+    RecurringProcess,
+    ThirdPartyService,
+    SystemOrShared,
     Unknown
+}
+
+internal enum WinGetStableIdentityKind
+{
+    None,
+    ServiceName,
+    ExecutablePath,
+    ParentService
+}
+
+internal sealed record WinGetStableIdentity(WinGetStableIdentityKind Kind, string Value)
+{
+    public bool IsStable => Kind != WinGetStableIdentityKind.None && !string.IsNullOrWhiteSpace(Value);
+    public string Key => IsStable ? $"{Kind}:{Value}" : "";
 }
 
 internal sealed record ClassifiedRestartManagerBlocker(
     RestartManagerBlocker Blocker,
-    WinGetBlockerClassification Classification);
+    WinGetBlockerClassification Classification,
+    WinGetStableIdentity Identity,
+    WindowsServiceProcessSnapshot? LinkedService = null,
+    bool Recreated = false);
 
 internal enum WinGetRecoveryAction
 {
     Retry,
     CloseConfirmedBlockers,
+    StopConfirmedService,
     ManualIntervention,
     RestartRequired,
     RestartManagerUnavailable
@@ -50,7 +79,8 @@ internal sealed record WinGetRecoveryPreparation(
     bool ShouldRetry,
     string Diagnostics,
     WinGetRecoveryContext? Context = null,
-    bool ShouldRunInteractive = false);
+    bool ShouldRunInteractive = false,
+    IWinGetRecoveryLease? Lease = null);
 
 internal sealed record WinGetPostRetryDiagnosis(
     string Diagnostics,
@@ -60,8 +90,24 @@ internal interface IWinGetProcessRecoveryPrompt
 {
     bool ConfirmGracefulClose(UpdateItem item, IReadOnlyList<WinGetProcessCandidate> candidates);
     bool ConfirmForcedTermination(UpdateItem item, IReadOnlyList<WinGetProcessCandidate> candidates);
+    bool ConfirmTemporaryServiceStop(UpdateItem item, WinGetServiceCandidate service);
     bool ConfirmInteractiveInstaller(UpdateItem item);
     void ShowManualCloseRequired(UpdateItem item, string detail);
+}
+
+internal interface IWinGetRecoveryLease
+{
+    string Restore();
+}
+
+internal interface IWinGetRecoveryPollingDelay
+{
+    void Wait(TimeSpan delay);
+}
+
+internal sealed class WinGetRecoveryPollingDelay : IWinGetRecoveryPollingDelay
+{
+    public void Wait(TimeSpan delay) => Thread.Sleep(delay);
 }
 
 internal interface IWinGetProcessOperations
@@ -86,7 +132,7 @@ internal static class WinGetRecoveryDecisionPolicy
         }
 
         var classified = query.Blockers
-            .Select(blocker => new ClassifiedRestartManagerBlocker(blocker, Classify(blocker, context)))
+            .Select(blocker => ClassifyBlocker(blocker, context))
             .ToList();
         if (query.RebootReason != RestartManagerRebootReason.None)
         {
@@ -95,44 +141,90 @@ internal static class WinGetRecoveryDecisionPolicy
                 classified,
                 $"Restart Manager richiede un riavvio: {query.RebootReason}.");
         }
-        if (classified.Any(x => x.Classification == WinGetBlockerClassification.SystemOrService))
+        if (classified.Any(x => x.Blocker.Liveness == RestartManagerProcessLiveness.Unknown))
         {
             return new WinGetRecoveryDecision(
                 WinGetRecoveryAction.ManualIntervention,
                 classified,
-                "Sono presenti processi di sistema o servizi che UpdateCenter non può chiudere.");
+                "La liveness di almeno un record Restart Manager non è determinabile in sicurezza.");
         }
-        if (classified.Any(x => x.Classification == WinGetBlockerClassification.Unknown))
+
+        var live = classified
+            .Where(x => x.Blocker.Liveness == RestartManagerProcessLiveness.Live)
+            .ToList();
+        if (live.Any(x => x.Classification == WinGetBlockerClassification.SystemOrShared))
+        {
+            return new WinGetRecoveryDecision(
+                WinGetRecoveryAction.ManualIntervention,
+                classified,
+                "Sono presenti processi di sistema o risorse condivise che UpdateCenter non può gestire.");
+        }
+        if (live.Any(x => x.Classification == WinGetBlockerClassification.Unknown))
         {
             return new WinGetRecoveryDecision(
                 WinGetRecoveryAction.ManualIntervention,
                 classified,
                 "Sono presenti blocker non attribuibili in sicurezza.");
         }
-        return classified.Count == 0
-            ? new WinGetRecoveryDecision(
+        if (live.Count == 0)
+            return new WinGetRecoveryDecision(
                 WinGetRecoveryAction.Retry,
                 classified,
-                "Restart Manager non rileva più blocker sulle risorse registrate.")
-            : new WinGetRecoveryDecision(
+                classified.Count == 0
+                    ? "Restart Manager non rileva più blocker sulle risorse registrate."
+                    : "I soli record Restart Manager residui sono verificati dead/stale.");
+        if (live.All(x => x.Classification == WinGetBlockerClassification.ThirdPartyService))
+            return new WinGetRecoveryDecision(
+                WinGetRecoveryAction.StopConfirmedService,
+                classified,
+                "Un servizio di terze parti dedicato è concretamente collegato ai blocker.");
+        if (live.All(x => x.Classification is WinGetBlockerClassification.PackageOwned or
+                WinGetBlockerClassification.ExternalConfirmed or
+                WinGetBlockerClassification.RecurringProcess))
+            return new WinGetRecoveryDecision(
                 WinGetRecoveryAction.CloseConfirmedBlockers,
                 classified,
-                "Tutti i blocker rilevati sono package-owned o esterni confermati da Restart Manager.");
+                "Tutti i blocker sono processi con identità eseguibile verificata.");
+        return new WinGetRecoveryDecision(
+            WinGetRecoveryAction.ManualIntervention,
+            classified,
+            "La combinazione di blocker richiede remediation diverse e non viene automatizzata.");
     }
 
-    internal static WinGetBlockerClassification Classify(
+    internal static ClassifiedRestartManagerBlocker ClassifyBlocker(
         RestartManagerBlocker blocker,
         WinGetRecoveryContext context)
     {
         var processName = !string.IsNullOrWhiteSpace(blocker.ExecutablePath)
             ? Path.GetFileNameWithoutExtension(blocker.ExecutablePath)
             : blocker.ApplicationName;
-        if (!string.IsNullOrWhiteSpace(blocker.ServiceShortName) ||
-            blocker.ApplicationType is RestartManagerApplicationType.Service or
-                RestartManagerApplicationType.Critical or RestartManagerApplicationType.Explorer ||
+        if (blocker.ApplicationType is RestartManagerApplicationType.Critical or
+                RestartManagerApplicationType.Explorer ||
             WinGetProcessOperations.IsNeverCloseProcess(processName) ||
             WinGetProcessOperations.IsProtectedOrSharedPath(blocker.ExecutablePath))
-            return WinGetBlockerClassification.SystemOrService;
+            return Classified(blocker, WinGetBlockerClassification.SystemOrShared);
+
+        var linkedService = FindConcreteService(blocker);
+        var hasServiceEvidence = (blocker.ServiceMappings?.Count ?? 0) > 0 ||
+            (blocker.ParentChain ?? []).Any(parent => parent.Services.Count > 0);
+        if (!string.IsNullOrWhiteSpace(blocker.ServiceShortName) ||
+            blocker.ApplicationType == RestartManagerApplicationType.Service ||
+            linkedService is not null || hasServiceEvidence)
+        {
+            if (linkedService is not null && IsSafeThirdPartyDedicatedService(linkedService))
+            {
+                var kind = !string.IsNullOrWhiteSpace(blocker.ServiceShortName) ||
+                           linkedService.ProcessId == blocker.ProcessId
+                    ? WinGetStableIdentityKind.ServiceName
+                    : WinGetStableIdentityKind.ParentService;
+                return Classified(
+                    blocker,
+                    WinGetBlockerClassification.ThirdPartyService,
+                    new WinGetStableIdentity(kind, linkedService.ServiceName.ToUpperInvariant()),
+                    linkedService);
+            }
+            return Classified(blocker, WinGetBlockerClassification.SystemOrShared);
+        }
 
         if (WinGetProcessOperations.IsAttributedProcess(
             processName,
@@ -140,31 +232,134 @@ internal static class WinGetRecoveryDecisionPolicy
             context.InstallRoots,
             context.ExecutablePaths)
             )
-            return WinGetBlockerClassification.PackageOwned;
+            return Classified(
+                blocker,
+                WinGetBlockerClassification.PackageOwned,
+                ExecutableIdentity(blocker.ExecutablePath));
 
         if (string.IsNullOrWhiteSpace(blocker.ExecutablePath) || blocker.EvidenceResources.Count == 0)
-            return WinGetBlockerClassification.Unknown;
-        return WinGetBlockerClassification.ExternalConfirmedBlocker;
+            return Classified(blocker, WinGetBlockerClassification.Unknown);
+        return Classified(
+            blocker,
+            WinGetBlockerClassification.ExternalConfirmed,
+            ExecutableIdentity(blocker.ExecutablePath));
     }
+
+    internal static ClassifiedRestartManagerBlocker MarkRecurring(
+        ClassifiedRestartManagerBlocker current,
+        IEnumerable<ClassifiedRestartManagerBlocker> previous)
+    {
+        if (!current.Identity.IsStable)
+            return current;
+        var recreated = previous.Any(prior =>
+            prior.Blocker.ProcessId != current.Blocker.ProcessId &&
+            prior.Identity.IsStable &&
+            StableIdentityEquals(prior.Identity, current.Identity));
+        return recreated
+            ? current with
+            {
+                Classification = current.Classification == WinGetBlockerClassification.ThirdPartyService
+                    ? current.Classification
+                    : WinGetBlockerClassification.RecurringProcess,
+                Recreated = true
+            }
+            : current;
+    }
+
+    internal static bool StableIdentityEquals(WinGetStableIdentity left, WinGetStableIdentity right)
+    {
+        if (!left.IsStable || !right.IsStable)
+            return false;
+        if (left.Kind is WinGetStableIdentityKind.ServiceName or WinGetStableIdentityKind.ParentService &&
+            right.Kind is WinGetStableIdentityKind.ServiceName or WinGetStableIdentityKind.ParentService)
+            return left.Value.Equals(right.Value, StringComparison.OrdinalIgnoreCase);
+        return left.Kind == right.Kind && left.Value.Equals(right.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ClassifiedRestartManagerBlocker Classified(
+        RestartManagerBlocker blocker,
+        WinGetBlockerClassification classification,
+        WinGetStableIdentity? identity = null,
+        WindowsServiceProcessSnapshot? service = null) =>
+        new(blocker, classification, identity ?? new WinGetStableIdentity(WinGetStableIdentityKind.None, ""), service);
+
+    private static WinGetStableIdentity ExecutableIdentity(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return new WinGetStableIdentity(WinGetStableIdentityKind.None, "");
+        try
+        {
+            return new WinGetStableIdentity(
+                WinGetStableIdentityKind.ExecutablePath,
+                Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    .ToUpperInvariant());
+        }
+        catch
+        {
+            return new WinGetStableIdentity(WinGetStableIdentityKind.None, "");
+        }
+    }
+
+    private static WindowsServiceProcessSnapshot? FindConcreteService(RestartManagerBlocker blocker)
+    {
+        var direct = blocker.ServiceMappings ?? [];
+        if (!string.IsNullOrWhiteSpace(blocker.ServiceShortName))
+        {
+            var exact = direct.Where(service => service.ServiceName.Equals(
+                blocker.ServiceShortName, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (exact.Count == 1)
+                return exact[0];
+            return null;
+        }
+        var directForPid = direct.Where(service => service.ProcessId == blocker.ProcessId).ToList();
+        if (directForPid.Count > 0)
+            return directForPid.Count == 1 ? directForPid[0] : null;
+
+        var parentServices = (blocker.ParentChain ?? [])
+            .SelectMany(parent => parent.Services)
+            .Where(service => service.ProcessId > 0)
+            .DistinctBy(service => service.ServiceName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return parentServices.Count == 1 ? parentServices[0] : null;
+    }
+
+    internal static bool IsSafeThirdPartyDedicatedService(WindowsServiceProcessSnapshot service) =>
+        service.IsDedicated && !service.IsShared && !service.RunsInSystemProcess && service.ProcessId > 0 &&
+        !string.IsNullOrWhiteSpace(service.ExecutablePath) &&
+        !WinGetProcessOperations.IsProtectedOrSharedPath(service.ExecutablePath) &&
+        !WinGetProcessOperations.IsNeverCloseProcess(Path.GetFileNameWithoutExtension(service.ExecutablePath));
 }
 
 internal sealed class WinGetProcessRecoveryService
 {
     private static readonly TimeSpan GracefulCloseTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan ForcedCloseTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ServiceStateTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan StabilizationPollInterval = TimeSpan.FromMilliseconds(250);
+    private const int MaximumStabilizationQueries = 8;
     private readonly IWinGetProcessOperations _operations;
     private readonly IWindowsRestartManagerService _restartManager;
+    private readonly IWindowsServiceControl _serviceControl;
+    private readonly IWinGetRecoveryPollingDelay _pollingDelay;
 
-    public WinGetProcessRecoveryService() : this(new WinGetProcessOperations(), new WindowsRestartManagerService())
+    public WinGetProcessRecoveryService() : this(
+        new WinGetProcessOperations(),
+        new WindowsRestartManagerService(),
+        new WindowsServiceControl(),
+        new WinGetRecoveryPollingDelay())
     {
     }
 
     internal WinGetProcessRecoveryService(
         IWinGetProcessOperations operations,
-        IWindowsRestartManagerService restartManager)
+        IWindowsRestartManagerService restartManager,
+        IWindowsServiceControl? serviceControl = null,
+        IWinGetRecoveryPollingDelay? pollingDelay = null)
     {
         _operations = operations;
         _restartManager = restartManager;
+        _serviceControl = serviceControl ?? new WindowsServiceControl();
+        _pollingDelay = pollingDelay ?? new WinGetRecoveryPollingDelay();
     }
 
     public WinGetRecoveryPreparation PrepareRetry(
@@ -173,7 +368,7 @@ internal sealed class WinGetProcessRecoveryService
         IWinGetProcessRecoveryPrompt prompt)
     {
         if (!failedResult.FailureReason.Equals(UpdateFailureReasons.FilesInUse, StringComparison.Ordinal))
-            return new WinGetRecoveryPreparation(false, "L'esito non è classificato come file in uso.");
+            return new WinGetRecoveryPreparation(false, LocalizationService.Text("L'esito non è classificato come file in uso.", "The outcome is not classified as files in use."));
 
         var context = _operations.CreateContext(item);
         var diagnostics = new List<string>
@@ -184,21 +379,21 @@ internal sealed class WinGetProcessRecoveryService
             $"Shared resource roots: {string.Join("; ", context.SharedResourceRoots)}.",
             $"Shared resources registrate: {string.Join("; ", context.SharedResources)}."
         };
-        var initial = QueryAndAssess(item, failedResult, context, "prima-della-chiusura", diagnostics);
+        var initial = Stabilize(
+            item, failedResult, context, "snapshot-iniziale", diagnostics, previous: []);
         if (initial.Action == WinGetRecoveryAction.Retry)
-            return ReadyToRetry(context, diagnostics, "Nessun blocker rilevato; retry autorizzato.");
+            return ReadyToRetry(context, diagnostics,
+                "Due query consecutive confermano l'assenza di blocker; retry autorizzato.");
         if (initial.Action == WinGetRecoveryAction.RestartManagerUnavailable)
             return UseConservativeFallback(item, failedResult, context, prompt, diagnostics);
         if (initial.Action is WinGetRecoveryAction.ManualIntervention or WinGetRecoveryAction.RestartRequired)
-            return RequireManualIntervention(item, prompt, initial, diagnostics);
+            return RequireSafeFallback(item, failedResult, prompt, initial, diagnostics, context);
+        if (initial.Action == WinGetRecoveryAction.StopConfirmedService)
+            return PrepareServiceRetry(item, failedResult, prompt, context, initial, diagnostics);
 
         var confirmedCandidates = ToConfirmedCandidates(initial.Blockers);
         if (confirmedCandidates.Count == 0)
-        {
-            diagnostics.Add("Restart Manager ha rilevato blocker del pacchetto, ma nessun PID è chiudibile in sicurezza.");
-            prompt.ShowManualCloseRequired(item, BuildManualMessage(item, initial));
-            return new WinGetRecoveryPreparation(false, string.Join(Environment.NewLine, diagnostics), context);
-        }
+            return RequireSafeFallback(item, failedResult, prompt, initial, diagnostics, context);
         if (!prompt.ConfirmGracefulClose(item, confirmedCandidates))
         {
             diagnostics.Add("L'utente ha annullato la richiesta di chiusura pulita.");
@@ -208,55 +403,37 @@ internal sealed class WinGetProcessRecoveryService
 
         diagnostics.Add("Chiusura pulita confermata dall'utente: " + Describe(confirmedCandidates));
         LogChoice(item, failedResult, "graceful-close", "confirmed", confirmedCandidates);
-        var gracefullyAuthorizedPids = confirmedCandidates.Select(x => x.ProcessId).ToHashSet();
+        var authorizedIdentities = confirmedCandidates
+            .Select(candidate => candidate.StableIdentity)
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var processLevelRemaining = _operations.CloseGracefully(confirmedCandidates, GracefulCloseTimeout);
         diagnostics.Add(processLevelRemaining.Count == 0
             ? "CloseMainWindow: i PID proposti non risultano più attivi."
             : "CloseMainWindow: PID ancora attivi: " + Describe(processLevelRemaining));
 
-        var afterClose = QueryAndAssess(item, failedResult, context, "dopo-chiusura-pulita", diagnostics);
+        var afterClose = Stabilize(
+            item, failedResult, context, "dopo-chiusura-pulita", diagnostics, initial.Blockers);
         if (afterClose.Action == WinGetRecoveryAction.Retry)
             return ReadyToRetry(context, diagnostics, "Restart Manager conferma che le risorse non sono più bloccate.");
         if (afterClose.Action != WinGetRecoveryAction.CloseConfirmedBlockers)
-            return RequireManualIntervention(item, prompt, afterClose, diagnostics);
+            return RequireSafeFallback(item, failedResult, prompt, afterClose, diagnostics, context);
 
         var remainingConfirmedCandidates = ToConfirmedCandidates(afterClose.Blockers);
-        var newlyDetectedCandidates = remainingConfirmedCandidates
-            .Where(candidate => !gracefullyAuthorizedPids.Contains(candidate.ProcessId))
-            .ToList();
-        if (newlyDetectedCandidates.Count > 0)
-        {
-            if (!prompt.ConfirmGracefulClose(item, newlyDetectedCandidates))
-            {
-                diagnostics.Add("Chiusura pulita dei nuovi blocker confermati non autorizzata; nessun retry.");
-                LogChoice(item, failedResult, "graceful-close-new-blockers", "cancelled", newlyDetectedCandidates);
-                return new WinGetRecoveryPreparation(false, string.Join(Environment.NewLine, diagnostics), context);
-            }
-            gracefullyAuthorizedPids.UnionWith(newlyDetectedCandidates.Select(x => x.ProcessId));
-            diagnostics.Add("Chiusura pulita dei nuovi blocker confermati: " + Describe(newlyDetectedCandidates));
-            LogChoice(item, failedResult, "graceful-close-new-blockers", "confirmed", newlyDetectedCandidates);
-            _operations.CloseGracefully(newlyDetectedCandidates, GracefulCloseTimeout);
-            afterClose = QueryAndAssess(
-                item, failedResult, context, "dopo-chiusura-nuovi-blocker", diagnostics);
-            if (afterClose.Action == WinGetRecoveryAction.Retry)
-                return ReadyToRetry(context, diagnostics, "Restart Manager conferma che le risorse non sono più bloccate.");
-            if (afterClose.Action != WinGetRecoveryAction.CloseConfirmedBlockers)
-                return RequireManualIntervention(item, prompt, afterClose, diagnostics);
-            remainingConfirmedCandidates = ToConfirmedCandidates(afterClose.Blockers);
-        }
-
         if (remainingConfirmedCandidates.Any(candidate =>
-                !gracefullyAuthorizedPids.Contains(candidate.ProcessId)))
+                string.IsNullOrWhiteSpace(candidate.StableIdentity) ||
+                !authorizedIdentities.Contains(candidate.StableIdentity)))
         {
-            diagnostics.Add("Sono comparsi ulteriori blocker non presentati all'utente; terminazione forzata non proposta.");
-            return RequireManualIntervention(item, prompt, afterClose, diagnostics);
+            diagnostics.Add("Sono comparsi blocker con identità diversa o non verificabile; nessuna terminazione proposta.");
+            return RequireSafeFallback(item, failedResult, prompt, afterClose, diagnostics, context);
         }
-        if (remainingConfirmedCandidates.Count == 0 ||
-            !prompt.ConfirmForcedTermination(item, remainingConfirmedCandidates))
+        if (remainingConfirmedCandidates.Count == 0)
+            return RequireSafeFallback(item, failedResult, prompt, afterClose, diagnostics, context);
+        if (!prompt.ConfirmForcedTermination(item, remainingConfirmedCandidates))
         {
             diagnostics.Add("Terminazione forzata non autorizzata; nessun retry.");
             LogChoice(item, failedResult, "forced-close", "cancelled", remainingConfirmedCandidates);
-            return new WinGetRecoveryPreparation(false, string.Join(Environment.NewLine, diagnostics), context);
+            return RequireSafeFallback(item, failedResult, prompt, afterClose, diagnostics, context);
         }
 
         diagnostics.Add("Terminazione forzata confermata esplicitamente: " + Describe(remainingConfirmedCandidates));
@@ -266,10 +443,11 @@ internal sealed class WinGetProcessRecoveryService
             ? "Kill(entireProcessTree=true): i PID proposti non risultano più attivi."
             : "Kill(entireProcessTree=true): PID ancora attivi: " + Describe(survivedKill));
 
-        var afterKill = QueryAndAssess(item, failedResult, context, "dopo-terminazione-forzata", diagnostics);
+        var afterKill = Stabilize(
+            item, failedResult, context, "dopo-terminazione-forzata", diagnostics, afterClose.Blockers);
         if (afterKill.Action == WinGetRecoveryAction.Retry)
             return ReadyToRetry(context, diagnostics, "Restart Manager conferma la rimozione dei blocker; retry autorizzato.");
-        return RequireManualIntervention(item, prompt, afterKill, diagnostics);
+        return RequireSafeFallback(item, failedResult, prompt, afterKill, diagnostics, context);
     }
 
     public WinGetPostRetryDiagnosis DiagnoseFailedRetry(
@@ -280,43 +458,197 @@ internal sealed class WinGetProcessRecoveryService
     {
         var context = preparedContext ?? _operations.CreateContext(item);
         var diagnostics = new List<string>();
-        var decision = QueryAndAssess(item, retryResult, context, "dopo-retry-files-in-use", diagnostics);
+        var decision = Stabilize(
+            item, retryResult, context, "dopo-retry-files-in-use", diagnostics, previous: []);
         var message = BuildRetryFailureMessage(item, decision);
         retryResult.Message = message;
-        var canOfferInteractive = decision.Action is WinGetRecoveryAction.Retry or
-            WinGetRecoveryAction.RestartManagerUnavailable;
-        var openInteractive = canOfferInteractive && prompt.ConfirmInteractiveInstaller(item);
-        if (!canOfferInteractive)
-            prompt.ShowManualCloseRequired(item, message);
+        prompt.ShowManualCloseRequired(item, message);
         LogService.WriteEvent(
             "winget-recovery", "interactive-fallback",
-            openInteractive ? "confirmed" : canOfferInteractive ? "cancelled" : "not-safe",
-            item.Id, retryResult.ResultCode, message);
+            "not-offered-after-retry",
+            item.Id, retryResult.ResultCode,
+            message + " Nessun ulteriore tentativo WinGet dopo il retry unico.");
         diagnostics.Add("Messaggio finale: " + message);
-        diagnostics.Add("Fallback interattivo: " + (openInteractive ? "confermato" : "non avviato"));
+        diagnostics.Add("Fallback interattivo: non offerto dopo il retry unico.");
         return new WinGetPostRetryDiagnosis(
-            string.Join(Environment.NewLine, diagnostics), openInteractive);
+            string.Join(Environment.NewLine, diagnostics), ShouldRunInteractive: false);
     }
 
-    private WinGetRecoveryDecision QueryAndAssess(
+    private WinGetRecoveryDecision Stabilize(
         UpdateItem item,
         ItemRunResult failedResult,
         WinGetRecoveryContext context,
         string phase,
+        ICollection<string> diagnostics,
+        IReadOnlyList<ClassifiedRestartManagerBlocker> previous)
+    {
+        var history = previous.ToList();
+        IReadOnlyList<ClassifiedRestartManagerBlocker> lastNonEmpty = previous;
+        IReadOnlyList<ClassifiedRestartManagerBlocker> priorScan = [];
+        var consecutiveClean = 0;
+        WinGetRecoveryDecision? latest = null;
+        for (var scan = 1; scan <= MaximumStabilizationQueries; scan++)
+        {
+            var query = _restartManager.Query(context.RegisteredResources);
+            var evaluated = WinGetRecoveryDecisionPolicy.Evaluate(query, context);
+            var classified = evaluated.Blockers
+                .Select(blocker => blocker.Blocker.Liveness == RestartManagerProcessLiveness.Live
+                    ? WinGetRecoveryDecisionPolicy.MarkRecurring(blocker, history)
+                    : blocker)
+                .ToList();
+            latest = evaluated with { Blockers = classified };
+            if (classified.Any(blocker => blocker.Recreated))
+            {
+                latest = latest with
+                {
+                    Action = classified.All(IsNormalProcess)
+                        ? WinGetRecoveryAction.CloseConfirmedBlockers
+                        : latest.Action,
+                    Reason = "Rilevato blocker ricreato con PID diverso e identità stabile verificata."
+                };
+            }
+            diagnostics.Add($"Restart Manager [{phase} #{scan}]: {query.Diagnostics}");
+            diagnostics.Add("Classificazione blocker: " + Describe(classified));
+            diagnostics.Add($"Decisione [{phase} #{scan}]: {latest.Action}; {latest.Reason}");
+            LogService.WriteEvent(
+                "winget-recovery", $"restart-manager-{phase}-{scan}",
+                query.Succeeded ? latest.Action.ToString() : "failure",
+                item.Id, failedResult.ResultCode,
+                query.Diagnostics + Environment.NewLine + "Classificazione: " + Describe(classified));
+
+            if (latest.Action is WinGetRecoveryAction.RestartManagerUnavailable or
+                WinGetRecoveryAction.RestartRequired)
+                return latest;
+            var relevant = RelevantBlockers(classified);
+            if (relevant.Count == 0 &&
+                query.RebootReason == RestartManagerRebootReason.None)
+            {
+                consecutiveClean++;
+                if (consecutiveClean >= 2)
+                    return latest with
+                    {
+                        Action = WinGetRecoveryAction.Retry,
+                        Reason = "Due query consecutive non rilevano blocker rilevanti."
+                    };
+            }
+            else
+            {
+                consecutiveClean = 0;
+                if (priorScan.Count > 0 && SameObservedBlockers(priorScan, relevant))
+                    return latest;
+                history.AddRange(classified.Where(blocker =>
+                    blocker.Blocker.Liveness == RestartManagerProcessLiveness.Live));
+                lastNonEmpty = relevant;
+            }
+            priorScan = relevant;
+            if (scan < MaximumStabilizationQueries)
+                _pollingDelay.Wait(StabilizationPollInterval);
+        }
+        return new WinGetRecoveryDecision(
+            WinGetRecoveryAction.ManualIntervention, lastNonEmpty,
+            "Stabilizzazione Restart Manager non conclusiva.");
+    }
+
+    private WinGetRecoveryPreparation PrepareServiceRetry(
+        UpdateItem item,
+        ItemRunResult failedResult,
+        IWinGetProcessRecoveryPrompt prompt,
+        WinGetRecoveryContext context,
+        WinGetRecoveryDecision decision,
         ICollection<string> diagnostics)
     {
-        var query = _restartManager.Query(context.RegisteredResources);
-        var decision = WinGetRecoveryDecisionPolicy.Evaluate(query, context);
-        diagnostics.Add($"Restart Manager [{phase}]: {query.Diagnostics}");
-        diagnostics.Add("Classificazione blocker: " + Describe(decision.Blockers));
-        diagnostics.Add($"Decisione [{phase}]: {decision.Action}; {decision.Reason}");
-        LogService.WriteEvent(
-            "winget-recovery", "restart-manager-" + phase,
-            query.Succeeded ? decision.Action.ToString() : "failure",
-            item.Id, failedResult.ResultCode,
-            query.Diagnostics + Environment.NewLine + "Classificazione: " + Describe(decision.Blockers));
-        return decision;
+        var liveBlockers = decision.Blockers
+            .Where(blocker => blocker.Blocker.Liveness == RestartManagerProcessLiveness.Live)
+            .ToList();
+        var linked = liveBlockers
+            .Select(blocker => blocker.LinkedService)
+            .Where(service => service is not null)
+            .Cast<WindowsServiceProcessSnapshot>()
+            .DistinctBy(service => service.ServiceName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (linked.Count != 1 || liveBlockers.Any(blocker => blocker.LinkedService is null ||
+                !blocker.LinkedService.ServiceName.Equals(linked[0].ServiceName, StringComparison.OrdinalIgnoreCase)))
+            return RequireSafeFallback(item, failedResult, prompt, decision, diagnostics, context);
+
+        var current = _serviceControl.Query(linked[0].ServiceName);
+        if (current is null || !current.IsRunning ||
+            !WinGetRecoveryDecisionPolicy.IsSafeThirdPartyDedicatedService(current))
+        {
+            diagnostics.Add("Lo stato corrente del servizio non conferma un servizio third-party dedicato e arrestabile.");
+            return RequireSafeFallback(item, failedResult, prompt, decision, diagnostics, context);
+        }
+        var candidate = new WinGetServiceCandidate(
+            current.ServiceName,
+            string.IsNullOrWhiteSpace(current.DisplayName) ? current.ServiceName : current.DisplayName,
+            current.ExecutablePath,
+            current.IsRunning,
+            current.IsDedicated,
+            $"ServiceName:{current.ServiceName.ToUpperInvariant()}");
+        if (!prompt.ConfirmTemporaryServiceStop(item, candidate))
+        {
+            diagnostics.Add($"Stop temporaneo del servizio {candidate.ServiceName} annullato dall'utente.");
+            LogService.WriteEvent("winget-recovery", "service-stop", "cancelled",
+                item.Id, failedResult.ResultCode, candidate.StableIdentity);
+            return new WinGetRecoveryPreparation(false, string.Join(Environment.NewLine, diagnostics), context);
+        }
+
+        diagnostics.Add($"Stop temporaneo del servizio {candidate.ServiceName} confermato dall'utente.");
+        LogService.WriteEvent("winget-recovery", "service-stop-confirmation", "confirmed",
+            item.Id, failedResult.ResultCode, candidate.StableIdentity);
+
+        var stop = _serviceControl.StopAndWait(candidate.ServiceName, ServiceStateTimeout);
+        diagnostics.Add("Stop servizio: " + stop.Diagnostics);
+        LogService.WriteEvent("winget-recovery", "service-stop",
+            stop.Succeeded ? "success" : "failure", item.Id, failedResult.ResultCode, stop.Diagnostics);
+        if (!stop.Succeeded)
+            return RequireSafeFallback(item, failedResult, prompt, decision, diagnostics, context);
+
+        var lease = new WinGetServiceRecoveryLease(
+            _serviceControl, candidate.ServiceName, candidate.WasRunning, ServiceStateTimeout,
+            item.Id, failedResult.ResultCode);
+        try
+        {
+            var afterStop = Stabilize(
+                item, failedResult, context, "dopo-stop-servizio", diagnostics, decision.Blockers);
+            if (afterStop.Action == WinGetRecoveryAction.Retry)
+                return ReadyToRetry(context, diagnostics,
+                    "Il servizio è Stopped e due query confermano risorse libere; retry autorizzato.", lease);
+
+            var fallback = RequireSafeFallback(item, failedResult, prompt, afterStop, diagnostics, context);
+            return fallback with { Lease = lease };
+        }
+        catch
+        {
+            _ = lease.Restore();
+            throw;
+        }
     }
+
+    private static bool IsNormalProcess(ClassifiedRestartManagerBlocker blocker) =>
+        blocker.Blocker.Liveness == RestartManagerProcessLiveness.Live &&
+        blocker.Classification is WinGetBlockerClassification.PackageOwned or
+            WinGetBlockerClassification.ExternalConfirmed or
+            WinGetBlockerClassification.RecurringProcess;
+
+    private static IReadOnlyList<ClassifiedRestartManagerBlocker> RelevantBlockers(
+        IEnumerable<ClassifiedRestartManagerBlocker> blockers) =>
+        blockers.Where(blocker => blocker.Blocker.Liveness != RestartManagerProcessLiveness.DeadOrStale).ToList();
+
+    private static bool SameObservedBlockers(
+        IReadOnlyList<ClassifiedRestartManagerBlocker> left,
+        IReadOnlyList<ClassifiedRestartManagerBlocker> right)
+    {
+        if (left.Count != right.Count)
+            return false;
+        var leftKeys = left.Select(ObservationKey).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        var rightKeys = right.Select(ObservationKey).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        return leftKeys.SequenceEqual(rightKeys, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string ObservationKey(ClassifiedRestartManagerBlocker blocker) =>
+        blocker.Identity.IsStable
+            ? $"{blocker.Blocker.ProcessId}:{blocker.Identity.Key}"
+            : $"{blocker.Blocker.ProcessId}:unknown";
 
     private static WinGetRecoveryPreparation UseConservativeFallback(
         UpdateItem item,
@@ -328,8 +660,9 @@ internal sealed class WinGetProcessRecoveryService
         var fallback = context.FallbackCandidates;
         if (fallback.Count == 0)
         {
-            const string interactiveDetail =
-                "Restart Manager non è disponibile e nessun processo è attribuibile con certezza al pacchetto.";
+            var interactiveDetail = LocalizationService.Text(
+                "Restart Manager non è disponibile e nessun processo è attribuibile con certezza al pacchetto.",
+                "Restart Manager is unavailable and no process can be safely attributed to the package.");
             diagnostics.Add("Fallback conservativo: " + interactiveDetail);
             var openInteractive = prompt.ConfirmInteractiveInstaller(item);
             LogService.WriteEvent(
@@ -342,68 +675,118 @@ internal sealed class WinGetProcessRecoveryService
                 context,
                 openInteractive);
         }
-        var detail = fallback.Count == 0
-            ? "Restart Manager non è disponibile e nessun processo è attribuibile con certezza al pacchetto. " +
-              "Il retry automatico non è sicuro. Chiudi manualmente le applicazioni interessate o riavvia il PC."
-            : "Restart Manager non è disponibile. I processi attribuibili al pacchetto sono: " +
-              Describe(fallback) + ". Chiudili manualmente; il retry automatico non è sicuro.";
-        diagnostics.Add("Fallback conservativo InstallLocation/DisplayIcon: " + detail);
+        var names = string.Join(", ", fallback.Select(candidate => candidate.ProcessName)
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+        var detail = LocalizationService.Text(
+            "Windows non può verificare automaticamente quali file sono ancora in uso. " +
+            $"Chiudi manualmente {names} e riprova.",
+            "Windows cannot automatically verify which files are still in use. " +
+            $"Manually close {names} and retry.");
+        diagnostics.Add("Fallback conservativo InstallLocation/DisplayIcon: " + Describe(fallback));
+        var openFallback = prompt.ConfirmInteractiveInstaller(item);
         LogService.WriteEvent(
-            "winget-recovery", "fallback-process-discovery", "manual-required",
+            "winget-recovery", "fallback-process-discovery",
+            openFallback ? "interactive-confirmed" : "manual-required",
             item.Id, failedResult.ResultCode, detail);
-        prompt.ShowManualCloseRequired(item, detail);
-        return new WinGetRecoveryPreparation(false, string.Join(Environment.NewLine, diagnostics), context);
+        if (!openFallback)
+            prompt.ShowManualCloseRequired(item, detail);
+        return new WinGetRecoveryPreparation(
+            false, string.Join(Environment.NewLine, diagnostics), context, openFallback);
     }
 
-    private static WinGetRecoveryPreparation RequireManualIntervention(
+    private static WinGetRecoveryPreparation RequireSafeFallback(
         UpdateItem item,
+        ItemRunResult failedResult,
         IWinGetProcessRecoveryPrompt prompt,
         WinGetRecoveryDecision decision,
-        ICollection<string> diagnostics)
+        ICollection<string> diagnostics,
+        WinGetRecoveryContext context)
     {
         var detail = BuildManualMessage(item, decision);
-        diagnostics.Add("Intervento manuale richiesto: " + detail);
-        prompt.ShowManualCloseRequired(item, detail);
-        return new WinGetRecoveryPreparation(false, string.Join(Environment.NewLine, diagnostics), Context: null);
+        failedResult.Message = detail;
+        diagnostics.Add("Remediation automatica rifiutata: " + detail);
+        var openInteractive = prompt.ConfirmInteractiveInstaller(item);
+        LogService.WriteEvent(
+            "winget-recovery", "interactive-fallback",
+            openInteractive ? "confirmed" : "cancelled",
+            item.Id, failedResult.ResultCode, detail);
+        if (!openInteractive)
+            prompt.ShowManualCloseRequired(item, detail);
+        return new WinGetRecoveryPreparation(
+            false, string.Join(Environment.NewLine, diagnostics), context, openInteractive);
     }
 
     private static WinGetRecoveryPreparation ReadyToRetry(
         WinGetRecoveryContext context,
         ICollection<string> diagnostics,
-        string detail)
+        string detail,
+        IWinGetRecoveryLease? lease = null)
     {
         diagnostics.Add(detail);
-        return new WinGetRecoveryPreparation(true, string.Join(Environment.NewLine, diagnostics), context);
+        return new WinGetRecoveryPreparation(true, string.Join(Environment.NewLine, diagnostics), context, Lease: lease);
     }
 
     private static string BuildManualMessage(UpdateItem item, WinGetRecoveryDecision decision)
     {
+        var recurring = decision.Blockers.Where(x => x.Recreated).ToList();
+        if (recurring.Count > 0)
+        {
+            var names = string.Join("; ", recurring.Select(x =>
+                $"{x.Blocker.ApplicationName} ({x.Blocker.ExecutablePath}, PID {x.Blocker.ProcessId}" +
+                (x.LinkedService is null ? ")" : $", service: {x.LinkedService.ServiceName})")));
+            return LocalizationService.Text(
+                $"Un blocker ricompare e continua a utilizzare le risorse di {item.Name}: {names}. Chiudi il componente o riavvia il PC prima di riprovare.",
+                $"A blocker keeps restarting and using resources required by {item.Name}: {names}. Close the component or restart the PC before retrying.");
+        }
         if (decision.Action == WinGetRecoveryAction.RestartRequired)
-            return $"Windows segnala che le risorse di {item.Name} richiedono un riavvio prima di riprovare.";
+            return LocalizationService.Text(
+                $"Windows segnala che le risorse di {item.Name} richiedono un riavvio prima di riprovare.",
+                $"Windows reports that resources for {item.Name} require a restart before retrying.");
         var unknown = decision.Blockers
             .Where(x => x.Classification == WinGetBlockerClassification.Unknown)
             .Select(Describe)
             .ToList();
         if (unknown.Count > 0)
-            return $"Windows segnala blocker non identificabili in sicurezza per {item.Name}: " +
-                   $"{string.Join(", ", unknown)}. Non verranno terminati da UpdateCenter.";
+            return LocalizationService.Text(
+                $"Un componente non identificabile con sufficiente certezza sta utilizzando file di {item.Name}. " +
+                "UpdateCenter non lo chiuderà automaticamente.",
+                $"A component that cannot be identified with certainty is using files required by {item.Name}. " +
+                "UpdateCenter will not close it automatically.");
         var system = decision.Blockers
-            .Where(x => x.Classification == WinGetBlockerClassification.SystemOrService)
+            .Where(x => x.Classification == WinGetBlockerClassification.SystemOrShared)
             .Select(Describe)
             .ToList();
         if (system.Count > 0)
-            return $"Windows segnala componenti di sistema o servizi che bloccano {item.Name}: " +
-                   $"{string.Join(", ", system)}. Non verranno terminati da UpdateCenter.";
-        return $"Windows non permette di dimostrare che le risorse di {item.Name} siano libere. " +
-               "Chiudi manualmente le applicazioni interessate o riavvia il PC e riprova.";
+            return LocalizationService.Text(
+                $"Un componente di sistema o condiviso sta utilizzando file di {item.Name}. " +
+                "UpdateCenter non può interromperlo in sicurezza.",
+                $"A system or shared component is using files required by {item.Name}. " +
+                "UpdateCenter cannot safely terminate it.");
+        var live = decision.Blockers.Where(x => x.Blocker.Liveness == RestartManagerProcessLiveness.Live).ToList();
+        if (live.Count > 0)
+        {
+            var names = string.Join("; ", live.Select(x =>
+                $"{x.Blocker.ApplicationName} ({x.Blocker.ExecutablePath}, PID {x.Blocker.ProcessId})"));
+            return LocalizationService.Text(
+                $"Le risorse di {item.Name} sono ancora bloccate da: {names}. Chiudi il componente o riavvia il PC prima di riprovare.",
+                $"Resources required by {item.Name} are still blocked by: {names}. Close the component or restart the PC before retrying.");
+        }
+        return LocalizationService.Text(
+            $"Windows non permette di dimostrare che le risorse di {item.Name} siano libere. " +
+            "Chiudi manualmente le applicazioni interessate o riavvia il PC e riprova.",
+            $"Windows cannot prove that resources for {item.Name} are free. " +
+            "Manually close the affected applications or restart the PC and retry.");
     }
 
     private static string BuildRetryFailureMessage(UpdateItem item, WinGetRecoveryDecision decision)
     {
         if (decision.Action == WinGetRecoveryAction.RestartManagerUnavailable || decision.Blockers.Count == 0)
         {
-            return "L'installer segnala ancora file in uso, ma Windows non permette di identificare in sicurezza " +
-                   "il processo responsabile. Riavvia il PC o chiudi manualmente le applicazioni interessate e riprova.";
+            return LocalizationService.Text(
+                "L'installer segnala ancora file in uso, ma Windows non permette di identificare in sicurezza " +
+                "il processo responsabile. Riavvia il PC o chiudi manualmente le applicazioni interessate e riprova.",
+                "The installer still reports files in use, but Windows cannot safely identify " +
+                "the responsible process. Restart the PC or manually close the affected applications and retry.");
         }
         return BuildManualMessage(item, decision);
     }
@@ -412,15 +795,18 @@ internal sealed class WinGetProcessRecoveryService
         IEnumerable<ClassifiedRestartManagerBlocker> blockers) =>
         blockers
             .Where(x =>
+                x.Blocker.Liveness == RestartManagerProcessLiveness.Live &&
                 (x.Classification is WinGetBlockerClassification.PackageOwned or
-                    WinGetBlockerClassification.ExternalConfirmedBlocker) &&
+                    WinGetBlockerClassification.ExternalConfirmed or
+                    WinGetBlockerClassification.RecurringProcess) &&
                 x.Blocker.ProcessId > 0 &&
                 !string.IsNullOrWhiteSpace(x.Blocker.ExecutablePath))
             .Select(x => new WinGetProcessCandidate(
                 x.Blocker.ProcessId,
                 Path.GetFileNameWithoutExtension(x.Blocker.ExecutablePath),
                 x.Blocker.ExecutablePath,
-                x.Classification))
+                x.Classification,
+                x.Identity.Key))
             .DistinctBy(x => x.ProcessId)
             .ToList();
 
@@ -433,8 +819,13 @@ internal sealed class WinGetProcessRecoveryService
     private static string Describe(ClassifiedRestartManagerBlocker blocker) =>
         $"{blocker.Blocker.ApplicationName} (PID {blocker.Blocker.ProcessId}, " +
         $"tipo={blocker.Blocker.ApplicationType}, classe={blocker.Classification}, " +
+        $"liveness={blocker.Blocker.Liveness}, " +
+        $"stableIdentity={blocker.Identity.Key}, recreated={blocker.Recreated}, " +
         $"servizio={blocker.Blocker.ServiceShortName}, restartable={blocker.Blocker.Restartable}, " +
         $"reboot={blocker.Blocker.RebootReason}, path={blocker.Blocker.ExecutablePath}, " +
+        $"parentPid={blocker.Blocker.ParentProcessId}, " +
+        $"parentChain={string.Join(" -> ", (blocker.Blocker.ParentChain ?? []).Select(p => p.ProcessId))}, " +
+        $"serviceMapping={string.Join(", ", (blocker.Blocker.ServiceMappings ?? []).Select(s => s.ServiceName))}, " +
         $"evidence={string.Join("; ", blocker.Blocker.EvidenceResources)})";
 
     private static void LogChoice(
@@ -446,6 +837,46 @@ internal sealed class WinGetProcessRecoveryService
         LogService.WriteEvent(
             "winget-recovery", phase, outcome,
             item.Id, failedResult.ResultCode, Describe(candidates));
+}
+
+internal sealed class WinGetServiceRecoveryLease : IWinGetRecoveryLease
+{
+    private readonly IWindowsServiceControl _serviceControl;
+    private readonly string _serviceName;
+    private readonly bool _restoreRunning;
+    private readonly TimeSpan _timeout;
+    private readonly string _itemId;
+    private readonly int? _resultCode;
+    private int _restored;
+
+    public WinGetServiceRecoveryLease(
+        IWindowsServiceControl serviceControl,
+        string serviceName,
+        bool restoreRunning,
+        TimeSpan timeout,
+        string itemId = "",
+        int? resultCode = null)
+    {
+        _serviceControl = serviceControl;
+        _serviceName = serviceName;
+        _restoreRunning = restoreRunning;
+        _timeout = timeout;
+        _itemId = itemId;
+        _resultCode = resultCode;
+    }
+
+    public string Restore()
+    {
+        if (Interlocked.Exchange(ref _restored, 1) != 0)
+            return $"Ripristino servizio {_serviceName}: già eseguito.";
+        if (!_restoreRunning)
+            return $"Ripristino servizio {_serviceName}: non necessario (non era Running).";
+        var result = _serviceControl.StartAndWait(_serviceName, _timeout);
+        LogService.WriteEvent(
+            "winget-recovery", "service-start",
+            result.Succeeded ? "success" : "failure", _itemId, _resultCode, result.Diagnostics);
+        return "Ripristino servizio: " + result.Diagnostics;
+    }
 }
 
 internal static class WinGetSingleRetryPolicy
@@ -461,44 +892,55 @@ internal static class WinGetSingleRetryPolicy
         if (!initialResult.FailureReason.Equals(UpdateFailureReasons.FilesInUse, StringComparison.Ordinal))
             return initialResult;
         var preparation = prepareRetry();
-        if (!preparation.ShouldRetry)
+        ItemRunResult? outcome = null;
+        try
         {
-            if (preparation.ShouldRunInteractive && interactiveFallback is not null)
+            if (!preparation.ShouldRetry)
             {
-                var interactiveResult = await RunInteractiveFallback(
-                    item, initialResult, preparation, retryResult: null,
-                    postRetryDiagnostics: "", interactiveFallback);
-                return interactiveResult;
+                if (preparation.ShouldRunInteractive && interactiveFallback is not null)
+                {
+                    outcome = await RunInteractiveFallback(
+                        item, initialResult, preparation, retryResult: null,
+                        postRetryDiagnostics: "", interactiveFallback);
+                    return outcome;
+                }
+                initialResult.Diagnostics = CombineDiagnostics(
+                    initialResult, preparation.Diagnostics, retryResult: null,
+                    postRetryDiagnostics: "", interactiveResult: null);
+                outcome = initialResult;
+                return outcome;
             }
-            initialResult.Diagnostics = CombineDiagnostics(
-                initialResult, preparation.Diagnostics, retryResult: null,
-                postRetryDiagnostics: "", interactiveResult: null);
-            return initialResult;
-        }
 
-        LogService.WriteEvent(
-            "winget-recovery", "retry", "started",
-            item.Id, initialResult.ResultCode,
-            "Unico retry dopo la verifica Restart Manager dei blocker.");
-        var retryResult = await retry();
-        var diagnosis = new WinGetPostRetryDiagnosis("", false);
-        if (retryResult.FailureReason.Equals(UpdateFailureReasons.FilesInUse, StringComparison.Ordinal) &&
-            diagnoseFailedRetry is not null)
-            diagnosis = diagnoseFailedRetry(retryResult, preparation.Context);
-        if (diagnosis.ShouldRunInteractive && interactiveFallback is not null)
-        {
-            return await RunInteractiveFallback(
-                item, initialResult, preparation, retryResult,
-                diagnosis.Diagnostics, interactiveFallback);
+            LogService.WriteEvent(
+                "winget-recovery", "retry", "started",
+                item.Id, initialResult.ResultCode,
+                "Unico retry dopo la verifica Restart Manager dei blocker.");
+            var retryResult = await retry();
+            var diagnosis = new WinGetPostRetryDiagnosis("", false);
+            if (retryResult.FailureReason.Equals(UpdateFailureReasons.FilesInUse, StringComparison.Ordinal) &&
+                diagnoseFailedRetry is not null)
+                diagnosis = diagnoseFailedRetry(retryResult, preparation.Context);
+            retryResult.Diagnostics = CombineDiagnostics(
+                initialResult, preparation.Diagnostics, retryResult, diagnosis.Diagnostics, interactiveResult: null);
+            LogService.WriteEvent(
+                "winget-recovery", "retry", retryResult.Success ? "success" : "failure",
+                item.Id, retryResult.ResultCode,
+                $"failureReason={retryResult.FailureReason}; verified={retryResult.Verified}; " +
+                $"verification={retryResult.VerificationStatus}; nessun ulteriore retry automatico.");
+            outcome = retryResult;
+            return outcome;
         }
-        retryResult.Diagnostics = CombineDiagnostics(
-            initialResult, preparation.Diagnostics, retryResult, diagnosis.Diagnostics, interactiveResult: null);
-        LogService.WriteEvent(
-            "winget-recovery", "retry", retryResult.Success ? "success" : "failure",
-            item.Id, retryResult.ResultCode,
-            $"failureReason={retryResult.FailureReason}; verified={retryResult.Verified}; " +
-            $"verification={retryResult.VerificationStatus}; nessun ulteriore retry automatico.");
-        return retryResult;
+        finally
+        {
+            if (preparation.Lease is not null)
+            {
+                var restoration = preparation.Lease.Restore();
+                if (outcome is not null)
+                    outcome.Diagnostics = string.IsNullOrWhiteSpace(outcome.Diagnostics)
+                        ? restoration
+                        : outcome.Diagnostics + Environment.NewLine + Environment.NewLine + restoration;
+            }
+        }
     }
 
     private static async Task<ItemRunResult> RunInteractiveFallback(

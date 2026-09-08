@@ -343,7 +343,7 @@ public sealed class WinGetService
             {
                 IsDefinitive = true,
                 Status = UpdateVerificationStatuses.Failed,
-                Message = "Identificativo WinGet non valido durante la verifica post-installazione.",
+                Message = LocalizationService.Text("Identificativo WinGet non valido durante la verifica post-installazione.", "Invalid WinGet identifier during post-installation verification."),
                 Diagnostics = $"PackageId rifiutato: {item.Id}"
             };
         }
@@ -372,7 +372,7 @@ public sealed class WinGetService
                 {
                     IsDefinitive = false,
                     Status = UpdateVerificationStatuses.Unavailable,
-                    Message = "Verifica post-installazione non disponibile.",
+                    Message = LocalizationService.Text("Verifica post-installazione non disponibile.", "Post-installation verification not available."),
                     Diagnostics = ex.ToString()
                 };
                 diagnostics.Add($"Tentativo {attempt}/{maxAttempts}: eccezione={ex.Message}");
@@ -388,7 +388,7 @@ public sealed class WinGetService
         {
             IsDefinitive = false,
             Status = UpdateVerificationStatuses.Unavailable,
-            Message = "Verifica post-installazione non disponibile."
+            Message = LocalizationService.Text("Verifica post-installazione non disponibile.", "Post-installation verification not available.")
         };
         latest.Diagnostics = string.Join(Environment.NewLine, diagnostics) +
                              (string.IsNullOrWhiteSpace(latest.Diagnostics)
@@ -412,34 +412,43 @@ public sealed class WinGetService
                     ? UpdateVerificationStatuses.Failed
                     : UpdateVerificationStatuses.Unavailable,
                 Message = packageMissing
-                    ? "Il pacchetto non risulta installato dopo l'operazione."
-                    : "WinGet non ha permesso di verificare lo stato installato dopo l'operazione."
+                    ? LocalizationService.Text("Il pacchetto non risulta installato dopo l'operazione.", "The package does not appear to be installed after the operation.")
+                    : LocalizationService.Text("WinGet non ha permesso di verificare lo stato installato dopo l'operazione.", "WinGet could not verify the installed state after the operation.")
             };
         }
 
-        var row = rows.FirstOrDefault(x =>
-            x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
+        var matches = rows.Where(x => x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+        var versions = matches.Select(x => x.InstalledVersion.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var row = matches.FirstOrDefault();
         if (row is null)
         {
             return new UpdateVerificationResult
             {
-                IsDefinitive = true,
-                Status = UpdateVerificationStatuses.Failed,
-                Message = "Il pacchetto non risulta installato dopo l'operazione."
+                IsDefinitive = false,
+                Status = UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Text("La risposta WinGet non contiene una versione installata verificabile.", "The WinGet response does not contain a verifiable installed version.")
             };
         }
 
         var targetHasVersion = !string.IsNullOrWhiteSpace(item.AvailableVersion) &&
                                item.AvailableVersion.Any(char.IsDigit);
-        var verified = !targetHasVersion || IsVersionAtLeast(row.InstalledVersion, item.AvailableVersion);
+        if (versions.Count != 1 || !targetHasVersion || !row.InstalledVersion.Any(char.IsDigit))
+            return new UpdateVerificationResult
+            {
+                Status = UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Text("Verifica ambigua: entry duplicate o versione non determinabile. Controlla le installazioni presenti.", "Verification is ambiguous: duplicate entries or an undetermined version. Check the installed applications."),
+                Diagnostics = $"PackageId={item.Id}; installed=[{string.Join("; ", versions)}]; target={item.AvailableVersion}"
+            };
+        var verified = IsVersionAtLeast(row.InstalledVersion, item.AvailableVersion);
         return new UpdateVerificationResult
         {
             IsDefinitive = true,
             Verified = verified,
             Status = verified ? UpdateVerificationStatuses.Verified : UpdateVerificationStatuses.Failed,
             Message = verified
-                ? $"Versione installata verificata: {row.InstalledVersion}."
-                : $"La versione installata ({row.InstalledVersion}) non raggiunge quella attesa ({item.AvailableVersion})."
+                ? LocalizationService.Text($"Versione installata verificata: {row.InstalledVersion}.", $"Verified installed version: {row.InstalledVersion}.")
+                : LocalizationService.Text($"La versione installata ({row.InstalledVersion}) non raggiunge quella attesa ({item.AvailableVersion}).", $"The installed version ({row.InstalledVersion}) does not match the expected version ({item.AvailableVersion}).")
         };
     }
 
@@ -550,7 +559,7 @@ public sealed class WinGetService
 
     private static ProcessResult AlreadyCurrent(List<ProcessResult> attempts, PlanItem item, string installedVersion)
     {
-        var message = $"{item.Name} risulta già aggiornato alla versione {installedVersion}. La scansione precedente non era più attuale.";
+        var message = LocalizationService.Text($"{item.Name} risulta già aggiornato alla versione {installedVersion}. La scansione precedente non era più attuale.", $"{item.Name} is already updated to version {installedVersion}. The previous scan was no longer current.");
         attempts.Add(new ProcessResult(0, message, "", "Verifica WinGet dello stato installato"));
         return CombineAttempts(attempts, 0);
     }

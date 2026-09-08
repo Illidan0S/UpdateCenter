@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using UpdateCenter.Services;
 using UpdateCenter.ViewModels;
 
 namespace UpdateCenter;
@@ -14,6 +15,7 @@ public partial class NetworkPairingWindow : Window
         _viewModel = viewModel;
         _viewModel.SelectedAgent = agent;
         DataContext = _viewModel;
+        Loaded += (_, _) => LocalizationService.ApplyTo(this);
         Loaded += (_, _) => PairingCodeBox.Focus();
     }
 

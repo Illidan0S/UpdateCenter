@@ -36,27 +36,30 @@ public partial class UpdateProgressWindow : Window
 
     public void ShowCompleted(UpdateRunStatus result)
     {
-        var succeeded = result.Results.Count(x => x.Success &&
-            x.Outcome.Equals(UpdateOutcomes.Completed, StringComparison.Ordinal));
-        var handled = result.Results.Count(x => x.Success &&
-            !x.Outcome.Equals(UpdateOutcomes.Completed, StringComparison.Ordinal));
-        var failed = result.Results.Count(x => !x.Success);
+        var summary = UpdateSessionSummary.From(result.Results);
+        var succeeded = summary.SucceededCount;
+        var handled = summary.NotAutomaticallyApplicableCount;
+        var failed = summary.FailedCount + summary.CancelledCount;
 
         _canClose = true;
         WindowTitleText.Text = LocalizationService.Text("Aggiornamenti completati", "Updates completed");
-        StateTitleText.Text = failed == 0
-            ? LocalizationService.Text("Tutto completato", "All done")
-            : LocalizationService.Text("Completato con alcuni errori", "Completed with some errors");
+        StateTitleText.Text = summary.ProcessedTerminalCount == 0
+            ? LocalizationService.Text("Nessun aggiornamento eseguito", "No updates performed")
+            : summary.HasProblems
+                ? LocalizationService.Text("Completato con alcuni problemi", "Completed with some issues")
+                : result.Results.Any(x => !x.Verified)
+                ? LocalizationService.Text("Completato · verifica richiesta", "Completed · verification required")
+                : LocalizationService.Text("Tutto completato", "All done");
         StateDetailText.Text = LocalizationService.IsEnglish
-            ? $"{succeeded} updated, {handled} not automatically applicable, {failed} failed."
-            : $"{succeeded} aggiornati, {handled} non applicabili automaticamente, {failed} non riusciti.";
-        StateIconText.Text = failed == 0 ? "✓" : "!";
-        StateIconText.Foreground = failed == 0
+            ? $"{succeeded} completed ({result.Results.Count(x => x.Success && !x.Verified)} to verify), {handled} not automatically applicable, {failed} failed."
+            : $"{succeeded} completati ({result.Results.Count(x => x.Success && !x.Verified)} da verificare), {handled} non applicabili automaticamente, {failed} non riusciti.";
+        StateIconText.Text = !summary.HasProblems && summary.ProcessedTerminalCount > 0 ? "✓" : "!";
+        StateIconText.Foreground = !summary.HasProblems && summary.ProcessedTerminalCount > 0
             ? (System.Windows.Media.Brush)FindResource("SuccessBrush")
             : (System.Windows.Media.Brush)FindResource("WarningBrush");
         InstallationProgressBar.Value = 100;
         PercentageText.Text = "100%";
-        OperationStatusText.Text = result.Message;
+        OperationStatusText.Text = LocalizationService.Translate(result.Message);
         SucceededCountText.Text = succeeded.ToString();
         FailedCountText.Text = failed.ToString();
         ResultCards.Visibility = Visibility.Visible;

@@ -1,6 +1,7 @@
 using System.Windows;
 using UpdateCenter.Contracts;
 using UpdateCenter.Core;
+using UpdateCenter.Services;
 
 namespace UpdateCenter;
 
@@ -14,6 +15,7 @@ public partial class ConnectionRequestWindow : Window
     {
         InitializeComponent();
         _requestId = requestId;
+        Loaded += (_, _) => LocalizationService.ApplyTo(this);
         Loaded += async (_, _) => await LoadRequestAsync();
     }
 
@@ -30,22 +32,34 @@ public partial class ConnectionRequestWindow : Window
             _request = response.ConnectionRequests.FirstOrDefault(x => x.RequestId == _requestId);
             if (_request is null)
             {
-                StatusText.Text = "La richiesta non è più disponibile oppure è scaduta.";
+                StatusText.Text = LocalizationService.Text(
+                    "La richiesta non è più disponibile oppure è scaduta.",
+                    "The request is no longer available or has expired.");
                 AcceptButton.IsEnabled = false;
-                RejectButton.Content = "Chiudi";
+                RejectButton.Content = LocalizationService.Text("Chiudi", "Close");
                 return;
             }
             ControllerNameText.Text = _request.ControllerName;
-            ControllerAddressText.Text = $"Indirizzo: {_request.RemoteAddress}";
-            ControllerFingerprintText.Text = $"Identità: {ShortFingerprint(_request.ControllerCertificateSha256)}";
-            ExpiryText.Text = $"Richiesta valida fino alle {_request.ExpiresUtc.ToLocalTime():HH:mm:ss}.";
-            StatusText.Text = "Accetta soltanto se riconosci il computer indicato.";
+            ControllerAddressText.Text = LocalizationService.IsEnglish
+                ? $"Address: {_request.RemoteAddress}"
+                : $"Indirizzo: {_request.RemoteAddress}";
+            ControllerFingerprintText.Text = LocalizationService.IsEnglish
+                ? $"Identity: {ShortFingerprint(_request.ControllerCertificateSha256)}"
+                : $"Identità: {ShortFingerprint(_request.ControllerCertificateSha256)}";
+            ExpiryText.Text = LocalizationService.IsEnglish
+                ? $"Request valid until {_request.ExpiresUtc.ToLocalTime():HH:mm:ss}."
+                : $"Richiesta valida fino alle {_request.ExpiresUtc.ToLocalTime():HH:mm:ss}.";
+            StatusText.Text = LocalizationService.Text(
+                "Accetta soltanto se riconosci il computer indicato.",
+                "Accept only if you recognize the indicated computer.");
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Impossibile leggere la richiesta: {ex.GetBaseException().Message}";
+            StatusText.Text = LocalizationService.IsEnglish
+                ? $"Unable to read request: {ex.GetBaseException().Message}"
+                : $"Impossibile leggere la richiesta: {ex.GetBaseException().Message}";
             AcceptButton.IsEnabled = false;
-            RejectButton.Content = "Chiudi";
+            RejectButton.Content = LocalizationService.Text("Chiudi", "Close");
         }
         finally
         {
@@ -79,8 +93,10 @@ public partial class ConnectionRequestWindow : Window
             if (!response.Success) throw new InvalidOperationException(response.Message);
             MessageBox.Show(
                 accept
-                    ? $"Questo PC è ora collegato a {_request.ControllerName}."
-                    : "Richiesta di collegamento rifiutata.",
+                    ? LocalizationService.IsEnglish
+                        ? $"This PC is now connected to {_request.ControllerName}."
+                        : $"Questo PC è ora collegato a {_request.ControllerName}."
+                    : LocalizationService.Text("Richiesta di collegamento rifiutata.", "Connection request rejected."),
                 "Update Center",
                 MessageBoxButton.OK,
                 accept ? MessageBoxImage.Information : MessageBoxImage.None);
@@ -88,7 +104,9 @@ public partial class ConnectionRequestWindow : Window
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Operazione non completata: {ex.GetBaseException().Message}";
+            StatusText.Text = LocalizationService.IsEnglish
+                ? $"Operation not completed: {ex.GetBaseException().Message}"
+                : $"Operazione non completata: {ex.GetBaseException().Message}";
             SetBusy(false);
         }
     }
@@ -102,7 +120,7 @@ public partial class ConnectionRequestWindow : Window
 
     private static string ShortFingerprint(string value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return "non disponibile";
+        if (string.IsNullOrWhiteSpace(value)) return LocalizationService.Text("non disponibile", "not available");
         var compact = value.Replace(" ", "", StringComparison.Ordinal);
         var visible = compact.Length <= 24 ? compact : compact[..24];
         return string.Join(":", Enumerable.Range(0, (visible.Length + 3) / 4)

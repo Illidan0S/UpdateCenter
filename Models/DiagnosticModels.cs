@@ -1,15 +1,24 @@
+﻿using UpdateCenter.Services;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+
 namespace UpdateCenter.Models;
 
-public sealed class DriverProblemItem
+public sealed class DriverProblemItem : INotifyPropertyChanged
 {
-    public string DeviceName { get; set; } = "Dispositivo sconosciuto";
+    private string _deviceName = "Dispositivo sconosciuto";
+    private string _errorTitle = "Problema rilevato";
+    private string _suggestedAction = "Apri Gestione dispositivi per verificare il dispositivo.";
+    private string _severity = "Attenzione";
+
+    public string DeviceName { get => LocalizationService.Translate(_deviceName); set => _deviceName = value; }
     public string Manufacturer { get; set; } = "";
     public string DeviceClass { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public int ErrorCode { get; set; }
-    public string ErrorTitle { get; set; } = "Problema rilevato";
-    public string SuggestedAction { get; set; } = "Apri Gestione dispositivi per verificare il dispositivo.";
-    public string Severity { get; set; } = "Attenzione";
+    public string ErrorTitle { get => LocalizationService.Translate(_errorTitle); set => _errorTitle = value; }
+    public string SuggestedAction { get => LocalizationService.Translate(_suggestedAction); set => _suggestedAction = value; }
+    public string Severity { get => LocalizationService.Translate(_severity); set => _severity = value; }
     public string InstalledInfName { get; set; } = "";
     public bool InstalledDriverSigned { get; set; }
     public bool CanManageDriverProblem => ErrorCode is 10 or 18 or 28 or 31 or 37 or 39 or 40 or 43;
@@ -26,12 +35,31 @@ public sealed class DriverProblemItem
         }
     }
     public string RepairAvailabilityText => CanRepairWithInstalledDriver
-        ? $"Pacchetto Windows: {InstalledInfName}"
-        : "Ricerca tramite fonti verificate";
-    public string RepairActionText => CanRepairWithInstalledDriver ? "Reinstalla driver" : "Cerca driver";
-    public string ErrorCodeLabel => $"Codice Gestione dispositivi {ErrorCode}";
+        ? LocalizationService.IsEnglish ? $"Windows package: {InstalledInfName}" : $"Pacchetto Windows: {InstalledInfName}"
+        : LocalizationService.Text("Ricerca tramite fonti verificate", "Search via verified sources");
+    public string RepairActionText => CanRepairWithInstalledDriver
+        ? LocalizationService.Text("Reinstalla driver", "Reinstall driver")
+        : LocalizationService.Text("Cerca driver", "Search driver");
+    public string ErrorCodeLabel => LocalizationService.IsEnglish
+        ? $"Device Manager code {ErrorCode}"
+        : $"Codice Gestione dispositivi {ErrorCode}";
     public string DeviceDetail => string.Join(" · ", new[] { DeviceClass, Manufacturer }
         .Where(x => !string.IsNullOrWhiteSpace(x)));
+
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(DeviceName));
+        OnPropertyChanged(nameof(ErrorTitle));
+        OnPropertyChanged(nameof(SuggestedAction));
+        OnPropertyChanged(nameof(Severity));
+        OnPropertyChanged(nameof(RepairAvailabilityText));
+        OnPropertyChanged(nameof(RepairActionText));
+        OnPropertyChanged(nameof(ErrorCodeLabel));
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public sealed class GameDependencyItem
@@ -49,11 +77,11 @@ public sealed class GameDependencyItem
     public bool CanOpenOfficialAction => Uri.TryCreate(OfficialActionUrl, UriKind.Absolute, out var uri) &&
                                          uri.Scheme == Uri.UriSchemeHttps;
     public string Status => IsAvailable
-        ? "Disponibile"
-        : IsOptional ? "Opzionale non rilevato" : "Non rilevato";
+        ? LocalizationService.Text("Disponibile", "Available")
+        : IsOptional ? LocalizationService.Text("Opzionale non rilevato", "Optional not detected") : LocalizationService.Text("Non rilevato", "Not detected");
     public string ActionLabel => CanAutoInstall
-        ? "Selezionabile negli aggiornamenti"
-        : CanOpenOfficialAction ? "Controllo ufficiale" : "Solo diagnosi";
+        ? LocalizationService.Text("Selezionabile negli aggiornamenti", "Selectable in updates")
+        : CanOpenOfficialAction ? LocalizationService.Text("Controllo ufficiale", "Official check") : LocalizationService.Text("Solo diagnosi", "Diagnosis only");
     public string Detail { get; set; } = "";
 }
 
@@ -75,14 +103,18 @@ public sealed class StorageDeviceItem
     public bool IsHealthUnknown => string.IsNullOrWhiteSpace(HealthStatus) ||
                                    HealthStatus.Equals("Unknown", StringComparison.OrdinalIgnoreCase) ||
                                    HealthStatus.Equals("Non disponibile", StringComparison.OrdinalIgnoreCase);
-    public string HealthLabel => IsHealthy ? "Sano" : IsHealthUnknown ? "Stato non disponibile" : $"Attenzione · {HealthStatus}";
+    public string HealthLabel => IsHealthy
+        ? LocalizationService.Text("Sano", "Healthy")
+        : IsHealthUnknown
+            ? LocalizationService.Text("Stato non disponibile", "Status not available")
+            : LocalizationService.Text($"Attenzione · {HealthStatus}", $"Warning · {HealthStatus}");
     public string SizeLabel => FormatBytes(SizeBytes);
     public string TemperatureLabel => TemperatureCelsius is >= 1 and <= 125
         ? $"{TemperatureCelsius:0.#} °C"
-        : "Non disponibile";
+        : LocalizationService.Text("Non disponibile", "Not available");
     public string TechnicalDetail => string.Join(" · ", new[]
     {
-        string.IsNullOrWhiteSpace(OperationalStatus) ? null : $"Operativo: {OperationalStatus}",
+        string.IsNullOrWhiteSpace(OperationalStatus) ? null : LocalizationService.IsEnglish ? $"Operational: {OperationalStatus}" : $"Operativo: {OperationalStatus}",
         string.IsNullOrWhiteSpace(FirmwareVersion) ? null : $"Firmware: {FirmwareVersion}",
         string.IsNullOrWhiteSpace(BusType) ? null : $"Bus: {BusType}"
     }.Where(x => !string.IsNullOrWhiteSpace(x)));
@@ -90,7 +122,7 @@ public sealed class StorageDeviceItem
         .OrderByDescending(volume => volume.SizeBytes)
         .ThenBy(volume => volume.DriveLetter, StringComparer.OrdinalIgnoreCase);
     public string VolumesLabel => Volumes.Count == 0
-        ? "Nessun volume con lettera"
+        ? LocalizationService.Text("Nessun volume con lettera", "No lettered volumes")
         : string.Join(" · ", DisplayVolumes.Select(volume => string.Join(" ", new[]
         {
             volume.DisplayName,
@@ -132,7 +164,7 @@ public sealed class StorageVolumeItem
     public long SizeBytes { get; set; }
     public long FreeBytes { get; set; }
     public string DisplayName => string.IsNullOrWhiteSpace(DriveLetter) ? Label : $"{DriveLetter}:";
-    public string SpaceLabel => SizeBytes <= 0 ? "—" : $"{FormatBytes(FreeBytes)} liberi di {FormatBytes(SizeBytes)}";
+    public string SpaceLabel => SizeBytes <= 0 ? "—" : LocalizationService.IsEnglish ? $"{FormatBytes(FreeBytes)} free of {FormatBytes(SizeBytes)}" : $"{FormatBytes(FreeBytes)} liberi di {FormatBytes(SizeBytes)}";
     public double UsedPercentage => SizeBytes <= 0 ? 0 : Math.Clamp((SizeBytes - FreeBytes) * 100d / SizeBytes, 0, 100);
 
     private static string FormatBytes(long bytes)
@@ -152,5 +184,5 @@ public sealed class StorageHealthScanResult
 {
     public List<StorageDeviceItem> Devices { get; set; } = [];
     public List<StorageVolumeItem> Volumes { get; set; } = [];
-    public string Status { get; set; } = "Salute dello storage non ancora controllata.";
+    public string Status { get; set; } = LocalizationService.Text("Salute dello storage non ancora controllata.", "Storage health not checked yet.");
 }

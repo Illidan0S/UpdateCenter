@@ -9,8 +9,8 @@ public sealed class PreflightResult
     public List<string> BlockingIssues { get; } = [];
     public List<string> Warnings { get; } = [];
     public bool CanContinue => BlockingIssues.Count == 0;
-    public string PowerStatus { get; set; } = "Stato alimentazione non disponibile.";
-    public string DiskStatus { get; set; } = "Spazio disponibile non verificato.";
+    public string PowerStatus { get; set; } = LocalizationService.Text("Stato alimentazione non disponibile.", "Power status not available.");
+    public string DiskStatus { get; set; } = LocalizationService.Text("Spazio disponibile non verificato.", "Available space not verified.");
     public bool PowerSafe { get; set; } = true;
     public bool DiskSafe { get; set; } = true;
 }
@@ -31,13 +31,13 @@ public static class PreflightService
         var result = new PreflightResult();
 
         if (selectedItems.Any(x => !x.CanInstall))
-            result.BlockingIssues.Add("Uno o più driver sono risultati informativi e non possono essere installati automaticamente.");
+            result.BlockingIssues.Add(LocalizationService.Text("Uno o più driver sono risultati informativi e non possono essere installati automaticamente.", "One or more drivers are informational only and cannot be installed automatically."));
 
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763))
-            result.BlockingIssues.Add("Update Center richiede Windows 10 versione 1809 (build 17763) o successiva.");
+            result.BlockingIssues.Add(LocalizationService.Text("Update Center richiede Windows 10 versione 1809 (build 17763) o successiva.", "Update Center requires Windows 10 version 1809 (build 17763) or later."));
 
         if (!NetworkInterface.GetIsNetworkAvailable())
-            result.BlockingIssues.Add("Nessuna connessione di rete rilevata.");
+            result.BlockingIssues.Add(LocalizationService.Text("Nessuna connessione di rete rilevata.", "No network connection detected."));
 
         try
         {
@@ -48,10 +48,16 @@ public static class PreflightService
                 const long oneGb = 1024L * 1024 * 1024;
                 var (knownDownloadSize, knownCount, unknownCount) = CalculatePackageSize(selectedItems);
                 result.DiskStatus = unknownCount == 0
-                    ? $"{FormatBytes(drive.AvailableFreeSpace)} liberi · pacchetti selezionati: {FormatBytes(knownDownloadSize)}"
+                    ? LocalizationService.Text(
+                        $"{FormatBytes(drive.AvailableFreeSpace)} liberi · pacchetti selezionati: {FormatBytes(knownDownloadSize)}",
+                        $"{FormatBytes(drive.AvailableFreeSpace)} free · selected packages: {FormatBytes(knownDownloadSize)}")
                     : knownCount > 0
-                        ? $"{FormatBytes(drive.AvailableFreeSpace)} liberi · peso noto {FormatBytes(knownDownloadSize)}; {unknownCount} senza dimensione dichiarata"
-                        : $"{FormatBytes(drive.AvailableFreeSpace)} liberi · dimensione non dichiarata per {unknownCount} pacchetti";
+                        ? LocalizationService.Text(
+                            $"{FormatBytes(drive.AvailableFreeSpace)} liberi · peso noto {FormatBytes(knownDownloadSize)}; {unknownCount} senza dimensione dichiarata",
+                            $"{FormatBytes(drive.AvailableFreeSpace)} free · known size {FormatBytes(knownDownloadSize)}; {unknownCount} without declared size")
+                        : LocalizationService.Text(
+                            $"{FormatBytes(drive.AvailableFreeSpace)} liberi · dimensione non dichiarata per {unknownCount} pacchetti",
+                            $"{FormatBytes(drive.AvailableFreeSpace)} free · undeclared size for {unknownCount} packages");
 
                 // Oltre al download noto, conserva margine per estrazione e rollback senza inventare
                 // una dimensione per i pacchetti la cui fonte non la pubblica.
@@ -62,19 +68,22 @@ public static class PreflightService
                 if (estimatedRequired > 0 && drive.AvailableFreeSpace < estimatedRequired)
                 {
                     result.DiskSafe = false;
-                    result.BlockingIssues.Add($"Spazio insufficiente: i pacchetti noti e lo spazio temporaneo richiedono circa {FormatBytes(estimatedRequired)}, " +
-                                              $"ma sono disponibili {FormatBytes(drive.AvailableFreeSpace)}.");
+                    result.BlockingIssues.Add(LocalizationService.Text(
+                        $"Spazio insufficiente: i pacchetti noti e lo spazio temporaneo richiedono circa {FormatBytes(estimatedRequired)}, " +
+                        $"ma sono disponibili {FormatBytes(drive.AvailableFreeSpace)}.",
+                        $"Insufficient space: known packages and temporary space require about {FormatBytes(estimatedRequired)}, " +
+                        $"but {FormatBytes(drive.AvailableFreeSpace)} are available."));
                 }
                 else if (estimatedRequired > 0 && drive.AvailableFreeSpace < estimatedRequired + 3 * oneGb)
                 {
-                    result.Warnings.Add("Lo spazio sul disco di sistema è sufficiente ma ridotto.");
+                    result.Warnings.Add(LocalizationService.Text("Lo spazio sul disco di sistema è sufficiente ma ridotto.", "System disk space is sufficient but limited."));
                 }
             }
         }
         catch (Exception ex)
         {
             LogService.Write("Controllo spazio disponibile non riuscito.", ex);
-            result.Warnings.Add("Non è stato possibile verificare lo spazio disponibile.");
+            result.Warnings.Add(LocalizationService.Text("Non è stato possibile verificare lo spazio disponibile.", "Could not verify available disk space."));
         }
 
         var hasSensitiveUpdates = selectedItems.Any(x => x.Kind == UpdateKind.Driver || x.IsImportant);
@@ -84,28 +93,28 @@ public static class PreflightService
             {
                 var percentage = power.BatteryLifePercent <= 100 ? power.BatteryLifePercent : (byte?)null;
                 result.PowerStatus = percentage.HasValue
-                    ? $"Alimentazione a batteria · {percentage.Value}%"
-                    : "Alimentazione a batteria";
+                    ? LocalizationService.Text($"Alimentazione a batteria · {percentage.Value}%", $"Battery power · {percentage.Value}%")
+                    : LocalizationService.Text("Alimentazione a batteria", "Battery power");
                 if (hasSensitiveUpdates && percentage.HasValue && percentage.Value <= 25)
                 {
                     result.PowerSafe = false;
-                    result.BlockingIssues.Add("Batteria troppo bassa per aggiornare driver o componenti importanti. Collega l'alimentatore.");
+                    result.BlockingIssues.Add(LocalizationService.Text("Batteria troppo bassa per aggiornare driver o componenti importanti. Collega l'alimentatore.", "Battery too low to update drivers or important components. Connect the power adapter."));
                 }
                 else if (hasSensitiveUpdates)
                 {
                     result.PowerSafe = false;
-                    result.Warnings.Add("Il PC usa la batteria. È consigliato collegare l'alimentatore prima di aggiornare driver o componenti importanti.");
+                    result.Warnings.Add(LocalizationService.Text("Il PC usa la batteria. È consigliato collegare l'alimentatore prima di aggiornare driver o componenti importanti.", "The PC is on battery. Connecting the power adapter before updating drivers or important components is recommended."));
                 }
             }
             else if (power.ACLineStatus == 1)
             {
                 result.PowerStatus = power.BatteryLifePercent <= 100
-                    ? $"Alimentatore collegato · batteria {power.BatteryLifePercent}%"
-                    : "Alimentatore collegato";
+                    ? LocalizationService.Text($"Alimentatore collegato · batteria {power.BatteryLifePercent}%", $"Power adapter connected · battery {power.BatteryLifePercent}%")
+                    : LocalizationService.Text("Alimentatore collegato", "Power adapter connected");
             }
             else
             {
-                result.PowerStatus = "Stato alimentazione non determinato da Windows.";
+                result.PowerStatus = LocalizationService.Text("Stato alimentazione non determinato da Windows.", "Power status not determined by Windows.");
             }
         }
 

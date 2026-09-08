@@ -197,6 +197,12 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         var count => LocalizationService.IsEnglish ? $"Scan {count} PCs" : $"Scansiona {count} PC"
     };
     public int SelectedUpdateCount => GetVisibleSelectedUpdates().Count;
+    public string VisibleResultsLabel => LocalizationService.Text(
+        $"{ResultCount} risultati visibili",
+        $"{ResultCount} visible results");
+    public string SelectedUpdatesLabel => LocalizationService.Text(
+        $"{SelectedUpdateCount} selezionati",
+        $"{SelectedUpdateCount} selected");
     public int UpdateComputerCount => GetVisibleSelectedUpdates().Select(x => x.AgentId).Distinct().Count();
     public string UpdateActionText => LocalizationService.Translate("Aggiorna elementi selezionati");
     public int ConnectionRequestTargetCount => GetConnectionRequestTargets().Count;
@@ -835,6 +841,8 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         OnPropertyChanged(nameof(AssociationPanelTitle));
         OnPropertyChanged(nameof(AssociationPanelDescription));
         OnPropertyChanged(nameof(SelectedResultScope));
+        OnPropertyChanged(nameof(VisibleResultsLabel));
+        OnPropertyChanged(nameof(SelectedUpdatesLabel));
         foreach (var agent in Agents)
             agent.NotifyLanguageChanged();
     }
@@ -907,12 +915,20 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         WarningCount = scopedAgents.Sum(x => x.WarningCount);
         if (scopedAgents.Count == 0)
         {
-            ScanSummary = "Nessuna scansione remota disponibile.";
+            ScanSummary = LocalizationService.Text("Nessuna scansione remota disponibile.", "No remote scan available.");
+            OnPropertyChanged(nameof(VisibleResultsLabel));
+            OnPropertyChanged(nameof(SelectedUpdatesLabel));
             return;
         }
-        ScanSummary = $"{ResultCount} aggiornamenti · {scopedAgents.Count} PC · " +
-                      $"{scopedAgents.Sum(x => x.InstalledDriverCount)} driver · " +
-                      $"{scopedAgents.Sum(x => x.RuntimeCheckCount)} runtime · {WarningCount} avvisi";
+        var updatesWord = LocalizationService.Text("aggiornamenti", "updates");
+        var pcWord = LocalizationService.Text("PC", "PCs");
+        var driversWord = LocalizationService.Text("driver", "drivers");
+        var warningsWord = LocalizationService.Text("avvisi", "warnings");
+        ScanSummary = $"{ResultCount} {updatesWord} · {scopedAgents.Count} {pcWord} · " +
+                      $"{scopedAgents.Sum(x => x.InstalledDriverCount)} {driversWord} · " +
+                      $"{scopedAgents.Sum(x => x.RuntimeCheckCount)} runtime · {WarningCount} {warningsWord}";
+        OnPropertyChanged(nameof(VisibleResultsLabel));
+        OnPropertyChanged(nameof(SelectedUpdatesLabel));
     }
 
     private IReadOnlyList<NetworkAgentItem> GetScanTargets()

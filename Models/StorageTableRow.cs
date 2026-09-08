@@ -2,7 +2,8 @@ namespace UpdateCenter.Models;
 
 public sealed class StorageTableRow
 {
-    public string KindLabel { get; init; } = "";
+    private string _kindLabel = "";
+    public string KindLabel { get => Services.LocalizationService.Translate(_kindLabel); init => _kindLabel = value; }
     public string Name { get; init; } = "";
     public string Detail { get; init; } = "";
     public string VolumesLabel { get; init; } = "—";

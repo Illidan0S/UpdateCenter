@@ -1,6 +1,10 @@
+﻿using UpdateCenter.Services;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+
 namespace UpdateCenter.Models;
 
-public sealed class DriverInventoryItem
+public sealed class DriverInventoryItem : INotifyPropertyChanged
 {
     public string DeviceName { get; set; } = "";
     public string Manufacturer { get; set; } = "";
@@ -20,29 +24,61 @@ public sealed class DriverInventoryItem
     public string AvailableSource { get; set; } = "";
     public string SourceConfidence { get; set; } = "";
     public string CompatibilityDetail { get; set; } = "";
-    public string Status => HasUpdate ? "Aggiornamento disponibile" : "Aggiornato";
+    public string Status => LocalizationService.Translate(HasUpdate ? "Aggiornamento disponibile" : "Aggiornato");
     public string StatusDetail => HasUpdate
         ? $"{AvailableSource}: {AvailableVersion}"
-        : "Nessuna proposta verificata dalle fonti ufficiali";
+        : LocalizationService.Translate("Nessuna proposta verificata dalle fonti ufficiali");
     public string DriverDateLabel => DriverDate?.ToString("dd/MM/yyyy") ?? "—";
     public string DisplayName => Quantity > 1 ? $"{DeviceName}  ×{Quantity}" : DeviceName;
     public string CategoryLabel => IsProcessorOrChipset ? "CPU / Chipset" :
-        string.IsNullOrWhiteSpace(DeviceClass) ? "Dispositivo" : DeviceClass;
+        string.IsNullOrWhiteSpace(DeviceClass) ? LocalizationService.Translate("Dispositivo") : DeviceClass;
     public string ProviderLabel => string.IsNullOrWhiteSpace(Provider) ? Manufacturer : Provider;
+
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(StatusDetail));
+        OnPropertyChanged(nameof(CategoryLabel));
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
-public sealed class VendorSupportItem
+public sealed class VendorSupportItem : INotifyPropertyChanged
 {
-    public string Name { get; set; } = "";
-    public string Description { get; set; } = "";
+    private string _name = "";
+    private string _description = "";
+    private string _actionLabel = "Apri controllo ufficiale";
+    private string _sourceLabel = "Produttore ufficiale";
+    private string _confidenceLabel = "Fonte ufficiale";
+    private string _compatibilityLabel = "Rilevato dall'hardware del PC";
+
+    public string Name { get => LocalizationService.Translate(_name); set => _name = value; }
+    public string Description { get => LocalizationService.Translate(_description); set => _description = value; }
     public string Url { get; set; } = "";
     public string ApplicationPath { get; set; } = "";
     public bool IsInstalledApplication => !string.IsNullOrWhiteSpace(ApplicationPath);
     public string LaunchTarget => IsInstalledApplication ? ApplicationPath : Url;
-    public string ActionLabel { get; set; } = "Apri controllo ufficiale";
-    public string SourceLabel { get; set; } = "Produttore ufficiale";
-    public string ConfidenceLabel { get; set; } = "Fonte ufficiale";
-    public string CompatibilityLabel { get; set; } = "Rilevato dall'hardware del PC";
+    public string ActionLabel { get => LocalizationService.Translate(_actionLabel); set => _actionLabel = value; }
+    public string SourceLabel { get => LocalizationService.Translate(_sourceLabel); set => _sourceLabel = value; }
+    public string ConfidenceLabel { get => LocalizationService.Translate(_confidenceLabel); set => _confidenceLabel = value; }
+    public string CompatibilityLabel { get => LocalizationService.Translate(_compatibilityLabel); set => _compatibilityLabel = value; }
+
+    public void NotifyLanguageChanged()
+    {
+        OnPropertyChanged(nameof(Name));
+        OnPropertyChanged(nameof(Description));
+        OnPropertyChanged(nameof(ActionLabel));
+        OnPropertyChanged(nameof(SourceLabel));
+        OnPropertyChanged(nameof(ConfidenceLabel));
+        OnPropertyChanged(nameof(CompatibilityLabel));
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
 public sealed class HardwareScanResult
