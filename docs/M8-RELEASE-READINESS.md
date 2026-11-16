@@ -27,7 +27,7 @@ di Windows e dalla matrice .NET 10. [Matrice .NET 10](https://github.com/dotnet/
 
 | Piattaforma x64 | Prerequisiti documentati | Evidenza UpdateCenter |
 |---|---|---|
-| Windows 11 Pro Insider Beta, build 26320 | Canale di anteprima. | Avvio e scansione osservati su questo host. Consenso desktop provato con effetti simulati. Avvio controllato del Portable self-contained verificato. |
+| Windows 11 Pro Insider Beta, build 26320 | Canale di anteprima: compatibilità da validare, non supporto stabile certificato. Setup e self-update ammettono le edizioni desktop previste dalla policy dalla build 26200 in avanti, senza whitelist delle singole flight; invariati x64, client ed eccezioni LTSC/IoT. | Avvio e scansione osservati su questo host. Consenso desktop provato con effetti simulati. Avvio controllato del Portable self-contained verificato. Restano da provare il Setup corretto e la migrazione completa con la nuova RC. |
 | Windows 11 stabile | Release in servizio elencate nella matrice Microsoft di .NET 10, per esempio 25H2 (build 26200). App Installer necessario per WinGet. | Da validare sul candidato, partendo da una release stabile x64 in servizio. |
 | Windows 10 Enterprise LTSC 2019 (1809, build 17763), Enterprise LTSC 2021 e IoT Enterprise LTSC 2021 (21H2, build 19044) | Edizioni in servizio elencate da Microsoft per .NET 10. La disponibilità di App Installer va verificata per edizione e PC. | Da validare per le edizioni che saranno dichiarate. |
 | Windows 10 Home/Pro, altre edizioni fuori dalla matrice .NET 10, build precedenti a 17763 | Il supporto documentato richiede sia la build minima sia un’edizione in servizio nella matrice .NET 10. | Fuori dalla matrice di supporto dichiarabile per la 2.0.0. |

@@ -180,9 +180,10 @@ begin
       Source := nil;
       Result := True;
     finally
-      Source.Free;
+      if Source <> nil then Source.Free;
     end;
   except
+    Result := False;
     Log('The official Setup checksum could not be verified.');
   end;
 end;

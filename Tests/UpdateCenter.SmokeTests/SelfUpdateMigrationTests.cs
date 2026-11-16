@@ -27,7 +27,7 @@ internal static class SelfUpdateMigrationTests
             !SelfUpdateCompatibility.Supports(26100, 48, Architecture.X64, true) &&
             !SelfUpdateCompatibility.Supports(26200, 48, Architecture.Arm64, true) &&
             !SelfUpdateCompatibility.Supports(26200, 48, Architecture.X64, false) &&
-            !SelfUpdateCompatibility.Supports(26320, 48, Architecture.X64, true), "WindowsMatrixFailsClosed");
+            SelfUpdateCompatibility.Supports(26320, 48, Architecture.X64, true), "WindowsMatrixPreservesPlatformGuards");
 
         try
         {

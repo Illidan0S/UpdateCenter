@@ -169,18 +169,24 @@ begin
   if not ReadProductInfo(Version.Major, Version.Minor, Version.ServicePackMajor,
     Version.ServicePackMinor, Sku) then Exit;
 
-  // Keep the published client support matrix in sync with the Portable updater.
+  // Keep admission checks in sync with the Portable updater. Newer desktop
+  // builds include Insider flights; admission does not certify their validation.
+  if Version.Build >= 26200 then
+  begin
+    case Sku of
+      4, 27, 48, 49, 99, 100, 101, 121, 122, 161, 162, 164, 165: Result := True;
+      188: Result := Version.Build = 26200;
+    end;
+    Exit;
+  end;
+
+  // Preserve the edition-specific exceptions for older releases and LTSC.
   case Version.Build of
     17763: Result := (Sku = 125) or (Sku = 126);  // Enterprise LTSC 2019
     19044: Result := (Sku = 125) or (Sku = 126) or (Sku = 191);  // LTSC 2021
     26100:  // 24H2 Enterprise, Education and IoT (including LTSC)
       case Sku of
         4, 27, 121, 122, 125, 126, 188, 191: Result := True;
-      end;
-    26200, 28000:  // 25H2 and 26H1 supported desktop editions
-      case Sku of
-        4, 27, 48, 49, 99, 100, 101, 121, 122, 161, 162, 164, 165: Result := True;
-        188: Result := Version.Build = 26200;
       end;
   end;
 end;
@@ -297,7 +303,11 @@ end;
 #ifdef UnsignedReleaseVersion
 procedure DeinitializeSetup;
 begin
-  VerifiedSetupSource.Free;
+  if VerifiedSetupSource <> nil then
+  begin
+    VerifiedSetupSource.Free;
+    VerifiedSetupSource := nil;
+  end;
 end;
 #endif
 

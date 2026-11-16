@@ -68,6 +68,8 @@ L’app non riavvia il computer senza chiedere conferma.
 
 Avvio e scansione sono stati osservati su Windows 11 Pro Insider x64, build 26320. Le release stabili di Windows 11 in servizio e le edizioni Windows 10 LTSC elencate da Microsoft per .NET 10 sono piattaforme da validare sul candidato. Restano aperte anche le prove di UAC con runner elevato, installazione driver WUA e ciclo Setup/Portable. [Matrice di compatibilità](docs/M8-RELEASE-READINESS.md#compatibilità-attuale) · [Sistemi supportati da .NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)
 
+Setup e self-update Portable ammettono le edizioni desktop Windows 11 previste dalla policy dalla build 26200 in avanti, incluse le build Insider come 26320, senza richiedere un elenco di singole flight. Restano i controlli su client x64, edizione e le eccezioni specifiche LTSC/IoT; la sola build minima non basta. Questa ammissione indica compatibilità tecnica da validare per le Insider, non supporto stabile certificato. Il Setup corretto e la migrazione completa sulla build 26320 richiedono ancora la prova nativa della nuova RC.
+
 ## Licenza e sviluppo
 
 Il progetto è distribuito con licenza [MIT](LICENSE).

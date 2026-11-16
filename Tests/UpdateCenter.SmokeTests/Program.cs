@@ -35,6 +35,12 @@ var isolatedDataRoot = Path.GetFullPath(Path.Combine(
     Path.GetTempPath(), "UpdateCenter.SmokeTests", Guid.NewGuid().ToString("N")));
 AppPaths.InitializeRoot(isolatedDataRoot);
 
+if (args.Length == 2 && args[0] == "--self-update-platform")
+{
+    SelfUpdateCompatibilityTests.Run(args[1]);
+    return;
+}
+
 if (args.Length == 3 && args[0] == "--unsigned-release-200")
 {
     await UnsignedReleaseTests.RunAsync(args[1], args[2]);
