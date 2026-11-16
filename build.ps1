@@ -1,12 +1,14 @@
 [CmdletBinding()]
 param(
-    [switch]$NoRestore
+    [switch]$NoRestore,
+    [string]$OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = Join-Path $projectRoot 'UpdateCenter.csproj'
-$output = Join-Path $projectRoot 'dist'
+. (Join-Path $projectRoot 'scripts\BuildPaths.ps1')
+$output = Resolve-BuildDirectory $projectRoot $OutputDirectory 'Portable'
 $projectXml = [xml](Get-Content -LiteralPath $project -Raw)
 $versionNode = $projectXml.SelectSingleNode('/Project/PropertyGroup/Version')
 $packageVersion = if ($null -ne $versionNode) { $versionNode.InnerText.Trim() } else { '' }
@@ -16,50 +18,38 @@ if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
 
 $dotnetCommand = Get-Command dotnet.exe -ErrorAction SilentlyContinue
 if ($null -eq $dotnetCommand) {
-    throw '.NET 8 SDK non trovato. Esegui CREA-EXE.bat.'
+    throw '.NET SDK 10 non trovato. Esegui CREA-EXE.bat.'
 }
 
-$sdkLines = @(& $dotnetCommand.Source --list-sdks 2>$null)
-if ($LASTEXITCODE -ne 0 -or $sdkLines.Count -eq 0) {
-    throw 'Il comando dotnet è presente, ma non risulta installato alcun SDK. Esegui nuovamente CREA-EXE.bat.'
-}
-
-$compatibleSdks = @($sdkLines | ForEach-Object {
-    $versionToken = ($_ -split '\s+')[0]
-    $parsedVersion = $null
-    if ([Version]::TryParse($versionToken, [ref]$parsedVersion) -and $parsedVersion.Major -ge 8) {
-        $parsedVersion
+# La CLI cerca global.json a partire dalla directory di lavoro.
+Push-Location -LiteralPath $projectRoot
+try {
+    $versionText = & $dotnetCommand.Source --version
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Serve .NET SDK 10 stabile come indicato in global.json. Esegui CREA-EXE.bat.'
     }
-})
+    Write-Host "Compilazione Update Center con .NET SDK $versionText..." -ForegroundColor Cyan
 
-if ($compatibleSdks.Count -eq 0) {
-    throw "Serve .NET SDK 8 o successivo. SDK rilevati: $($sdkLines -join ', ')"
+    New-BuildDirectory $output
+    if (-not $NoRestore) {
+        & $dotnetCommand.Source restore $project --runtime win-x64 -p:Configuration=Release
+        if ($LASTEXITCODE -ne 0) { throw 'Ripristino dei componenti .NET non riuscito.' }
+    }
+
+    & $dotnetCommand.Source publish $project `
+        -m:1 -p:UseSharedCompilation=false `
+        --configuration Release `
+        --runtime win-x64 `
+        --self-contained true `
+        --no-restore `
+        --output $output `
+        -p:PublishSingleFile=true `
+        -p:IncludeNativeLibrariesForSelfExtract=true `
+        -p:PublishTrimmed=false
+    if ($LASTEXITCODE -ne 0) { throw 'Compilazione non riuscita.' }
+} finally {
+    Pop-Location
 }
-
-$versionText = ($compatibleSdks | Sort-Object -Descending | Select-Object -First 1).ToString()
-
-Write-Host "Compilazione Update Center con .NET SDK $versionText..." -ForegroundColor Cyan
-
-if (Test-Path $output) {
-    Remove-Item -Path $output -Recurse -Force
-}
-New-Item -Path $output -ItemType Directory | Out-Null
-
-if (-not $NoRestore) {
-    & $dotnetCommand.Source restore $project --runtime win-x64
-    if ($LASTEXITCODE -ne 0) { throw 'Ripristino dei componenti .NET non riuscito.' }
-}
-
-& $dotnetCommand.Source publish $project `
-    --configuration Release `
-    --runtime win-x64 `
-    --self-contained true `
-    --no-restore `
-    --output $output `
-    -p:PublishSingleFile=true `
-    -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:PublishTrimmed=false
-if ($LASTEXITCODE -ne 0) { throw 'Compilazione non riuscita.' }
 
 $exe = Join-Path $output 'UpdateCenter.exe'
 if (-not (Test-Path $exe)) {
@@ -70,13 +60,16 @@ $readme = @"
 UPDATE CENTER $packageVersion
 
 COMPATIBILITA
-- Windows 10 x64 versione 1809 (build 17763) o successiva.
-- Windows 11 x64.
+- Destinazione tecnica Windows x64 dalla build 17763. Il pacchetto include .NET 10 Desktop.
+- Avvio e scansione osservati su Windows 11 Pro Insider (build 26320).
+- Le release stabili di Windows 11 e le edizioni Windows 10 LTSC elencate da Microsoft per .NET 10 restano da validare per la 2.0.0.
+- Per gli aggiornamenti software automatici serve App Installer con WinGet v1.29.290 o v1.30.300.
+- UAC con runner elevato, installazione driver tramite Windows Update e aggiornamento dell'app restano da validare sul candidato 2.0.0.
 
 1. Avvia UpdateCenter.exe.
 2. Premi "Avvia scansione".
 3. Seleziona gli aggiornamenti desiderati.
-4. Premi "Aggiorna elementi selezionati" e conferma la richiesta UAC.
+4. Premi "Aggiorna elementi selezionati" e conferma il riepilogo. Windows chiede l'elevazione UAC quando necessaria.
 
 Fonti utilizzate: WinGet, Windows/Microsoft Update e metadati verificati dei produttori.
 I runtime condivisi vengono mostrati negli Aggiornamenti con il filtro Runtime.

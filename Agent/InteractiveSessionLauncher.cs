@@ -21,14 +21,17 @@ internal sealed class InteractiveSessionLauncher : IDisposable
     private InteractiveSessionLauncher(
         bool serviceMode,
         SafeAccessTokenHandle? primaryToken,
-        SecurityIdentifier userSid)
+        SecurityIdentifier userSid,
+        uint sessionId)
     {
         _serviceMode = serviceMode;
         _primaryToken = primaryToken;
         UserSid = userSid;
+        SessionId = sessionId;
     }
 
     public SecurityIdentifier UserSid { get; }
+    public uint SessionId { get; }
 
     public static InteractiveSessionLauncher Prepare(bool serviceMode)
     {
@@ -36,7 +39,8 @@ internal sealed class InteractiveSessionLauncher : IDisposable
         {
             var currentSid = WindowsIdentity.GetCurrent().User
                              ?? throw new InvalidOperationException("Identità dell'utente corrente non disponibile.");
-            return new InteractiveSessionLauncher(false, null, currentSid);
+            return new InteractiveSessionLauncher(false, null, currentSid,
+                (uint)Process.GetCurrentProcess().SessionId);
         }
 
         var sessionId = WTSGetActiveConsoleSessionId();
@@ -60,7 +64,7 @@ internal sealed class InteractiveSessionLauncher : IDisposable
             using var identity = new WindowsIdentity(primaryToken.DangerousGetHandle());
             var sid = identity.User
                       ?? throw new InvalidOperationException("SID della sessione utente non disponibile.");
-            return new InteractiveSessionLauncher(true, primaryToken, sid);
+            return new InteractiveSessionLauncher(true, primaryToken, sid, sessionId);
         }
         catch
         {

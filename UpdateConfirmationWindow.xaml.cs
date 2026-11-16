@@ -9,9 +9,67 @@ namespace UpdateCenter;
 public partial class UpdateConfirmationWindow : Window
 {
     private readonly bool _preflightCanContinue;
+    private readonly bool _preliminary;
     private readonly bool _requiresRiskConfirmation;
     public bool ExcludeRiskyItems { get; private set; }
 
+    private bool _decisionMade;
+    private readonly bool _authoritative;
+
+    internal UpdateConfirmationWindow(IReadOnlyList<RunnerPlanSnapshot> plans, PreflightResult preflight,
+        IReadOnlyList<InstallationSummaryHint>? hints = null)
+    {
+        InitializeComponent();
+        DialogPresentation.Initialize(this, () => Cancel_Click(this, new RoutedEventArgs()), () => CancelButton);
+        _authoritative = true;
+        _preflightCanContinue = preflight.CanContinue && plans.Count > 0;
+        var frozen = plans.SelectMany(plan => plan.Items).ToArray();
+        if (hints is not null && (hints.Count != frozen.Length || frozen.Any(item => hints.Count(hint => hint.Matches(item)) != 1)))
+            throw UnifiedConsentGate.RestartRequired();
+        var rows = frozen.Select(item => InstallationSummaryRow.From(item, hints?.Single(hint => hint.Matches(item)))).ToArray();
+        // The remote/preliminary risk controls are not part of the local dialog.
+        ((System.Windows.Controls.Panel)RiskConfirmationPanel.Parent).Children.Remove(RiskConfirmationPanel);
+        SummaryText.Text = LocalizationService.Text($"{rows.Length} aggiornamenti selezionati", $"{rows.Length} updates selected");
+        if (rows.Length == 1) SummaryText.Text = LocalizationService.Text("1 aggiornamento selezionato", "1 update selected");
+        ImportantCountText.Text = rows.Count(row => row.IsImportant).ToString();
+        SoftwareCountText.Text = frozen.Count(item => item.Kind is nameof(UpdateKind.Software) or nameof(UpdateKind.Runtime)).ToString();
+        DriverCountText.Text = frozen.Count(item => item.Kind == nameof(UpdateKind.Driver)).ToString();
+        ConfirmationPurposeText.Text = LocalizationService.Text("Controlla gli aggiornamenti, poi conferma per avviare l'installazione.",
+            "Review the updates, then confirm to start installation.");
+        PowerStatusText.Text = preflight.PowerStatus;
+        DiskStatusText.Text = preflight.DiskStatus;
+        RestorePointPanel.Visibility = plans.Any(plan => plan.CreateRestorePoint) ? Visibility.Visible : Visibility.Collapsed;
+        RestorePointText.Text = LocalizationService.Text("Prima dell'installazione verrà richiesto un punto di ripristino.",
+            "A restore point will be requested before installation.");
+        if (preflight.BlockingIssues.Count > 0)
+        {
+            BlockingList.ItemsSource = preflight.BlockingIssues.ToArray();
+            BlockingPanel.Visibility = Visibility.Visible;
+        }
+        if (preflight.Warnings.Count > 0)
+        {
+            WarningsList.ItemsSource = preflight.Warnings.ToArray();
+            WarningsPanel.Visibility = Visibility.Visible;
+        }
+        FooterInfoText.Text = LocalizationService.Text("L'installazione inizierà dopo la conferma.", "Installation will start after confirmation.");
+        ItemsGrid.Columns.Clear();
+        ItemsGrid.Columns.Add(new System.Windows.Controls.DataGridTemplateColumn
+        {
+            Header = LocalizationService.Text("Programma", "App"), CellTemplate = (DataTemplate)ItemsGrid.FindResource("InstallationProgramCell"),
+            Width = new System.Windows.Controls.DataGridLength(2, System.Windows.Controls.DataGridLengthUnitType.Star), MinWidth = 150
+        });
+        foreach (var (header, binding) in new[] {
+            (LocalizationService.Text("Versione attuale", "Current version"), "InstalledVersion"),
+            (LocalizationService.Text("Nuova versione", "New version"), "AvailableVersion") })
+            ItemsGrid.Columns.Add(new System.Windows.Controls.DataGridTextColumn { Header = header,
+                Binding = new System.Windows.Data.Binding(binding),
+                Width = new System.Windows.Controls.DataGridLength(1, System.Windows.Controls.DataGridLengthUnitType.Star), MinWidth = 85,
+                ElementStyle = (Style)ItemsGrid.FindResource("OperationsText") });
+        ItemsGrid.ItemsSource = rows;
+        ConfirmButton.IsEnabled = _preflightCanContinue;
+        ConfirmButton.Content = _preflightCanContinue ? LocalizationService.Text("Conferma e aggiorna", "Confirm and update")
+            : LocalizationService.Text("Controlli non superati", "Pre-checks failed");
+    }
     public UpdateConfirmationWindow(
         IReadOnlyList<UpdateItem> items,
         PreflightResult preflight,
@@ -19,9 +77,14 @@ public partial class UpdateConfirmationWindow : Window
         bool restorePointWillBeCreated)
     {
         InitializeComponent();
+        DialogPresentation.Initialize(this, () => Cancel_Click(this, new RoutedEventArgs()), () => CancelButton);
+        _preliminary = true;
+        ConfirmationPurposeText.Text = LocalizationService.Text(
+            "Riepilogo preliminare. Ogni batch richiederà una nuova conferma finale nel runner sul piano effettivo.",
+            "Preliminary summary. Each batch requires a new final confirmation in the runner for its effective plan.");
+        ConfirmButton.Content = LocalizationService.Text("Continua alla conferma finale", "Continue to final confirmation");
         _preflightCanContinue = preflight.CanContinue;
         _requiresRiskConfirmation = items.Any(x => x.RequiresRiskConfirmation);
-        Loaded += (_, _) => LocalizationService.ApplyTo(this);
         ItemsGrid.ItemsSource = items;
 
         SummaryText.Text = items.Count == 1
@@ -72,9 +135,9 @@ public partial class UpdateConfirmationWindow : Window
         IReadOnlyList<NetworkAgentItem> agents)
     {
         InitializeComponent();
+        DialogPresentation.Initialize(this, () => Cancel_Click(this, new RoutedEventArgs()), () => CancelButton);
         _preflightCanContinue = true;
         _requiresRiskConfirmation = items.Any(x => x.RequiresRiskConfirmation);
-        Loaded += (_, _) => LocalizationService.ApplyTo(this);
         ItemsGrid.ItemsSource = items;
         DeviceColumn.Visibility = Visibility.Visible;
         DiskHeadingText.Text = LocalizationService.Text("PACCHETTI / SPAZIO PER PC", "PACKAGES / SPACE PER PC");
@@ -115,6 +178,9 @@ public partial class UpdateConfirmationWindow : Window
         }
     }
 
+    private void ItemsGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e) =>
+        DialogGridScroll.ForwardAtBoundary(ItemsGrid, ContentScrollViewer, e);
+
     private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ButtonState == MouseButtonState.Pressed)
@@ -123,21 +189,34 @@ public partial class UpdateConfirmationWindow : Window
 
     private void Confirm_Click(object sender, RoutedEventArgs e)
     {
-        if (ConfirmButton.IsEnabled) DialogResult = true;
+        if (_decisionMade || !ConfirmButton.IsEnabled || (_authoritative && !_preflightCanContinue)) return;
+        _decisionMade = true;
+        ConfirmButton.IsEnabled = false;
+        DialogResult = true;
     }
     private void RiskAcceptanceChanged(object sender, RoutedEventArgs e)
     {
+        if (_authoritative || _decisionMade) return;
         ConfirmButton.IsEnabled = _preflightCanContinue && RiskAcceptanceCheckBox.IsChecked == true;
         ConfirmButton.Content = !_preflightCanContinue
             ? LocalizationService.Text("Controlli non superati", "Pre-checks failed")
             : ConfirmButton.IsEnabled
-                ? LocalizationService.Text("Conferma e aggiorna", "Confirm and update")
+                ? (_preliminary
+                ? LocalizationService.Text("Continua alla conferma finale", "Continue to final confirmation")
+                : LocalizationService.Text("Conferma e aggiorna", "Confirm and update"))
                 : LocalizationService.Text("Conferma il rischio", "Confirm risk");
     }
     private void ExcludeRiskItems_Click(object sender, RoutedEventArgs e)
     {
+        if (_authoritative || _decisionMade || !_preflightCanContinue) return;
+        _decisionMade = true;
         ExcludeRiskyItems = true;
         DialogResult = true;
     }
-    private void Cancel_Click(object sender, RoutedEventArgs e) => DialogResult = false;
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_decisionMade) return;
+        _decisionMade = true;
+        DialogResult = false;
+    }
 }

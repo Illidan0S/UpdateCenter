@@ -191,6 +191,7 @@ public sealed class AgentWorker(
             RequestId = requestId,
             Success = true,
             PairingCode = pairingCodes.Create(),
+            Network = configuration,
             Message = "Codice monouso creato; scade tra 5 minuti."
         };
     }

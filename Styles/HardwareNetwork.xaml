@@ -1,0 +1,34 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:UpdateCenter">
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Operations.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+    <local:ManagementTextConverter x:Key="ManagementTextConverter" />
+    <Style x:Key="HardwareUsageProgress" TargetType="ProgressBar" BasedOn="{StaticResource {x:Type ProgressBar}}">
+        <Setter Property="Height" Value="6" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Grid x:Name="PART_Track" ClipToBounds="True">
+                        <Border x:Name="UsageTrack" Background="{TemplateBinding Background}" CornerRadius="3" />
+                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="3" HorizontalAlignment="Left" />
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- Scoped additions: approved pages keep their existing resources. -->
+    <Style x:Key="ManagementValue" TargetType="TextBox" BasedOn="{StaticResource SelectableValue}">
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource AppearanceKeyboardFocus}" />
+        <Setter Property="AutomationProperties.Name" Value="{Binding Text, RelativeSource={RelativeSource Self}}" />
+    </Style>
+    <Style x:Key="ManagementButton" TargetType="Button" BasedOn="{StaticResource SettingsButton}">
+        <Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger></Style.Triggers>
+    </Style>
+    <Style x:Key="ManagementPrimaryButton" TargetType="Button" BasedOn="{StaticResource SettingsSaveButton}">
+        <Style.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5" /></Trigger></Style.Triggers>
+    </Style>
+</ResourceDictionary>

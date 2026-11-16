@@ -5,10 +5,37 @@ using UpdateCenter.Contracts;
 
 namespace UpdateCenter.Agent;
 
-public sealed class ConnectionRequestManager(
-    ILogger<ConnectionRequestManager> logger,
-    AgentNetworkSettingsStore settingsStore)
+public sealed class ConnectionRequestManager
 {
+    private readonly ILogger<ConnectionRequestManager> logger;
+    private readonly AgentNetworkSettingsStore settingsStore;
+    private readonly Func<ApprovalIdentity> _approvalOwner;
+    private readonly Action<Guid, ApprovalIdentity> _notify;
+
+    public ConnectionRequestManager(ILogger<ConnectionRequestManager> logger,
+        AgentNetworkSettingsStore settingsStore)
+    {
+        this.logger = logger;
+        this.settingsStore = settingsStore;
+        _approvalOwner = ResolveApprovalOwner;
+        _notify = TryLaunchNotification;
+    }
+
+    internal ConnectionRequestManager(ILogger<ConnectionRequestManager> logger,
+        AgentNetworkSettingsStore settingsStore, Func<ApprovalIdentity> approvalOwner,
+        Action<Guid, ApprovalIdentity> notify)
+    {
+        this.logger = logger;
+        this.settingsStore = settingsStore;
+        _approvalOwner = approvalOwner;
+        _notify = notify;
+    }
+
+    private static ApprovalIdentity ResolveApprovalOwner()
+    {
+        using var launcher = InteractiveSessionLauncher.Prepare(WindowsServiceHelpers.IsWindowsService());
+        return new ApprovalIdentity(launcher.UserSid, launcher.SessionId);
+    }
     private const int MaximumPendingRequests = 50;
     private static readonly TimeSpan RequestLifetime = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan Retention = TimeSpan.FromMinutes(10);
@@ -45,7 +72,7 @@ public sealed class ConnectionRequestManager(
         string fingerprint;
         try
         {
-            certificate = new X509Certificate2(Convert.FromBase64String(request.ControllerCertificateBase64));
+            certificate = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(request.ControllerCertificateBase64));
             using var publicKey = certificate.GetRSAPublicKey();
             if (publicKey is null || certificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow)
                 throw new CryptographicException();
@@ -60,6 +87,13 @@ public sealed class ConnectionRequestManager(
 
         using (certificate)
         {
+            ApprovalIdentity owner;
+            try { owner = _approvalOwner(); }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Sessione locale di approvazione non disponibile.");
+                return Error("ApprovalUnavailable", "Nessuna sessione locale autorizzata disponibile.");
+            }
             RequestEntry entry;
             string pollToken;
             lock (_sync)
@@ -79,6 +113,7 @@ public sealed class ConnectionRequestManager(
                 entry = new RequestEntry
                 {
                     Id = Guid.NewGuid(),
+                    Owner = owner,
                     ControllerId = request.ControllerId,
                     ControllerName = request.ControllerName.Trim(),
                     ControllerCertificateBase64 = request.ControllerCertificateBase64,
@@ -92,7 +127,7 @@ public sealed class ConnectionRequestManager(
                 _lastRequestByAddress[remoteAddress] = now;
             }
 
-            TryLaunchNotification(entry.Id);
+            _notify(entry.Id, owner);
             return BuildResponse(entry, pollToken, "Richiesta inviata al dispositivo.");
         }
     }
@@ -127,7 +162,24 @@ public sealed class ConnectionRequestManager(
     public PendingConnectionRequest? GetPending(Guid requestId) =>
         GetPending().FirstOrDefault(x => x.RequestId == requestId);
 
-    public bool Decide(Guid requestId, bool accept, out string message)
+    internal IReadOnlyList<PendingConnectionRequest> GetPending(ApprovalIdentity caller)
+    {
+        lock (_sync)
+        {
+            CleanupLocked();
+            return _requests.Values.Where(x => x.Status == ConnectionRequestStates.Pending && x.Owner == caller)
+                .OrderBy(x => x.RequestedUtc).Select(ToContract).ToList();
+        }
+    }
+
+    // The unscoped entry point belongs to the privileged administrator control pipe.
+    public bool Decide(Guid requestId, bool accept, out string message) =>
+        DecideCore(requestId, accept, null, out message);
+
+    internal bool Decide(Guid requestId, bool accept, ApprovalIdentity caller, out string message) =>
+        DecideCore(requestId, accept, caller, out message);
+
+    private bool DecideCore(Guid requestId, bool accept, ApprovalIdentity? caller, out string message)
     {
         lock (_sync)
         {
@@ -136,6 +188,12 @@ public sealed class ConnectionRequestManager(
                 entry.Status != ConnectionRequestStates.Pending)
             {
                 message = "La richiesta non esiste più oppure è scaduta.";
+                return false;
+            }
+
+            if (caller is not null && entry.Owner != caller)
+            {
+                message = "La richiesta appartiene a un'altra sessione utente.";
                 return false;
             }
 
@@ -149,7 +207,7 @@ public sealed class ConnectionRequestManager(
 
             try
             {
-                using var certificate = new X509Certificate2(Convert.FromBase64String(entry.ControllerCertificateBase64));
+                using var certificate = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(entry.ControllerCertificateBase64));
                 settingsStore.PairController(entry.ControllerName, certificate);
                 entry.Status = ConnectionRequestStates.Accepted;
                 entry.CompletedUtc = DateTime.UtcNow;
@@ -182,7 +240,7 @@ public sealed class ConnectionRequestManager(
         }
     }
 
-    private void TryLaunchNotification(Guid requestId)
+    private void TryLaunchNotification(Guid requestId, ApprovalIdentity owner)
     {
         try
         {
@@ -193,6 +251,8 @@ public sealed class ConnectionRequestManager(
                 return;
             }
             using var launcher = InteractiveSessionLauncher.Prepare(WindowsServiceHelpers.IsWindowsService());
+            if (launcher.UserSid != owner.UserSid || launcher.SessionId != owner.SessionId)
+                throw new UnauthorizedAccessException("La sessione di approvazione è cambiata.");
             using var process = launcher.Start(
                 executable,
                 ["--connection-request", requestId.ToString("D")],
@@ -261,6 +321,7 @@ public sealed class ConnectionRequestManager(
     private sealed class RequestEntry
     {
         public Guid Id { get; init; }
+        public required ApprovalIdentity Owner { get; init; }
         public Guid ControllerId { get; init; }
         public string ControllerName { get; init; } = "";
         public string ControllerCertificateBase64 { get; init; } = "";

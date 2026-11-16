@@ -50,6 +50,7 @@ public sealed class ConnectionApprovalWorker(
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
                 timeout.CancelAfter(TimeSpan.FromSeconds(15));
                 var request = await PipeJsonProtocol.ReadAsync<AgentRequest>(pipe, timeout.Token).ConfigureAwait(false);
+                var caller = ApprovalIdentity.FromPipe(pipe);
                 response = request.Command switch
                 {
                     AgentCommands.GetNetworkConfiguration => new AgentResponse
@@ -63,9 +64,9 @@ public sealed class ConnectionApprovalWorker(
                     {
                         RequestId = request.RequestId,
                         Success = true,
-                        ConnectionRequests = connectionRequests.GetPending()
+                        ConnectionRequests = connectionRequests.GetPending(caller)
                     },
-                    AgentCommands.RespondConnectionRequest => Decide(request),
+                    AgentCommands.RespondConnectionRequest => Decide(request, caller),
                     _ => AgentResponse.Error(request.RequestId, "CommandNotAllowed", "Comando non consentito sul canale di approvazione.")
                 };
             }
@@ -78,11 +79,11 @@ public sealed class ConnectionApprovalWorker(
         }
     }
 
-    private AgentResponse Decide(AgentRequest request)
+    private AgentResponse Decide(AgentRequest request, ApprovalIdentity caller)
     {
         if (request.ConnectionDecision is not { RequestId: var id } decision || id == Guid.Empty)
             return AgentResponse.Error(request.RequestId, "InvalidDecision", "Decisione mancante.");
-        return connectionRequests.Decide(id, decision.Accept, out var message)
+        return connectionRequests.Decide(id, decision.Accept, caller, out var message)
             ? new AgentResponse
             {
                 RequestId = request.RequestId,

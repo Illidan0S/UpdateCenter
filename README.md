@@ -1,6 +1,6 @@
 # Update Center
 
-Versione pubblica attuale: **1.1.5**.
+Release Candidate locale **2.0.0**. L’ultima versione pubblicata è la **1.1.5**.
 
 Rafforzata la gestione degli esiti di installazione: verifica post-installazione per WinGet e driver, aggiornamento coerente degli elenchi e protezione dai refresh WPF durante transazioni di modifica.
 
@@ -61,13 +61,15 @@ L’app non riavvia il computer senza chiedere conferma.
 
 ## Requisiti
 
-- Windows 10 x64 versione 1809 (build 17763) o successiva, oppure Windows 11 x64.
-- WinGet/App Installer aggiornato.
+- Per la linea 2.0.0 il target tecnico è Windows x64 dalla build 17763. Il Portable e l'eseguibile incluso nel Setup contengono il runtime .NET 10 Desktop.
+- Per gli aggiornamenti software automatici serve App Installer con WinGet `v1.29.290` o `v1.30.300`. [Requisiti WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
 - Connessione Internet.
 - Privilegi di amministratore solo per gli elementi che li richiedono.
+
+Avvio e scansione sono stati osservati su Windows 11 Pro Insider x64, build 26320. Le release stabili di Windows 11 in servizio e le edizioni Windows 10 LTSC elencate da Microsoft per .NET 10 sono piattaforme da validare sul candidato. Restano aperte anche le prove di UAC con runner elevato, installazione driver WUA e ciclo Setup/Portable. [Matrice di compatibilità](docs/M8-RELEASE-READINESS.md#compatibilità-attuale) · [Sistemi supportati da .NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)
 
 ## Licenza e sviluppo
 
 Il progetto è distribuito con licenza [MIT](LICENSE).
 
-Le istruzioni per compilazione, struttura del progetto, creazione del Setup locale e pubblicazione delle versioni sono disponibili in [docs/SVILUPPO.md](docs/SVILUPPO.md).
+Per compilare i sorgenti serve .NET SDK 10 stabile. Le istruzioni per compilazione, test, creazione del Setup e pubblicazione sono disponibili nella [guida di sviluppo](docs/SVILUPPO.md).

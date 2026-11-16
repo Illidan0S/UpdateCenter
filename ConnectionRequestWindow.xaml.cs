@@ -14,6 +14,7 @@ public partial class ConnectionRequestWindow : Window
     public ConnectionRequestWindow(Guid requestId)
     {
         InitializeComponent();
+        MainWindow.UpdateSettingsCardTheme(this, "HardwareNetwork");
         _requestId = requestId;
         Loaded += (_, _) => LocalizationService.ApplyTo(this);
         Loaded += async (_, _) => await LoadRequestAsync();

@@ -33,7 +33,7 @@ public sealed class ControllerIdentityStore
         {
             var protectedPfx = File.ReadAllBytes(_identityPath);
             var pfx = ProtectedData.Unprotect(protectedPfx, CertificateEntropy, DataProtectionScope.CurrentUser);
-            return new X509Certificate2(
+            return X509CertificateLoader.LoadPkcs12(
                 pfx,
                 (string?)null,
                 X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
@@ -61,7 +61,7 @@ public sealed class ControllerIdentityStore
         var temporary = _identityPath + ".tmp";
         File.WriteAllBytes(temporary, protectedBytes);
         File.Move(temporary, _identityPath, overwrite: true);
-        return new X509Certificate2(
+        return X509CertificateLoader.LoadPkcs12(
             certificate.Export(X509ContentType.Pfx),
             (string?)null,
             X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);

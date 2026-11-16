@@ -14,10 +14,10 @@ public partial class AppUpdateWindow : Window
     public AppUpdateWindow(AppUpdateInfo update, AppUpdateService service)
     {
         InitializeComponent();
+        DialogPresentation.Initialize(this, () => Later_Click(this, new RoutedEventArgs()), () => LaterButton);
         _update = update;
         _service = service;
         DataContext = update;
-        Loaded += (_, _) => LocalizationService.ApplyTo(this);
     }
 
     public bool IgnoreRequested { get; private set; }
@@ -34,25 +34,30 @@ public partial class AppUpdateWindow : Window
         SetBusy(true);
         ProgressPanel.Visibility = Visibility.Visible;
         DownloadProgress.Value = 0;
-        DownloadStatus.Text = "Preparazione del download…";
+        DownloadStatus.Text = LocalizationService.Text("Preparazione del download…", "Preparing download…");
+        ErrorDetailsPanel.Visibility = Visibility.Collapsed;
+        _ = Dispatcher.InvokeAsync(() => ProgressPanel.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
 
         var progress = new Progress<AppUpdateDownloadProgress>(value =>
         {
             DownloadProgress.Value = value.Percentage;
-            DownloadStatus.Text = value.Message;
+            DownloadStatus.Text = LocalizationService.Translate(value.Message);
         });
 
         try
         {
             await _service.DownloadAndStartUpdateAsync(_update, progress, CancellationToken.None);
-            DownloadStatus.Text = "Aggiornamento verificato. Update Center verrà riavviato…";
+            DownloadStatus.Text = LocalizationService.Text("Aggiornamento verificato. Update Center verrà riavviato…", "Update verified. Update Center will restart…");
             await Task.Delay(350);
             Application.Current.Shutdown();
         }
         catch (Exception ex)
         {
             LogService.Write("Download dell'aggiornamento app non riuscito.", ex);
-            DownloadStatus.Text = "Aggiornamento non applicato: " + ex.Message;
+            DownloadStatus.Text = LocalizationService.Text("Aggiornamento non applicato: ", "Update not applied: ") + ex.Message;
+            ErrorDetailsText.Text = ex.ToString();
+            ErrorDetailsPanel.Visibility = Visibility.Visible;
+            _ = Dispatcher.InvokeAsync(() => ErrorDetailsPanel.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
             DownloadProgress.Value = 0;
             SetBusy(false);
         }

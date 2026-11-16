@@ -15,6 +15,8 @@ namespace UpdateCenter.Services;
 public sealed class AppUpdateService
 {
     private const string LatestReleaseUrl = "https://api.github.com/repos/Illidan0S/UpdateCenter/releases/latest";
+    private const string ReleaseApi = "https://api.github.com/repos/Illidan0S/UpdateCenter/releases/tags/";
+    private const string ReleasePage = "https://github.com/Illidan0S/UpdateCenter/releases/";
     private const string ApiVersion = "2026-03-10";
     private static readonly Regex Sha256Pattern = new("(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])", RegexOptions.Compiled);
     private static readonly Regex SupportedExecutableNamePattern = new(
@@ -23,17 +25,15 @@ public sealed class AppUpdateService
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private readonly HttpClient _httpClient;
 
-    public AppUpdateService()
+    public AppUpdateService() : this(new HttpClient(new HttpClientHandler
     {
-        _httpClient = new HttpClient(new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All,
-            AllowAutoRedirect = true,
-            MaxAutomaticRedirections = 8
-        })
-        {
-            Timeout = Timeout.InfiniteTimeSpan
-        };
+        AutomaticDecompression = DecompressionMethods.All,
+        AllowAutoRedirect = false
+    }) { Timeout = Timeout.InfiniteTimeSpan }) { }
+
+    internal AppUpdateService(HttpClient httpClient)
+    {
+        _httpClient = httpClient;
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd($"UpdateCenter/{GetInstalledVersion()}");
         _httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", ApiVersion);
@@ -58,7 +58,7 @@ public sealed class AppUpdateService
 
         if (release.Draft || release.Prerelease)
             return null;
-        if (!SemanticVersion.TryParse(release.TagName, out var availableVersion))
+        if (!SemanticVersion.TryParse(release.TagName, out var availableVersion) || release.TagName != $"v{availableVersion}")
             throw new InvalidOperationException("La Release stabile usa un numero di versione non valido.");
 
         var installedVersion = GetInstalledVersion();
@@ -66,17 +66,15 @@ public sealed class AppUpdateService
             return null;
 
         var isInstalledSetup = IsInstalledSetup();
-        var executableName = isInstalledSetup
-            ? $"UpdateCenter-Setup-v{availableVersion}.exe"
-            : $"UpdateCenter-v{availableVersion}-Portable.exe";
+        var executableName = AssetName(availableVersion.ToString(), isInstalledSetup);
         var checksumName = executableName + ".sha256";
         var executable = release.Assets.FirstOrDefault(x => x.Name.Equals(executableName, StringComparison.OrdinalIgnoreCase));
         var checksum = release.Assets.FirstOrDefault(x => x.Name.Equals(checksumName, StringComparison.OrdinalIgnoreCase));
         if (executable is null || checksum is null)
             throw new InvalidOperationException("La Release non contiene tutti gli artefatti necessari per l'aggiornamento sicuro.");
 
-        var downloadUri = ValidateGitHubDownloadUri(executable.BrowserDownloadUrl);
-        var checksumUri = ValidateGitHubDownloadUri(checksum.BrowserDownloadUrl);
+        var downloadUri = ExactAssetUri(executable, release.TagName, executableName);
+        var checksumUri = ExactAssetUri(checksum, release.TagName, checksumName);
         var releaseUri = ValidateGitHubPageUri(release.HtmlUrl);
         var apiSha256 = NormalizeApiDigest(executable.Digest);
 
@@ -102,15 +100,21 @@ public sealed class AppUpdateService
         IProgress<AppUpdateDownloadProgress>? progress,
         CancellationToken cancellationToken)
     {
+        var tag = $"v{update.AvailableVersion}";
+        var name = AssetName(update.AvailableVersion.ToString(), update.IsInstallerPackage);
+        if (update.AvailableVersion <= GetInstalledVersion() || update.AssetName != name ||
+            update.DownloadUri.AbsoluteUri != AssetUrl(tag, name) || update.Sha256Uri.AbsoluteUri != AssetUrl(tag, name + ".sha256"))
+            throw new InvalidDataException("Asset di aggiornamento inatteso.");
+
         AppPaths.EnsureCreated();
         Directory.CreateDirectory(AppPaths.UpdatesDirectory);
         CleanupUpdateDownloads();
 
-        progress?.Report(new AppUpdateDownloadProgress(2, "Download della firma SHA-256…"));
+        progress?.Report(new AppUpdateDownloadProgress(2, "Download del checksum SHA-256…"));
         var expectedSha256 = await DownloadExpectedSha256Async(update.Sha256Uri, cancellationToken).ConfigureAwait(false);
         if (!string.IsNullOrWhiteSpace(update.ApiSha256) &&
             !expectedSha256.Equals(update.ApiSha256, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidDataException("La firma SHA-256 pubblicata non coincide con quella registrata da GitHub.");
+            throw new InvalidDataException("Il checksum SHA-256 pubblicato non coincide con il digest registrato da GitHub.");
 
         var finalPath = Path.Combine(AppPaths.UpdatesDirectory, update.AssetName);
         var partialPath = finalPath + ".part";
@@ -121,9 +125,7 @@ public sealed class AppUpdateService
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromMinutes(30));
-            using var request = new HttpRequestMessage(HttpMethod.Get, update.DownloadUri);
-            using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
-                .ConfigureAwait(false);
+            using var response = await GetAssetResponseAsync(update.DownloadUri, timeout.Token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
             var total = response.Content.Headers.ContentLength ?? update.DownloadSize;
@@ -145,11 +147,16 @@ public sealed class AppUpdateService
             }
 
             progress?.Report(new AppUpdateDownloadProgress(96, "Verifica SHA-256…"));
-            var actualSha256 = await ComputeSha256Async(partialPath, cancellationToken).ConfigureAwait(false);
+            File.Move(partialPath, finalPath);
+            // Keep the same bytes read-locked through digest, trust evaluation and launch.
+            using var candidate = File.OpenRead(finalPath);
+            var actualSha256 = Convert.ToHexString(await SHA256.HashDataAsync(candidate, cancellationToken).ConfigureAwait(false));
             if (!actualSha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Il file scaricato non ha superato la verifica SHA-256.");
 
-            File.Move(partialPath, finalPath, true);
+            var targetPath = Environment.ProcessPath
+                ?? throw new InvalidOperationException("Il percorso dell'eseguibile in uso non è disponibile.");
+            await ReleasePublisherVerifier.VerifyDownloadAsync(targetPath, finalPath, candidate, update, this, cancellationToken).ConfigureAwait(false);
             progress?.Report(new AppUpdateDownloadProgress(100, "Download verificato · preparazione del riavvio…"));
             if (update.IsInstallerPackage)
             {
@@ -160,8 +167,6 @@ public sealed class AppUpdateService
                 return;
             }
 
-            var targetPath = Environment.ProcessPath
-                ?? throw new InvalidOperationException("Il percorso dell'eseguibile in uso non è disponibile.");
             if (!IsSupportedUpdateTargetName(Path.GetFileName(targetPath)))
                 throw new InvalidOperationException("Il nome dell'eseguibile non consente un aggiornamento automatico sicuro.");
 
@@ -190,15 +195,23 @@ public sealed class AppUpdateService
 
     public static int ApplyUpdate(string targetPathArgument, int parentProcessId, string version)
     {
+        // The legacy process delegates replacement to this executable. If its
+        // apphost cannot start, it never reaches the replacement code.
+        if (!SelfUpdateCompatibility.IsSupported()) return 1;
+
         string? targetPath = null;
         string? backupPath = null;
         string? stagedPath = null;
+        byte[]? originalHash = null;
+        bool stagedCreated = false;
         try
         {
             var updaterPath = Path.GetFullPath(Environment.ProcessPath
                 ?? throw new InvalidOperationException("Percorso del programma di aggiornamento non disponibile."));
             var updatesRoot = Path.GetFullPath(AppPaths.UpdatesDirectory) + Path.DirectorySeparatorChar;
-            if (!updaterPath.StartsWith(updatesRoot, StringComparison.OrdinalIgnoreCase))
+            if (parentProcessId <= 0 || version != GetInstalledVersion().ToString() ||
+                !Path.GetDirectoryName(updaterPath)!.Equals(Path.TrimEndingDirectorySeparator(updatesRoot), StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFileName(updaterPath).Equals($"UpdateCenter-v{version}-Portable.exe", StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("Il programma di aggiornamento non proviene dalla cartella autorizzata.");
 
             targetPath = Path.GetFullPath(targetPathArgument);
@@ -207,86 +220,121 @@ public sealed class AppUpdateService
                 updaterPath.Equals(targetPath, StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("Percorso di destinazione dell'aggiornamento non valido.");
 
-            WaitForParentExit(parentProcessId);
+            WaitForParentExit(parentProcessId, targetPath);
             if (!File.Exists(targetPath))
                 throw new FileNotFoundException("L'eseguibile installato non è stato trovato.", targetPath);
 
-            var targetDirectory = Path.GetDirectoryName(targetPath)
-                ?? throw new InvalidOperationException("Cartella di installazione non valida.");
+            using var updater = File.OpenRead(updaterPath);
+            using (var installed = File.OpenRead(targetPath))
+            {
+                ReleasePublisherVerifier.VerifyReplacementAsync(targetPath, installed, updaterPath, updater, version,
+                    new AppUpdateService()).GetAwaiter().GetResult();
+                installed.Position = 0;
+                originalHash = SHA256.HashData(installed);
+            }
+
             backupPath = targetPath + ".update-backup";
-            stagedPath = targetPath + ".update-new";
-            TryDelete(backupPath);
-            TryDelete(stagedPath);
-
-            File.Copy(updaterPath, stagedPath, true);
-            MoveWithRetries(targetPath, backupPath, false);
-            try
+            stagedPath = targetPath + ".update-new-" + Guid.NewGuid().ToString("N");
+            using (var staged = new FileStream(stagedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                MoveWithRetries(stagedPath, targetPath, false);
-                var sourceHash = ComputeSha256(updaterPath);
-                var installedHash = ComputeSha256(targetPath);
-                if (!sourceHash.Equals(installedHash, StringComparison.OrdinalIgnoreCase))
+                stagedCreated = true;
+                updater.Position = 0;
+                updater.CopyTo(staged);
+            }
+            updater.Position = 0;
+            var expected = SHA256.HashData(updater);
+            PortableUpdateTransaction.Apply(targetPath, stagedPath, backupPath, originalHash, expected, () =>
+            {
+                using var installed = File.OpenRead(targetPath);
+                if (!expected.AsSpan().SequenceEqual(SHA256.HashData(installed)))
                     throw new InvalidDataException("Verifica dell'eseguibile sostituito non riuscita.");
-
-                StartUpdatedApplication(targetPath, backupPath, updaterPath, version);
-                LogService.Write($"Aggiornamento dell'app v{version} applicato correttamente.");
-                return 0;
-            }
-            catch
-            {
-                RestoreBackup(targetPath, backupPath);
-                throw;
-            }
+                PortableUpdateStartup.WaitForWindow(targetPath, backupPath, updaterPath, version);
+            });
+            LogService.Write($"Aggiornamento dell'app v{version} applicato correttamente.");
+            return 0;
         }
         catch (Exception ex)
         {
-            LogService.Write($"Applicazione dell'aggiornamento app v{version} non riuscita; ripristino della versione precedente.", ex);
-            if (targetPath is not null && backupPath is not null)
-                RestoreBackup(targetPath, backupPath);
-            if (stagedPath is not null) TryDelete(stagedPath);
-            if (targetPath is not null && File.Exists(targetPath))
+            LogService.Write($"Applicazione dell'aggiornamento app v{version} non riuscita.", ex);
+            if (stagedCreated && stagedPath is not null) TryDelete(stagedPath);
+            if (originalHash is not null && targetPath is not null && !File.Exists(backupPath) && File.Exists(targetPath))
             {
-                try { Process.Start(new ProcessStartInfo(targetPath) { UseShellExecute = false }); } catch { }
+                try
+                {
+                    using var restartTarget = File.OpenRead(targetPath);
+                    if (!originalHash.AsSpan().SequenceEqual(SHA256.HashData(restartTarget))) return 1;
+                    Process.Start(new ProcessStartInfo(targetPath)
+                    {
+                        WorkingDirectory = Path.GetDirectoryName(targetPath)!,
+                        UseShellExecute = false
+                    })?.Dispose();
+                }
+                catch { }
             }
             return 1;
         }
     }
 
-    public static void ScheduleSuccessfulUpdateCleanup(string backupPathArgument, string updaterPathArgument, string version)
+    internal static bool IsValidStartupConfirmation(string[] args)
     {
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var currentPath = Path.GetFullPath(Environment.ProcessPath ?? "");
-                var backupPath = Path.GetFullPath(backupPathArgument);
-                var updaterPath = Path.GetFullPath(updaterPathArgument);
-                var expectedBackup = currentPath + ".update-backup";
-                var updatesRoot = Path.GetFullPath(AppPaths.UpdatesDirectory) + Path.DirectorySeparatorChar;
-                if (!backupPath.Equals(expectedBackup, StringComparison.OrdinalIgnoreCase) ||
-                    !updaterPath.StartsWith(updatesRoot, StringComparison.OrdinalIgnoreCase))
-                    return;
+        var currentPath = Environment.ProcessPath;
+        return currentPath is not null && args[3] == GetInstalledVersion().ToString() &&
+            args[1].Equals(currentPath + ".update-backup", StringComparison.OrdinalIgnoreCase) &&
+            args[2].Equals(Path.Combine(AppPaths.UpdatesDirectory, $"UpdateCenter-v{args[3]}-Portable.exe"),
+                StringComparison.OrdinalIgnoreCase) &&
+            PortableUpdateStartup.IsValidName(args[4]);
+    }
 
-                await Task.Delay(1500).ConfigureAwait(false);
-                await DeleteWithRetriesAsync(backupPath).ConfigureAwait(false);
-                await DeleteWithRetriesAsync(updaterPath).ConfigureAwait(false);
-                TryDelete(currentPath + ".update-new");
-                LogService.Write($"Pulizia dell'aggiornamento app v{version} completata.");
-            }
-            catch (Exception ex)
-            {
-                LogService.Write("Pulizia dei file dell'aggiornamento app non completata.", ex);
-            }
-        });
+    internal async Task VerifyOfficialAssetAsync(string version, bool setup, string path, Stream file, CancellationToken cancellationToken)
+    {
+        if (!SemanticVersion.TryParse(version, out var parsed) || parsed.ToString() != version)
+            throw new InvalidDataException("Versione dell'asset non valida.");
+        var info = FileVersionInfo.GetVersionInfo(path);
+        if (info.ProductVersion?.Trim() != version || info.FileVersion?.Trim() != version + ".0")
+            throw new InvalidDataException("Versione del file di aggiornamento inattesa.");
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        var token = deadline.Token;
+        var tag = $"v{version}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, ReleaseApi + tag);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        await using var body = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        var release = await JsonSerializer.DeserializeAsync<GitHubRelease>(body, JsonOptions, token).ConfigureAwait(false);
+        if (release is null || release.TagName != tag || release.Draft || release.Prerelease ||
+            release.HtmlUrl != ReleasePage + "tag/" + tag)
+            throw new InvalidDataException("Release ufficiale stabile non verificata.");
+
+        var name = AssetName(version, setup);
+        var asset = ExactUploadedAsset(release, tag, name);
+        var checksum = ExactUploadedAsset(release, tag, name + ".sha256");
+        var apiDigest = NormalizeApiDigest(asset.Digest);
+        if (apiDigest is null || asset.Size <= 0 || asset.Size > 512L * 1024 * 1024 || asset.Size != file.Length)
+            throw new InvalidDataException("Digest o dimensione GitHub non verificabile.");
+
+        var sidecar = await DownloadChecksumTextAsync(new Uri(checksum.BrowserDownloadUrl), token).ConfigureAwait(false);
+        if (!sidecar.TrimEnd('\r', '\n').Equals($"{apiDigest}  {name}", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Checksum dell'asset GitHub non coerente.");
+        file.Position = 0;
+        var actual = Convert.ToHexString(await SHA256.HashDataAsync(file, token).ConfigureAwait(false));
+        if (actual != apiDigest) throw new InvalidDataException("Il file non coincide con l'asset GitHub ufficiale.");
     }
 
     private async Task<string> DownloadExpectedSha256Async(Uri uri, CancellationToken cancellationToken)
     {
+        var text = await DownloadChecksumTextAsync(uri, cancellationToken).ConfigureAwait(false);
+        var match = Sha256Pattern.Match(text);
+        if (!match.Success)
+            throw new InvalidDataException("Il file SHA-256 pubblicato non è valido.");
+        return match.Value.ToUpperInvariant();
+    }
+
+    private async Task<string> DownloadChecksumTextAsync(Uri uri, CancellationToken cancellationToken)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(20));
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
-            .ConfigureAwait(false);
+        using var response = await GetAssetResponseAsync(uri, timeout.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         if (response.Content.Headers.ContentLength is > 32 * 1024)
             throw new InvalidDataException("Il file SHA-256 pubblicato è troppo grande.");
@@ -301,11 +349,22 @@ public sealed class AppUpdateService
                 throw new InvalidDataException("Il file SHA-256 pubblicato è troppo grande.");
             memory.Write(buffer, 0, read);
         }
-        var text = Encoding.UTF8.GetString(memory.ToArray());
-        var match = Sha256Pattern.Match(text);
-        if (!match.Success)
-            throw new InvalidDataException("Il file SHA-256 pubblicato non è valido.");
-        return match.Value.ToUpperInvariant();
+        return Encoding.UTF8.GetString(memory.ToArray());
+    }
+
+    private async Task<HttpResponseMessage> GetAssetResponseAsync(Uri uri, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+        var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        if ((int)response.StatusCode is not (301 or 302 or 303 or 307 or 308)) return response;
+        var location = response.Headers.Location;
+        response.Dispose();
+        if (location is null || !location.IsAbsoluteUri || location.Scheme != Uri.UriSchemeHttps ||
+            !location.IsDefaultPort || location.UserInfo.Length != 0 || location.Fragment.Length != 0 ||
+            location.Host is not ("release-assets.githubusercontent.com" or "objects.githubusercontent.com"))
+            throw new InvalidDataException("Redirect dell'asset GitHub non consentito.");
+        using var redirected = new HttpRequestMessage(HttpMethod.Get, location);
+        return await _httpClient.SendAsync(redirected, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
     }
 
     private static SemanticVersion GetInstalledVersion()
@@ -334,13 +393,26 @@ public sealed class AppUpdateService
         return installerStart;
     }
 
-    private static Uri ValidateGitHubDownloadUri(string value)
+    private static string AssetName(string version, bool setup) => setup
+        ? $"UpdateCenter-Setup-v{version}.exe"
+        : $"UpdateCenter-v{version}-Portable.exe";
+
+    private static string AssetUrl(string tag, string name) => $"{ReleasePage}download/{tag}/{name}";
+
+    private static Uri ExactAssetUri(GitHubAsset asset, string tag, string name)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            uri.Scheme != Uri.UriSchemeHttps ||
-            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        if (asset.BrowserDownloadUrl != AssetUrl(tag, name))
             throw new InvalidDataException("La Release contiene un collegamento di download non consentito.");
-        return uri;
+        return new Uri(asset.BrowserDownloadUrl);
+    }
+
+    private static GitHubAsset ExactUploadedAsset(GitHubRelease release, string tag, string name)
+    {
+        var assets = release.Assets.Where(asset => asset.Name == name).ToArray();
+        if (assets.Length != 1 || assets[0].State != "uploaded")
+            throw new InvalidDataException("Asset GitHub ufficiale mancante o ambiguo.");
+        _ = ExactAssetUri(assets[0], tag, name);
+        return assets[0];
     }
 
     private static Uri ValidateGitHubPageUri(string value)
@@ -358,21 +430,6 @@ public sealed class AppUpdateService
             return null;
         var value = digest[7..].Trim();
         return Sha256Pattern.IsMatch(value) && value.Length == 64 ? value.ToUpperInvariant() : null;
-    }
-
-    private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
-    {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 128, true);
-        using var sha256 = SHA256.Create();
-        var hash = await sha256.ComputeHashAsync(stream, cancellationToken).ConfigureAwait(false);
-        return Convert.ToHexString(hash);
-    }
-
-    private static string ComputeSha256(string path)
-    {
-        using var stream = File.OpenRead(path);
-        using var sha256 = SHA256.Create();
-        return Convert.ToHexString(sha256.ComputeHash(stream));
     }
 
     private static bool IsSupportedUpdateTargetName(string fileName) =>
@@ -395,48 +452,28 @@ public sealed class AppUpdateService
             .Equals(localPrograms.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void WaitForParentExit(int processId)
+    private static void WaitForParentExit(int processId, string targetPath)
     {
-        if (processId <= 0) return;
         try
         {
             using var process = Process.GetProcessById(processId);
+            if (process.HasExited) return;
+            string? processPath;
+            try { processPath = process.MainModule?.FileName; }
+            catch (Exception ex) when ((ex is InvalidOperationException or System.ComponentModel.Win32Exception) && process.HasExited)
+            {
+                // The 1.1.5 window can close while its image is being inspected.
+                return;
+            }
+            if (processPath is null && process.HasExited) return;
+            if (processPath is null || !Path.GetFullPath(processPath).Equals(targetPath, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Il processo precedente non corrisponde alla destinazione.");
             if (!process.WaitForExit(60_000))
                 throw new TimeoutException("Update Center non si è chiuso entro il tempo previsto.");
         }
         catch (ArgumentException)
         {
             // Il processo è già terminato.
-        }
-    }
-
-    private static void StartUpdatedApplication(string targetPath, string backupPath, string updaterPath, string version)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = targetPath,
-            WorkingDirectory = Path.GetDirectoryName(targetPath)!,
-            UseShellExecute = false
-        };
-        startInfo.ArgumentList.Add("--update-complete");
-        startInfo.ArgumentList.Add(backupPath);
-        startInfo.ArgumentList.Add(updaterPath);
-        startInfo.ArgumentList.Add(version);
-        _ = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("La nuova versione non è stata riavviata.");
-    }
-
-    private static void RestoreBackup(string targetPath, string backupPath)
-    {
-        try
-        {
-            if (!File.Exists(backupPath)) return;
-            DeleteWithRetries(targetPath);
-            MoveWithRetries(backupPath, targetPath, true);
-        }
-        catch (Exception ex)
-        {
-            LogService.Write("Ripristino del vecchio eseguibile non riuscito.", ex);
         }
     }
 
@@ -448,56 +485,6 @@ public sealed class AppUpdateService
                 TryDelete(path);
         }
         catch { }
-    }
-
-    private static async Task DeleteWithRetriesAsync(string path)
-    {
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            try
-            {
-                if (!File.Exists(path)) return;
-                File.Delete(path);
-                return;
-            }
-            catch when (attempt < 7)
-            {
-                await Task.Delay(500).ConfigureAwait(false);
-            }
-        }
-    }
-
-    private static void DeleteWithRetries(string path)
-    {
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            try
-            {
-                if (!File.Exists(path)) return;
-                File.Delete(path);
-                return;
-            }
-            catch (Exception) when (attempt < 7)
-            {
-                Thread.Sleep(400);
-            }
-        }
-    }
-
-    private static void MoveWithRetries(string source, string destination, bool overwrite)
-    {
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            try
-            {
-                File.Move(source, destination, overwrite);
-                return;
-            }
-            catch (Exception) when (attempt < 7)
-            {
-                Thread.Sleep(400);
-            }
-        }
     }
 
     private static void TryDelete(string path)
@@ -526,6 +513,7 @@ public sealed class AppUpdateService
 
     private sealed class GitHubAsset
     {
+        [JsonPropertyName("state")] public string State { get; set; } = "";
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("browser_download_url")] public string BrowserDownloadUrl { get; set; } = "";
         [JsonPropertyName("size")] public long Size { get; set; }

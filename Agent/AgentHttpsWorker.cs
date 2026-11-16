@@ -130,7 +130,7 @@ public sealed class AgentHttpsWorker(
             System.Security.Cryptography.X509Certificates.X509Certificate2 controllerCertificate;
             try
             {
-                controllerCertificate = new System.Security.Cryptography.X509Certificates.X509Certificate2(
+                controllerCertificate = X509CertificateLoader.LoadCertificate(
                     Convert.FromBase64String(request.ControllerCertificateBase64));
                 using var publicKey = controllerCertificate.GetRSAPublicKey();
                 if (publicKey is null || controllerCertificate.NotAfter.ToUniversalTime() <= DateTime.UtcNow)

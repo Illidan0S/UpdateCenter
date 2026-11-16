@@ -4,56 +4,171 @@ using UpdateCenter.Models;
 
 namespace UpdateCenter.Services;
 
+internal delegate Task<ProcessResult> WinGetCommand(
+    IReadOnlyList<string> arguments, CancellationToken cancellationToken, TimeSpan timeout);
+
 public sealed class WinGetService
 {
-    private readonly WinGetManifestSafetyService _manifestSafety = new();
+    private readonly WinGetCommand _execute;
+
+    public WinGetService() : this(ExecuteAsync) { }
+    internal WinGetService(WinGetCommand execute, WinGetManifestSafetyService? manifestSafety = null)
+    {
+        _execute = execute;
+        _manifestSafety = manifestSafety ?? new();
+    }
+
+    internal static Task<ProcessResult> ExecuteAsync(
+        IReadOnlyList<string> arguments, CancellationToken cancellationToken, TimeSpan timeout) =>
+        ProcessRunner.RunAsync(ResolveClientExecutable(), arguments, cancellationToken, timeout);
+
+    internal static string ResolveClientExecutable()
+    {
+        var packages = new Windows.Management.Deployment.PackageManager().FindPackagesForUserWithPackageTypes(
+            "", "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe", Windows.Management.Deployment.PackageTypes.Main).ToArray();
+        if (packages.Length != 1 || packages[0].SignatureKind != Windows.ApplicationModel.PackageSignatureKind.Store ||
+            packages[0].Id.Publisher != "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US")
+            throw new InvalidOperationException("Microsoft App Installer identity could not be verified.");
+        return Path.Combine(packages[0].InstalledLocation.Path, "winget.exe");
+    }
+
+    private static WinGetCommand NativeCommand(PlanItem item) => async (arguments, token, timeout) =>
+    {
+        var executable = ResolveClientExecutable();
+        return await ExecutePinnedAsync(item, arguments, token, timeout,
+            (args, ct, limit) => ProcessRunner.RunAsync(executable, args, ct, limit)).ConfigureAwait(false);
+    };
+
+    internal static async Task<ProcessResult> ExecutePinnedAsync(PlanItem item, IReadOnlyList<string> arguments,
+        CancellationToken token, TimeSpan timeout, WinGetCommand execute)
+    {
+        if (arguments[0] is "upgrade" or "install")
+        {
+            var expected = item.WinGetClientVersion.Length > 0 ? item.WinGetClientVersion : item.WinGetBinding?.ClientVersion;
+            var current = await execute(["--version"], token, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+            if (!current.Success || string.IsNullOrEmpty(expected) || current.StandardOutput.Trim() != expected ||
+                WinGetScopeGuard.ClientCompatibilityMessage(expected) is not null)
+                return new ProcessResult(1, "", "WinGet changed after consent. A new scan and consent are required.") { PreflightRejected = true };
+        }
+        token.ThrowIfCancellationRequested();
+        return await execute(arguments, token, timeout).ConfigureAwait(false);
+    }
+
+    private readonly WinGetManifestSafetyService _manifestSafety;
     private const int ShellExecuteInstallFailed = unchecked((int)0x8A150006);
     private const int UpdateNotApplicable = unchecked((int)0x8A15002B);
     private const int UpdateInstallTechnologyMismatch = unchecked((int)0x8A15008E);
     private const int InstallUpgradeNotSupported = unchecked((int)0x8A150114);
+    private const int PackagedServiceRequiresAdministrator = unchecked((int)0x80073D28);
     private static readonly Regex AnsiEscape = new("\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])", RegexOptions.Compiled);
     private static readonly Regex DividerLine = new("^\\s*-{10,}\\s*$", RegexOptions.Compiled);
     private static readonly Regex HeaderToken = new("\\S+", RegexOptions.Compiled);
 
     public async Task<IReadOnlyList<UpdateItem>> ScanAsync(bool includeUnknown, CancellationToken cancellationToken)
     {
+        using var scan = ScanDiagnostics.Begin("winget.scan", cancellationToken);
+        string clientVersion;
+        using (var phase = ScanDiagnostics.Begin("winget.identify", cancellationToken))
+        {
+            clientVersion = await IdentifyClientAsync(cancellationToken).ConfigureAwait(false);
+            phase?.Complete();
+        }
         var arguments = BuildScanArguments(includeUnknown);
-        var result = await ProcessRunner.RunAsync(
-            "winget.exe", arguments, cancellationToken, TimeSpan.FromMinutes(5));
+        ProcessResult result;
+        using (var phase = ScanDiagnostics.Begin("winget.search", cancellationToken))
+        {
+            result = await _execute(arguments, cancellationToken, TimeSpan.FromMinutes(5)).ConfigureAwait(false);
+            // This interval measures command completion. The scan below distinguishes
+            // valid no-updates exit codes from incomplete or failed searches.
+            ScanDiagnostics.Count("winget.search-nonzero-exit", result.Success ? 0 : 1);
+            phase?.Complete();
+        }
 
         var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
         LogService.Write($"Scansione WinGet terminata con codice {result.ExitCode}.");
 
         var parsed = ParseUpgradeTable(output);
+        ScanDiagnostics.Count("winget.parsed-candidates", parsed.Count);
         if (parsed.Count > 0)
         {
-            var installedRows = await ReadInstalledInventoryAsync(cancellationToken);
+            List<WinGetPackageRow> installedRows;
+            using (var phase = ScanDiagnostics.Begin("winget.installed-inventory", cancellationToken))
+            {
+                installedRows = await ReadInstalledInventoryAsync(cancellationToken).ConfigureAwait(false);
+                ScanDiagnostics.Count("winget.installed-rows", installedRows.Count);
+                phase?.Complete();
+            }
             var verified = FilterVerifiedInstalledCandidates(parsed, installedRows);
             var rejectedCount = parsed.Count - verified.Count;
+            ScanDiagnostics.Count("winget.unverified-or-duplicate", rejectedCount);
             if (rejectedCount > 0)
                 LogService.Write($"Esclusi {rejectedCount} candidati WinGet senza un'installazione locale verificata.");
             var applicable = WinGetApplicabilityStore.ExcludeSuppressed(verified).ToList();
+            foreach (var item in applicable) item.WinGetClientVersion = clientVersion;
             var suppressedCount = verified.Count - applicable.Count;
+            ScanDiagnostics.Count("winget.suppressed", suppressedCount);
             if (suppressedCount > 0)
                 LogService.Write($"Esclusi {suppressedCount} aggiornamenti WinGet già verificati come non applicabili per le stesse versioni.");
-            await PreparePackageMetadataAsync(applicable, cancellationToken);
+            using (var phase = ScanDiagnostics.Begin("winget.metadata", cancellationToken))
+            {
+                await PreparePackageMetadataAsync(applicable, cancellationToken).ConfigureAwait(false);
+                if (WinGetScopeGuard.ClientCompatibilityMessage(clientVersion) is { } rejection)
+                {
+                    foreach (var item in applicable.Where(x => x.CanInstall && x.PackageOperation == PackageOperations.Upgrade &&
+                                 WinGetScopeGuard.IsOfficialSource(x.Source)))
+                    {
+                        item.CanInstall = false;
+                        item.IsSelected = false;
+                        item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
+                        item.ResultDetails = rejection;
+                    }
+                }
+                phase?.Complete();
+            }
+            ScanDiagnostics.Count("winget.returned", applicable.Count);
+            scan?.Complete(result.Success ? "success" : "partial");
             return applicable;
         }
 
         if (!result.Success && !ContainsNoUpdatesMessage(output))
             throw new InvalidOperationException(SummarizeError(output, "WinGet non ha completato la scansione."));
 
+        ScanDiagnostics.Count("winget.returned", 0);
+        scan?.Complete();
         return [];
     }
 
-    private static async Task<List<WinGetPackageRow>> ReadInstalledInventoryAsync(
+    private async Task<string> IdentifyClientAsync(CancellationToken cancellationToken)
+    {
+        var unavailable = LocalizationService.Text(
+            "Impossibile identificare la versione di WinGet. Verifica Installazione app di Microsoft.",
+            "Could not identify the WinGet version. Check Microsoft App Installer.");
+        ProcessResult result;
+        try
+        {
+            result = await _execute(["--version"], cancellationToken, TimeSpan.FromSeconds(15)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+        {
+            throw new InvalidOperationException(unavailable, ex);
+        }
+        var version = Normalize(result.StandardOutput).Trim();
+        if (!result.Success || !IsClientVersion(version))
+            throw new InvalidOperationException(unavailable);
+        LogService.Write($"WinGet {version}");
+        return result.StandardOutput.Trim();
+    }
+
+    internal static bool IsClientVersion(string version) =>
+        Regex.IsMatch(version, @"\Av?[0-9]+(?:\.[0-9]+){1,3}(?:[-+][a-zA-Z0-9.+-]+)?\z");
+
+    private async Task<List<WinGetPackageRow>> ReadInstalledInventoryAsync(
         CancellationToken cancellationToken)
     {
-        var result = await ProcessRunner.RunAsync(
-            "winget.exe",
+        var result = await _execute(
             ["list", "--accept-source-agreements", "--disable-interactivity", "--nowarn"],
             cancellationToken,
-            TimeSpan.FromMinutes(5));
+            TimeSpan.FromMinutes(5)).ConfigureAwait(false);
         var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
         if (!result.Success)
             throw new InvalidOperationException(SummarizeError(
@@ -71,117 +186,147 @@ public sealed class WinGetService
         IEnumerable<UpdateItem> candidates,
         IEnumerable<WinGetPackageRow> installedRows)
     {
-        var installedIds = installedRows
+        var installedCounts = installedRows
             .Where(row => IsSafePackageId(row.Id))
-            .Select(row => row.Id)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .GroupBy(row => row.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
 
         return candidates
-            .Where(candidate => IsSafePackageId(candidate.Id) && installedIds.Contains(candidate.Id))
+            .Where(candidate => IsSafePackageId(candidate.Id) && installedCounts.ContainsKey(candidate.Id))
             .GroupBy(candidate => candidate.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
+            .Select(group =>
+            {
+                var candidate = group.First();
+                if (installedCounts[candidate.Id] > 1)
+                {
+                    candidate.CanInstall = false;
+                    candidate.IsSelected = false;
+                    candidate.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
+                    candidate.ResultDetails = LocalizationService.Text(
+                        "WinGet rileva più installazioni per lo stesso ID. Il percorso attuale non identifica una copia univoca da aggiornare.",
+                        "WinGet reports multiple installations for the same ID. The current execution path does not identify a unique copy to upgrade.");
+                }
+                return candidate;
+            })
             .ToList();
     }
 
     public Task PreparePackageMetadataAsync(
         IReadOnlyList<UpdateItem> items, CancellationToken cancellationToken) =>
-        _manifestSafety.ApplyAsync(items, cancellationToken);
+        _manifestSafety.ApplyAsync(items, cancellationToken, _execute);
 
     public async Task<WinGetPackageAvailability?> ResolveInstallablePackageAsync(
         string packageId, CancellationToken cancellationToken)
     {
         if (!IsSafePackageId(packageId)) return null;
-        var result = await ProcessRunner.RunAsync("winget.exe",
+        var result = await _execute(
             ["show", "--id", packageId, "--exact", "--source", "winget",
                 "--accept-source-agreements", "--disable-interactivity", "--nowarn"],
             cancellationToken, TimeSpan.FromMinutes(2));
         if (!result.Success) return null;
 
-        var output = Normalize(result.StandardOutput + Environment.NewLine + result.StandardError);
-        var match = Regex.Match(output,
-            @"(?im)^\s*(?:Version|Versione)\s*:\s*(?<version>[^\r\n]+?)\s*$");
-        var version = match.Success ? match.Groups["version"].Value.Trim() : "Più recente";
-        return new WinGetPackageAvailability(packageId, version);
+        return ParsePackageAvailability(packageId, result.StandardOutput);
     }
 
-    public static ProcessResult Install(PlanItem item, bool silent)
+    internal static WinGetPackageAvailability? ParsePackageAvailability(string packageId, string output)
     {
-        if (!IsSafePackageId(item.Id))
-            return new ProcessResult(1, "", "Identificativo WinGet non valido.", "winget install");
+        var match = Regex.Match(Normalize(output),
+            @"(?im)^(?:Version|Versione)[ \t]*:[ \t]*(?<version>[^\r\n]*)");
+        var version = match.Groups["version"].Value.Trim(' ');
+        return IsExactPackageVersion(version) ? new WinGetPackageAvailability(packageId, version) : null;
+    }
+
+    public static ProcessResult Install(PlanItem item, bool silent) => Install(item, silent, NativeCommand(item));
+
+    internal static ProcessResult Install(PlanItem item, bool silent, WinGetCommand execute,
+        CancellationToken token = default, Action<string>? phase = null)
+    {
+        if (item.WinGetBinding is not null || item.WinGetVerification is not null) return new(1, "", "Scoped upgrades cannot fall back to install.") { PreflightRejected = true };
+        if (ValidateTarget(item) is { } failure) return failure with { PreflightRejected = true };
         var arguments = new List<string>
         {
-            "install", "--id", item.Id, "--exact", "--source", "winget",
+            "install", "--id", item.Id, "--exact", "--version", item.AvailableVersion, "--source", item.Source,
             "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity", "--nowarn"
         };
         if (silent) arguments.Add("--silent");
-        return ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
+        token.ThrowIfCancellationRequested();
+        phase?.Invoke("winget-installer");
+        token.ThrowIfCancellationRequested();
+        return execute(arguments, token, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
     }
 
-    public static ProcessResult Upgrade(PlanItem item, bool silent)
-    {
-        var attempts = new List<ProcessResult>();
-        var first = RunUpgrade(item, silent, useSource: true, useName: false, interactive: false);
-        attempts.Add(first);
-        if (first.Success)
-            return first;
+    public static ProcessResult Upgrade(PlanItem item, bool silent) => Upgrade(item, silent, default, null);
 
-        if (silent && first.ExitCode == ShellExecuteInstallFailed)
+    internal static ProcessResult Upgrade(PlanItem item, bool silent, CancellationToken token, Action<string>? phase)
+    {
+        var execute = NativeCommand(item);
+        return Upgrade(item, silent, execute, WinGetScopeGuard.Native(execute), token, phase);
+    }
+
+    internal static ProcessResult Upgrade(PlanItem item, bool silent, WinGetCommand execute, WinGetScopeGuard? guard = null,
+        CancellationToken token = default, Action<string>? phase = null)
+    {
+        token.ThrowIfCancellationRequested();
+        if (ValidateTarget(item) is { } failure) return failure with { PreflightRejected = true };
+        phase?.Invoke("winget-preflight");
+        if (guard is not null && guard.ValidateAsync(item, token).GetAwaiter().GetResult() is { } rejected)
+            return rejected with { PreflightRejected = true };
+        if ((item.WinGetBinding is not null || item.WinGetVerification is not null) && guard is null) return new(1, "", "Scoped execution requires revalidation.") { PreflightRejected = true };
+        token.ThrowIfCancellationRequested();
+        phase?.Invoke("winget-installer");
+        token.ThrowIfCancellationRequested();
+        var first = RunUpgrade(item, silent, execute, token);
+        if (first.Success) return first;
+
+        if ((silent && first.ExitCode == ShellExecuteInstallFailed) || IsInstalledPackageMatchFailure(first))
         {
-            var installed = QueryInstalled("--id", item.Id);
-            attempts.Add(installed.Result);
-            var installedRow = installed.Rows.FirstOrDefault(x =>
-                x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
-            if (installedRow is not null && IsVersionAtLeast(installedRow.InstalledVersion, item.AvailableVersion))
-                return AlreadyCurrent(attempts, item, installedRow.InstalledVersion);
+            // Read-only reconciliation can recognize a target installed concurrently. Never retry
+            // execution without the approved source/ID or substitute a name-based catalog match.
+            // Native/protected paths retain the real installer exit code. Their
+            // independent verifier can confirm a target without rewriting execution.
+            if (guard is not null || item.WinGetBinding is not null || item.WinGetVerification is not null) return first;
+            phase?.Invoke("winget-verification");
+            var installed = RunnerReadOnlyWait.RunAsync(ct => Task.FromResult(
+                QueryInstalled("--id", item.Id, execute, TimeSpan.FromSeconds(45), source: item.Source, token: ct)),
+                token, TimeSpan.FromSeconds(60), "winget-reconciliation").GetAwaiter().GetResult();
+            var attempts = new List<ProcessResult> { first, installed.Result };
+            if (EvaluateInstalledQuery(item, installed.Result, installed.Rows).Verified)
+                return AlreadyCurrent(attempts, item, installed.Rows.First(x =>
+                    x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase)).InstalledVersion);
             return CombineAttempts(attempts, first.ExitCode);
         }
-
-        if (!IsInstalledPackageMatchFailure(first))
-            return first;
-
-        // La sorgente può impedire a WinGet di correlare un'app installata per utente.
-        var withoutSource = RunUpgrade(item, silent, useSource: false, useName: false, interactive: false);
-        attempts.Add(withoutSource);
-        if (withoutSource.Success)
-            return CombineAttempts(attempts, withoutSource.ExitCode);
-
-        if (!IsInstalledPackageMatchFailure(withoutSource))
-            return CombineAttempts(attempts, withoutSource.ExitCode);
-
-        var installedById = QueryInstalled("--id", item.Id);
-        attempts.Add(installedById.Result);
-        var idRow = installedById.Rows.FirstOrDefault(x =>
-            x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
-        if (idRow is not null && IsVersionAtLeast(idRow.InstalledVersion, item.AvailableVersion))
-            return AlreadyCurrent(attempts, item, idRow.InstalledVersion);
-
-        // Alcuni pacchetti WinGet sono elencati correttamente ma non sono più correlabili tramite ID.
-        // Il ripiego sul nome è consentito solo con una singola identità esatta; righe duplicate
-        // dello stesso ID e della stessa versione vengono considerate una sola corrispondenza.
-        var installedByName = QueryInstalled("--name", item.Name);
-        attempts.Add(installedByName.Result);
-        var exactNameRow = ResolveExactInstalledMatch(installedByName.Rows, item.Name, item.Id);
-        if (exactNameRow is not null)
-        {
-            if (IsVersionAtLeast(exactNameRow.InstalledVersion, item.AvailableVersion))
-                return AlreadyCurrent(attempts, item, exactNameRow.InstalledVersion);
-
-            var byName = RunUpgrade(item, silent, useSource: false, useName: true, interactive: false);
-            attempts.Add(byName);
-            return CombineAttempts(attempts, byName.ExitCode);
-        }
-
-        return CombineAttempts(attempts, withoutSource.ExitCode);
+        return first;
     }
 
-    public static ProcessResult RunInteractive(PlanItem item)
+    public static ProcessResult RunInteractive(PlanItem item) => RunInteractive(item, default, null);
+
+    internal static ProcessResult RunInteractive(PlanItem item, CancellationToken token, Action<string>? phase)
     {
-        if (!IsSafePackageId(item.Id))
-            return new ProcessResult(1, "", "Identificativo WinGet non valido.", "winget interactive");
+        var execute = NativeCommand(item);
+        return RunInteractive(item, execute, WinGetScopeGuard.Native(execute), token, phase);
+    }
+
+    internal static ProcessResult Install(PlanItem item, bool silent, CancellationToken token, Action<string>? phase) =>
+        Install(item, silent, NativeCommand(item), token, phase);
+
+    internal static ProcessResult RunInteractive(PlanItem item, WinGetCommand execute, WinGetScopeGuard? guard = null,
+        CancellationToken token = default, Action<string>? phase = null)
+    {
+        token.ThrowIfCancellationRequested();
+        if (ValidateTarget(item) is { } failure) return failure with { PreflightRejected = true };
+        if (item.WinGetBinding?.PythonBurnTransition is not null)
+            return new(1, "", LocalizationService.Text(
+                "Questo upgrade Python richiede le opzioni vincolate del piano; l'installer interattivo non è disponibile.",
+                "This Python upgrade requires the plan's fixed options; the interactive installer is unavailable.")) { PreflightRejected = true };
+        phase?.Invoke("winget-preflight");
+        if (guard is not null && guard.ValidateAsync(item, token).GetAwaiter().GetResult() is { } rejected)
+            return rejected with { PreflightRejected = true };
+        if ((item.WinGetBinding is not null || item.WinGetVerification is not null) && guard is null) return new(1, "", "Scoped execution requires revalidation.") { PreflightRejected = true };
         var arguments = BuildInteractiveArguments(item);
-        return ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
+        token.ThrowIfCancellationRequested();
+        phase?.Invoke("winget-installer");
+        token.ThrowIfCancellationRequested();
+        return execute(arguments, token, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
     }
 
     internal static IReadOnlyList<string> BuildInteractiveArguments(PlanItem item)
@@ -189,17 +334,20 @@ public sealed class WinGetService
         var operation = item.PackageOperation.Equals(PackageOperations.Install, StringComparison.Ordinal)
             ? "install"
             : "upgrade";
-        return
-        [
+        var arguments = new List<string>
+        {
             operation,
             "--id", item.Id,
             "--exact",
-            "--source", "winget",
+            "--version", item.AvailableVersion,
+            "--source", item.Source,
             "--accept-package-agreements",
             "--accept-source-agreements",
             "--interactive",
             "--nowarn"
-        ];
+        };
+        AddScopeArguments(arguments, item);
+        return arguments;
     }
 
     private static WinGetPackageRow? ResolveExactInstalledMatch(
@@ -225,7 +373,7 @@ public sealed class WinGetService
 
     public static List<UpdateItem> ParseUpgradeTable(string output) =>
         ParsePackageRows(output)
-            .Where(x => !string.IsNullOrWhiteSpace(x.AvailableVersion))
+            .Where(x => IsExactPackageVersion(x.AvailableVersion))
             .Select(x => new UpdateItem
             {
                 Id = x.Id,
@@ -234,7 +382,7 @@ public sealed class WinGetService
                     ? UpdateKind.Runtime
                     : UpdateKind.Software,
                 InstalledVersion = string.IsNullOrWhiteSpace(x.InstalledVersion) ? "Sconosciuta" : x.InstalledVersion,
-                AvailableVersion = string.IsNullOrWhiteSpace(x.AvailableVersion) ? "Più recente" : x.AvailableVersion,
+                AvailableVersion = x.AvailableVersion,
                 Source = string.IsNullOrWhiteSpace(x.Source) ? "WinGet" : x.Source,
                 IsImportant = false
             })
@@ -296,38 +444,44 @@ public sealed class WinGetService
     }
 
     private static ProcessResult RunUpgrade(
-        PlanItem item, bool silent, bool useSource, bool useName, bool interactive)
+        PlanItem item, bool silent, WinGetCommand execute, CancellationToken token)
     {
         var arguments = new List<string>
         {
-            "upgrade", useName ? "--name" : "--id", useName ? item.Name : item.Id, "--exact",
+            "upgrade", "--id", item.Id, "--exact",
+            "--version", item.AvailableVersion, "--source", item.Source,
             "--accept-package-agreements", "--accept-source-agreements", "--nowarn"
         };
 
-        if (interactive)
-            arguments.Add("--interactive");
-        else
-            arguments.Add("--disable-interactivity");
-        if (silent && !interactive) arguments.Add("--silent");
-        if (useSource && IsSafeSource(item.Source))
-        {
-            arguments.Add("--source");
-            arguments.Add(item.Source);
-        }
+        arguments.Add("--disable-interactivity");
+        if (silent) arguments.Add("--silent");
+        AddScopeArguments(arguments, item);
+        token.ThrowIfCancellationRequested();
+        return execute(arguments, token, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
+    }
 
-        return ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, TimeSpan.FromMinutes(90)).GetAwaiter().GetResult();
+    private static void AddScopeArguments(List<string> arguments, PlanItem item)
+    {
+        if (item.WinGetBinding is not { } binding) return;
+        if (binding.CopyEvidence?.UnspecifiedScope != true) arguments.AddRange(["--scope", binding.Scope]);
+        if (binding.DependencySnapshot.Length > 0) arguments.Add("--skip-dependencies");
+        arguments.AddRange(["--installer-type", binding.InstallerType]);
+        if (binding.Architecture.Length > 0 && binding.Architecture != "neutral") arguments.AddRange(["--architecture", binding.Architecture]);
+        if (binding.PythonBurnTransition is { } transition)
+            arguments.AddRange(["--custom", transition.CustomArguments]);
     }
 
     private static (ProcessResult Result, List<WinGetPackageRow> Rows) QueryInstalled(
-        string selector, string value, TimeSpan? timeout = null)
+        string selector, string value, WinGetCommand execute, TimeSpan? timeout = null, string? source = null,
+        CancellationToken token = default)
     {
-        var arguments = new[]
+        var arguments = new List<string>
         {
             "list", selector, value, "--exact", "--accept-source-agreements", "--disable-interactivity", "--nowarn"
         };
-        var result = ProcessRunner.RunAsync(
-            "winget.exe", arguments, CancellationToken.None, timeout ?? TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
+        if (source is not null) arguments.AddRange(["--source", source]);
+        token.ThrowIfCancellationRequested();
+        var result = execute(arguments, token, timeout ?? TimeSpan.FromMinutes(5)).GetAwaiter().GetResult();
         return (result, ParsePackageRows(result.StandardOutput + Environment.NewLine + result.StandardError));
     }
 
@@ -335,8 +489,22 @@ public sealed class WinGetService
         PlanItem item,
         Func<string, string, (ProcessResult Result, List<WinGetPackageRow> Rows)>? queryInstalled = null,
         int maxAttempts = 3,
-        Action<TimeSpan>? waitBeforeRetry = null)
+        Action<TimeSpan>? waitBeforeRetry = null, CancellationToken token = default,
+        WinGetCommand? verifyClient = null)
     {
+        var nativeVerification = queryInstalled is null || verifyClient is not null;
+        if ((item.WinGetBinding is not null || item.WinGetVerification is not null) && queryInstalled is null)
+            return WinGetScopeGuard.Native(ExecuteAsync).VerifyAsync(item, token).GetAwaiter().GetResult();
+        if (queryInstalled is null)
+            return new UpdateVerificationResult
+            {
+                Status = UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Text(
+                    "Il piano storico non contiene le evidenze della copia approvata necessarie alla verifica automatica.",
+                    "The historical plan lacks the approved installation evidence required for automatic verification.")
+            };
+        if (nativeVerification && CheckVerificationClient(item, verifyClient ?? ExecuteAsync, token) is { } clientFailure)
+            return clientFailure;
         if (!IsSafePackageId(item.Id))
         {
             return new UpdateVerificationResult
@@ -349,23 +517,31 @@ public sealed class WinGetService
         }
 
         queryInstalled ??= (selector, value) =>
-            QueryInstalled(selector, value, TimeSpan.FromSeconds(10));
-        waitBeforeRetry ??= static delay => Thread.Sleep(delay);
+            QueryInstalled(selector, value, ExecuteAsync, TimeSpan.FromSeconds(10), source: item.Source, token: token);
+        waitBeforeRetry ??= delay => Task.Delay(delay, token).GetAwaiter().GetResult();
         maxAttempts = Math.Clamp(maxAttempts, 1, 5);
         var diagnostics = new List<string>();
         UpdateVerificationResult? latest = null;
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
+            token.ThrowIfCancellationRequested();
             try
             {
                 var installed = queryInstalled("--id", item.Id);
+                token.ThrowIfCancellationRequested();
                 latest = EvaluateInstalledQuery(item, installed.Result, installed.Rows);
+                var matches = installed.Rows.Where(x => x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase)).ToArray();
                 diagnostics.Add(
-                    $"Tentativo {attempt}/{maxAttempts}: code={installed.Result.ExitCode}; " +
+                    $"Tentativo {attempt}/{maxAttempts}: queryExit={installed.Result.ExitCode}; querySucceeded={installed.Result.Success}; " +
+                    $"parsedRows={installed.Rows.Count}; exactMatches={matches.Length}; " +
+                    $"installed=[{string.Join("; ", matches.Select(x => x.InstalledVersion))}]; " +
+                    $"sources=[{string.Join("; ", matches.Select(x => x.Source))}]; target={item.AvailableVersion}; source={item.Source}; " +
                     $"pid={installed.Result.ProcessId?.ToString() ?? "n/d"}; " +
                     $"duration={installed.Result.Duration?.ToString() ?? "n/d"}; " +
-                    $"command={installed.Result.CommandLine}; result={latest.Status}.");
+                    $"command={installed.Result.CommandLine}; versionEvidence={latest.Status}; explanation={latest.Message}");
             }
+            catch (OperationCanceledException) { throw; }
+            catch (TimeoutException) { throw; }
             catch (Exception ex)
             {
                 latest = new UpdateVerificationResult
@@ -384,6 +560,8 @@ public sealed class WinGetService
                 waitBeforeRetry(TimeSpan.FromSeconds(attempt * 3));
         }
 
+        if (nativeVerification && CheckVerificationClient(item, verifyClient ?? ExecuteAsync, token) is { } changedClient)
+            return changedClient;
         latest ??= new UpdateVerificationResult
         {
             IsDefinitive = false,
@@ -394,7 +572,31 @@ public sealed class WinGetService
                              (string.IsNullOrWhiteSpace(latest.Diagnostics)
                                  ? ""
                                  : Environment.NewLine + latest.Diagnostics);
+        token.ThrowIfCancellationRequested();
         return latest;
+    }
+
+    private static UpdateVerificationResult? CheckVerificationClient(PlanItem item, WinGetCommand execute, CancellationToken token)
+    {
+        try
+        {
+            var failure = WinGetScopeGuard.Native(execute).CheckClientAsync(item.WinGetClientVersion, token).GetAwaiter().GetResult();
+            return failure is null ? null : new UpdateVerificationResult
+            {
+                Status = UpdateVerificationStatuses.Unavailable, Message = failure.StandardError
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (TimeoutException) { throw; }
+        catch (Exception ex)
+        {
+            return new UpdateVerificationResult
+            {
+                Status = UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Text("Verifica post-installazione non disponibile.", "Post-installation verification not available."),
+                Diagnostics = ex.ToString()
+            };
+        }
     }
 
     private static UpdateVerificationResult EvaluateInstalledQuery(
@@ -418,6 +620,22 @@ public sealed class WinGetService
         }
 
         var matches = rows.Where(x => x.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (matches.Any(x => string.IsNullOrWhiteSpace(x.Source)) &&
+            !matches.Any(x => x.Source.Length > 0 && !x.Source.Equals(item.Source, StringComparison.OrdinalIgnoreCase)))
+            return new UpdateVerificationResult
+            {
+                Status = UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Text(
+                    "La tabella WinGet omette l'origine; occorre verificare la stessa copia locale con evidenze indipendenti.",
+                    "The WinGet table omits the source; the same local installation requires independent verification.")
+            };
+        if (string.IsNullOrWhiteSpace(item.Source) ||
+            matches.Any(x => !x.Source.Equals(item.Source, StringComparison.OrdinalIgnoreCase)))
+            return new UpdateVerificationResult
+            {
+                Status = UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Translate(LocalizationService.WinGetVerificationSourceMismatchMessage)
+            };
         var versions = matches.Select(x => x.InstalledVersion.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var row = matches.FirstOrDefault();
@@ -431,24 +649,33 @@ public sealed class WinGetService
             };
         }
 
-        var targetHasVersion = !string.IsNullOrWhiteSpace(item.AvailableVersion) &&
-                               item.AvailableVersion.Any(char.IsDigit);
-        if (versions.Count != 1 || !targetHasVersion || !row.InstalledVersion.Any(char.IsDigit))
+        if (matches.Count != 1)
             return new UpdateVerificationResult
             {
                 Status = UpdateVerificationStatuses.Unavailable,
-                Message = LocalizationService.Text("Verifica ambigua: entry duplicate o versione non determinabile. Controlla le installazioni presenti.", "Verification is ambiguous: duplicate entries or an undetermined version. Check the installed applications."),
+                Message = LocalizationService.Text("Verifica ambigua: sono presenti più copie installate.", "Verification is ambiguous: multiple installed copies are present."),
                 Diagnostics = $"PackageId={item.Id}; installed=[{string.Join("; ", versions)}]; target={item.AvailableVersion}"
             };
-        var verified = IsVersionAtLeast(row.InstalledVersion, item.AvailableVersion);
+        return EvaluateVersionEvidence(row.InstalledVersion, item.AvailableVersion);
+    }
+
+    internal static UpdateVerificationResult EvaluateVersionEvidence(string installed, string target)
+    {
+        var relation = SoftwareVersionEvidence.Compare(installed, target);
+        var verified = relation is SoftwareVersionRelation.Equal or SoftwareVersionRelation.Greater;
         return new UpdateVerificationResult
         {
-            IsDefinitive = true,
+            VersionRelation = relation,
+            IsDefinitive = relation != SoftwareVersionRelation.NotComparable,
             Verified = verified,
-            Status = verified ? UpdateVerificationStatuses.Verified : UpdateVerificationStatuses.Failed,
-            Message = verified
-                ? LocalizationService.Text($"Versione installata verificata: {row.InstalledVersion}.", $"Verified installed version: {row.InstalledVersion}.")
-                : LocalizationService.Text($"La versione installata ({row.InstalledVersion}) non raggiunge quella attesa ({item.AvailableVersion}).", $"The installed version ({row.InstalledVersion}) does not match the expected version ({item.AvailableVersion}).")
+            Status = verified ? UpdateVerificationStatuses.Verified : relation == SoftwareVersionRelation.Less
+                ? UpdateVerificationStatuses.Failed : UpdateVerificationStatuses.Unavailable,
+            Message = relation == SoftwareVersionRelation.NotComparable
+                ? LocalizationService.Text("Verifica inconcludente: le versioni non sono confrontabili con una regola attendibile.", "Verification is inconclusive: the versions cannot be compared using a reliable rule.")
+                : verified
+                    ? LocalizationService.Text($"Versione installata verificata: {installed}.", $"Verified installed version: {installed}.")
+                    : LocalizationService.Text($"La versione installata ({installed}) non raggiunge quella attesa ({target}).", $"The installed version ({installed}) is below the expected version ({target})."),
+            Diagnostics = $"installed={installed}; target={target}; relation={relation}"
         };
     }
 
@@ -463,11 +690,53 @@ public sealed class WinGetService
     }
 
     private static bool IsSafeSource(string source) =>
-        !string.IsNullOrWhiteSpace(source) && source.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.');
+        !string.IsNullOrWhiteSpace(source) && source.Length <= 160 && char.IsLetterOrDigit(source[0]) &&
+        source.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.');
 
     private static bool IsSafePackageId(string packageId) =>
         !string.IsNullOrWhiteSpace(packageId) && packageId.Length <= 160 &&
         packageId.All(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' or '+');
+
+    internal static ProcessResult? ValidateTarget(PlanItem item)
+    {
+        if (item.WinGetVerification is { } proof && (item.WinGetBinding is not null ||
+            item.PackageOperation != PackageOperations.Upgrade || !WinGetScopeGuard.IsOfficialSource(item.Source) ||
+            !WinGetScopeGuard.ValidVerificationBinding(proof)))
+            return new ProcessResult(1, "", "Invalid WinGet verification target.");
+        if (item.WinGetBinding is { } binding && (item.PackageOperation != PackageOperations.Upgrade ||
+            !WinGetScopeGuard.IsOfficialSource(item.Source) || !WinGetScopeGuard.ValidBinding(binding)))
+            return new ProcessResult(1, "", "Invalid scoped WinGet target.");
+        if (!IsSafePackageId(item.Id))
+            return new ProcessResult(1, "", LocalizationService.Text(
+                "Identificativo WinGet non valido.", "Invalid WinGet package ID."));
+        if (!IsSafeSource(item.Source))
+            return new ProcessResult(1, "", LocalizationService.Text(
+                "Origine WinGet non verificabile. Esegui una nuova scansione.",
+                "The WinGet source cannot be verified. Run a new scan."));
+        if (!IsExactPackageVersion(item.AvailableVersion))
+            return new ProcessResult(1, "", LocalizationService.Text(
+                "Versione WinGet non verificabile. Esegui una nuova scansione.",
+                "The WinGet target version cannot be verified. Run a new scan."));
+        if (item.PackageOperation == PackageOperations.Upgrade &&
+            SoftwareVersionEvidence.Compare(item.InstalledVersion, item.AvailableVersion) == SoftwareVersionRelation.Greater)
+            return new ProcessResult(1, "", LocalizationService.Text(
+                "Il target è inferiore alla versione installata. Aggiornamento bloccato; esegui una nuova scansione.",
+                "The target is below the installed version. Upgrade blocked; run a new scan."));
+        return null;
+    }
+
+    private static readonly HashSet<string> UnresolvedVersions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Latest", "Più recente", "Unknown", "Sconosciuto", "Sconosciuta", "Unavailable",
+        "Non disponibile", "Not available", "None", "Nessuna", "NA"
+    };
+
+    // PackageVersion is a manifest string, not necessarily a System.Version or SemVer.
+    private static bool IsExactPackageVersion(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 128 &&
+        value == value.Trim() && value[0] != '-' && value.Any(char.IsLetterOrDigit) &&
+        !value.Any(char.IsControl) && value.IndexOfAny(['\\', '/', ':', '*', '?', '"', '<', '>', '|', '…']) < 0 &&
+        !value.EndsWith("...", StringComparison.Ordinal) && !UnresolvedVersions.Contains(value);
 
     private static bool IsInstalledPackageMatchFailure(ProcessResult result)
     {
@@ -477,6 +746,7 @@ public sealed class WinGetService
                output.Contains("Nessun pacchetto installato trovato corrispondente ai criteri", StringComparison.OrdinalIgnoreCase);
     }
 
+    // Provider cause, not the terminal disposition of an attempted operation.
     public static string ClassifyOutcome(ProcessResult result) => result.ExitCode switch
     {
         UpdateNotApplicable => UpdateOutcomes.NotApplicable,
@@ -531,10 +801,31 @@ public sealed class WinGetService
         return explicitlyRunning && explicitlyRequestsClose;
     }
 
-    internal static string ClassifyFailureReason(ProcessResult result, bool finalSuccess) =>
-        !finalSuccess && IsFileInUseFailure(result)
-            ? UpdateFailureReasons.FilesInUse
-            : UpdateFailureReasons.None;
+    internal static string ClassifyFailureReason(ProcessResult result, bool finalSuccess)
+    {
+        if (finalSuccess || result.Success) return UpdateFailureReasons.None;
+        if (result.ExitCode == PackagedServiceRequiresAdministrator) return UpdateFailureReasons.ElevationRequired;
+        // The specific HRESULT works in every locale. With --version, WinGet can
+        // instead emit UPDATE_NOT_APPLICABLE plus an explicit technology message.
+        // Never infer that cause from the generic HRESULT alone or from other errors.
+        if (result.ExitCode == UpdateInstallTechnologyMismatch ||
+            (result.ExitCode == UpdateNotApplicable && HasTechnologyMismatchMessage(result)))
+            return UpdateFailureReasons.InstallerTechnologyMismatch;
+        if (result.ExitCode == UpdateNotApplicable) return UpdateFailureReasons.NotApplicable;
+        if (result.ExitCode == InstallUpgradeNotSupported) return UpdateFailureReasons.UpgradeNotSupported;
+        return IsFileInUseFailure(result) ? UpdateFailureReasons.FilesInUse : UpdateFailureReasons.None;
+    }
+
+    private static bool HasTechnologyMismatchMessage(ProcessResult result)
+    {
+        var output = Regex.Replace(Normalize(result.StandardOutput + "\n" + result.StandardError), @"\s+", " ");
+        return output.Contains("install technology is different from the current version installed", StringComparison.OrdinalIgnoreCase) ||
+               output.Contains("install technology of the newer version specified is different from the current version installed", StringComparison.OrdinalIgnoreCase) ||
+               (output.Contains("tecnologia di installazione", StringComparison.OrdinalIgnoreCase) &&
+                output.Contains("diversa", StringComparison.OrdinalIgnoreCase) &&
+                (output.Contains("versione corrente installata", StringComparison.OrdinalIgnoreCase) ||
+                 output.Contains("versione attualmente installata", StringComparison.OrdinalIgnoreCase)));
+    }
 
     internal static bool RequiresRestart(ProcessResult result)
     {
@@ -549,13 +840,8 @@ public sealed class WinGetService
                output.Contains("riavvio necessario", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsVersionAtLeast(string installed, string target)
-    {
-        if (string.IsNullOrWhiteSpace(installed) || string.IsNullOrWhiteSpace(target) ||
-            !installed.Any(char.IsDigit) || !target.Any(char.IsDigit))
-            return false;
-        return DriverVersionComparer.Compare(installed, target) >= 0;
-    }
+    internal static bool IsVersionAtLeast(string installed, string target) =>
+        SoftwareVersionEvidence.Compare(installed, target) is SoftwareVersionRelation.Equal or SoftwareVersionRelation.Greater;
 
     private static ProcessResult AlreadyCurrent(List<ProcessResult> attempts, PlanItem item, string installedVersion)
     {

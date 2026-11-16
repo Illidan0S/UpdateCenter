@@ -11,6 +11,7 @@ public partial class AgentSetupWindow : Window
     public AgentSetupWindow()
     {
         InitializeComponent();
+        MainWindow.UpdateSettingsCardTheme(this, "HardwareNetwork");
         DataContext = _viewModel;
         Loaded += async (_, _) =>
         {

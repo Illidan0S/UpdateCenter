@@ -30,10 +30,10 @@ try
                 Console.WriteLine($"{device.DisplayName} | {device.Address}:{device.ApiPort} | Agent {device.AgentVersion} | {(device.HasController ? "associato" : "da associare")} | {device.AgentId}");
             break;
         }
-        case "pair" when args.Length >= 3:
+        case "pair" when args.Length is 4 or 5:
         {
-            var port = args.Length >= 4 && int.TryParse(args[3], out var parsedPort) ? parsedPort : 47382;
-            var paired = await client.PairAsync(args[1], port, args[2], args[1]);
+            var port = args.Length == 5 && int.TryParse(args[4], out var parsedPort) ? parsedPort : 47382;
+            var paired = await client.PairAsync(args[1], port, args[2], args[3], args[1]);
             Console.WriteLine($"Associato: {paired.AgentId} su {paired.Address}:{paired.ApiPort}.");
             break;
         }
@@ -79,7 +79,7 @@ catch (Exception ex)
 static void ShowUsage()
 {
     Console.WriteLine("UpdateCenter.NetworkConsole discover [secondi]");
-    Console.WriteLine("UpdateCenter.NetworkConsole pair INDIRIZZO CODICE [PORTA]");
+    Console.WriteLine("UpdateCenter.NetworkConsole pair INDIRIZZO CODICE SHA256_AGENT [PORTA]");
     Console.WriteLine("UpdateCenter.NetworkConsole status INDIRIZZO");
     Console.WriteLine("UpdateCenter.NetworkConsole scan INDIRIZZO");
 }

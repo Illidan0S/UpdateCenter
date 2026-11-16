@@ -140,6 +140,7 @@ public sealed class HeadlessScanService
         Status = Limit(item.Status, 256),
         ResultDetails = Limit(item.ResultDetails, 2_048),
         PackageOperation = Limit(item.PackageOperation, 64),
+        WinGetClientVersion = Limit(item.WinGetClientVersion, 64),
         CanInstall = item.CanInstall,
         RequiresRestart = item.RequiresRestart,
         IsImportant = item.IsImportant,

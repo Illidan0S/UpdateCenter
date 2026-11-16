@@ -5,6 +5,10 @@ namespace UpdateCenter.Services;
 
 public static class JsonStorage
 {
+    // File.Replace can briefly make the destination unavailable to readers on Windows.
+    // Keep the retry window independent of the write policy (30 delays of 25 ms).
+    private const int ReadAttempts = 31;
+    private static readonly TimeSpan ReadRetryDelay = TimeSpan.FromMilliseconds(25);
     private const int AtomicWriteAttempts = 3;
     private static readonly TimeSpan AtomicWriteRetryDelay = TimeSpan.FromMilliseconds(25);
     private static readonly JsonSerializerOptions Options = new()
@@ -65,22 +69,22 @@ public static class JsonStorage
     public static void SaveHistory(IEnumerable<HistoryEntry> entries) =>
         WriteAtomic(AppPaths.HistoryFile, entries.OrderByDescending(x => x.Timestamp).Take(500).ToList());
 
-    public static T? Read<T>(string path)
+    public static T? Read<T>(string path) => Read<T>(path,
+        file => new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete),
+        Thread.Sleep);
+
+    internal static T? Read<T>(string path, Func<string, Stream> openRead, Action<TimeSpan> retryDelay)
     {
-        for (var attempt = 1; attempt <= AtomicWriteAttempts; attempt++)
+        for (var attempt = 1; attempt <= ReadAttempts; attempt++)
         {
             try
             {
-                using var stream = new FileStream(
-                    path,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.ReadWrite | FileShare.Delete);
+                using var stream = openRead(path);
                 return JsonSerializer.Deserialize<T>(stream, Options);
             }
-            catch (Exception ex) when (IsTransientReadFailure(ex) && attempt < AtomicWriteAttempts)
+            catch (Exception ex) when (IsTransientReadFailure(ex) && attempt < ReadAttempts)
             {
-                Thread.Sleep(TimeSpan.FromMilliseconds(5));
+                retryDelay(ReadRetryDelay);
             }
             catch
             {
@@ -100,6 +104,7 @@ public static class JsonStorage
         IAtomicFileOperations operations,
         Action<TimeSpan> retryDelay)
     {
+        if (AppPaths.UpdateStartupPending) return;
         AppPaths.EnsureCreated();
         var directory = Path.GetDirectoryName(path)!;
         Directory.CreateDirectory(directory);
@@ -150,7 +155,7 @@ public static class JsonStorage
 
     private static bool IsTransientReadFailure(Exception exception)
     {
-        if (exception is FileNotFoundException or DirectoryNotFoundException or JsonException)
+        if (exception is FileNotFoundException or DirectoryNotFoundException)
             return true;
         if (exception is not IOException)
             return false;

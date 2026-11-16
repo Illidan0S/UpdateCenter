@@ -1,7 +1,8 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Data;
+using System.Windows.Threading;
 using UpdateCenter.Models;
 using UpdateCenter.Services;
 
@@ -9,21 +10,25 @@ namespace UpdateCenter.ViewModels;
 
 public sealed class MainViewModel : INotifyPropertyChanged
 {
-    private readonly WinGetService _winGet = new();
-    private readonly WindowsUpdateService _windowsUpdate = new();
-    private readonly OfficialDriverCatalogService _officialDriverCatalog = new();
-    private readonly HardwareInventoryService _hardwareInventory = new();
+    private readonly ScanServices _scans;
     private readonly SystemHardwareService _systemHardware = new();
-    private readonly GameDependencyService _gameDependencies = new();
-    private readonly StorageHealthService _storageHealth = new();
-    private readonly QuickHardwareDataService _quickHardwareData;
+    private readonly Lazy<NetworkManagementViewModel> _network = new(() => new NetworkManagementViewModel());
     private readonly UpdateCoordinator _coordinator = new();
     private readonly AppUpdateService _appUpdateService = new();
     private CancellationTokenSource? _scanCancellation;
     private bool _isBusy;
     private int _updateRunActive;
     private bool _isScanRunning;
+    private bool _initialSelectionPending;
+    private bool _hasStartedScan;
+    private bool _scanSelectionOverridden;
+    private bool _applyingInitialSelection;
+    private readonly HashSet<UpdateItem> _scanSelectionTouched = [];
+    private readonly Dictionary<UpdateItem, bool> _observedSelections = [];
+    private bool _isBlockedUpdatesExpanded;
+    private string? _revealedBlockedQuery;
     private double _progress;
+    private bool _isProgressIndeterminate;
     private string _statusText = LocalizationService.Text("Pronto per la scansione", "Ready to scan");
     private string _currentItemText = LocalizationService.Text("Premi Avvia scansione per iniziare.", "Select Start scan to begin.");
     private string _searchText = "";
@@ -40,11 +45,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private bool _hardwareOverviewLoaded;
     private bool _hardwareOverviewLoading;
     private bool _hardwareMetricsLoading;
-    private readonly object _quickHardwareGate = new();
-    private Task<QuickHardwareSnapshot>? _quickHardwareTask;
-    private HardwareScanResult? _cachedHardwareScan;
-    private StorageHealthScanResult? _cachedStorageScan;
-    private bool _quickHardwareDataApplied;
+    private readonly object _startupInventoryGate = new();
+    private Task<QuickHardwareSnapshot>? _startupInventoryTask;
+    private bool _startupInventorySuperseded;
     private bool _isAppUpdateCheckBusy;
     private UpdatePauseController? _activePauseController;
     private bool _isUpdatePaused;
@@ -53,9 +56,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
         "Controllo aggiornamenti dell'app non ancora eseguito.",
         "The app update check has not run yet.");
 
-    public MainViewModel()
+    public MainViewModel() : this(ScanServices.Create())
     {
-        _quickHardwareData = new QuickHardwareDataService(_hardwareInventory, _storageHealth);
+        _ = Network;
+    }
+
+    internal MainViewModel(ScanServices scans)
+    {
+        _scans = scans;
         AppPaths.EnsureCreated();
         Settings = JsonStorage.LoadSettings();
         if (Settings.LastAppUpdateCheckUtc is DateTime lastUpdateCheck)
@@ -65,13 +73,37 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var entry in JsonStorage.LoadHistory()) History.Add(entry);
         UpdatesView = CollectionViewSource.GetDefaultView(Updates);
         UpdatesView.Filter = FilterUpdate;
+        ManagedUpdatesView = new ListCollectionView(Updates) { Filter = value => value is UpdateItem { CanInstall: true } && FilterUpdate(value) };
+        BlockedUpdatesView = new ListCollectionView(Updates) { Filter = value => value is UpdateItem { CanInstall: false } && FilterUpdate(value) };
+        foreach (var section in new[] { ManagedUpdatesView, BlockedUpdatesView })
+        {
+            section.SortDescriptions.Add(new SortDescription(nameof(UpdateItem.Name), ListSortDirection.Ascending));
+            section.SortDescriptions.Add(new SortDescription(nameof(UpdateItem.Id), ListSortDirection.Ascending));
+            if (section is ICollectionViewLiveShaping { CanChangeLiveFiltering: true } live)
+            {
+                live.LiveFilteringProperties.Add(nameof(UpdateItem.CanInstall));
+                live.IsLiveFiltering = true;
+            }
+            section.CollectionChanged += (_, _) =>
+            {
+                OnPropertyChanged(nameof(ManagedUpdatesHeader));
+                OnPropertyChanged(nameof(BlockedUpdatesHeader));
+            };
+        }
+        UpdatesView.SortDescriptions.Add(new SortDescription(nameof(UpdateItem.CanInstall), ListSortDirection.Descending));
+        UpdatesView.SortDescriptions.Add(new SortDescription(nameof(UpdateItem.Name), ListSortDirection.Ascending));
+        UpdatesView.SortDescriptions.Add(new SortDescription(nameof(UpdateItem.Id), ListSortDirection.Ascending));
+        if (UpdatesView is ICollectionViewLiveShaping { CanChangeLiveSorting: true } sortableUpdates)
+        {
+            sortableUpdates.LiveSortingProperties.Add(nameof(UpdateItem.CanInstall));
+            sortableUpdates.IsLiveSorting = true;
+        }
         DriverInventoryView = CollectionViewSource.GetDefaultView(DriverInventory);
         DriverInventoryView.Filter = FilterDriverInventory;
         DriverInventoryView.SortDescriptions.Add(
             new SortDescription(nameof(DriverInventoryItem.HasUpdate), ListSortDirection.Descending));
         DriverInventoryView.SortDescriptions.Add(
             new SortDescription(nameof(DriverInventoryItem.DisplayName), ListSortDirection.Ascending));
-        Network = new NetworkManagementViewModel();
     }
 
     public ObservableCollection<UpdateItem> Updates { get; } = [];
@@ -85,10 +117,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ObservableCollection<VendorSupportItem> VendorTools { get; } = [];
     public SystemHardwareInfo HardwareInfo { get; } = new();
     public ICollectionView UpdatesView { get; }
+    public ICollectionView ManagedUpdatesView { get; }
+    public ICollectionView BlockedUpdatesView { get; }
+    public string ManagedUpdatesHeader => T($"Aggiornamenti gestibili ({ManagedUpdatesView.Cast<object>().Count()})",
+        $"Manageable updates ({ManagedUpdatesView.Cast<object>().Count()})");
+    public string BlockedUpdatesHeader => T($"Non gestibili automaticamente ({BlockedUpdatesView.Cast<object>().Count()})",
+        $"Not automatically manageable ({BlockedUpdatesView.Cast<object>().Count()})");
+    public bool IsBlockedUpdatesExpanded
+    {
+        get => _isBlockedUpdatesExpanded;
+        set { if (_isBlockedUpdatesExpanded == value) return; _isBlockedUpdatesExpanded = value; OnPropertyChanged(); }
+    }
     public ICollectionView DriverInventoryView { get; }
     public AppSettings Settings { get; }
     public AppUpdateService AppUpdateService => _appUpdateService;
-    public NetworkManagementViewModel Network { get; }
+    public NetworkManagementViewModel Network => _network.Value;
 
     public bool IsBusy
     {
@@ -115,8 +158,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public double Progress
     {
         get => _progress;
-        private set { _progress = value; OnPropertyChanged(); }
+        private set { _progress = value; OnPropertyChanged(); OnPropertyChanged(nameof(ProgressText)); }
     }
+
+    // Scan providers expose no reliable total: phase boundaries are not percentages.
+    public bool IsProgressIndeterminate
+    {
+        get => _isProgressIndeterminate;
+        private set { _isProgressIndeterminate = value; OnPropertyChanged(); OnPropertyChanged(nameof(ProgressText)); }
+    }
+
+    public string ProgressText => IsProgressIndeterminate
+        ? T("In corso", "In progress")
+        : Progress == 0 ? "—" : $"{Progress:0}%";
 
     public string StatusText
     {
@@ -139,6 +193,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public int AvailableCount => Updates.Count;
     public int SelectedCount => Updates.Count(x => x.CanInstall && x.IsSelected);
     public int VisibleUpdateCount => UpdatesView.Cast<object>().Count();
+    public string UpdateAvailabilityLabel
+    {
+        get
+        {
+            var selectable = Updates.Count(item => item.CanInstall);
+            var unavailable = AvailableCount - selectable;
+            return T(
+                $"{AvailableCount} rilevati · {selectable} selezionabili · {unavailable} non selezionabili",
+                $"{AvailableCount} detected · {selectable} selectable · {unavailable} not selectable");
+        }
+    }
+    public string UpdateSelectionHint => T(
+        "Preselezione a fine scansione, salvo conferme specifiche e scelte personali.",
+        "Preselection after scanning, respecting separate confirmations and your choices.");
+    public string SelectAllHint => T(
+        "Seleziona gli aggiornamenti disponibili. Gli elementi con conferma separata vengono inclusi solo dopo il tuo assenso.",
+        "Selects available updates. Items requiring separate confirmation are included only after you agree.");
     public string SelectedCountLabel => LocalizationService.Text($"{SelectedCount} selezionati", $"{SelectedCount} selected");
     public string VisibleUpdateCountLabel => LocalizationService.Text($"{VisibleUpdateCount} risultati visibili", $"{VisibleUpdateCount} visible results");
     public int SoftwareUpdateCount => Updates.Count(x => x.Kind == UpdateKind.Software);
@@ -177,7 +248,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
     public bool CanCheckAppUpdates => !IsAppUpdateCheckBusy;
-    public bool CanPauseUpdates => _activePauseController is not null && IsBusy;
+    public bool CanPauseUpdates => _activePauseController is not null && IsBusy &&
+        (!IsUpdatePaused || IsUpdatePauseRequested);
+    internal event Action<UpdateRunStatus>? InstallationProgressChanged;
     public bool IsUpdatePaused
     {
         get => _isUpdatePaused;
@@ -187,6 +260,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(PauseButtonText));
             OnPropertyChanged(nameof(UpdatePauseHint));
+            OnPropertyChanged(nameof(CanPauseUpdates));
         }
     }
     public bool IsUpdatePauseRequested
@@ -198,16 +272,19 @@ public sealed class MainViewModel : INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(PauseButtonText));
             OnPropertyChanged(nameof(UpdatePauseHint));
+            OnPropertyChanged(nameof(CanPauseUpdates));
         }
     }
-    public string PauseButtonText => IsUpdatePauseRequested || IsUpdatePaused
-        ? T("Riprendi", "Resume")
-        : T("Pausa dopo questo elemento", "Pause after this item");
-    public string UpdatePauseHint => IsUpdatePaused
-        ? T("Installazione in pausa tra due elementi. Nessun driver è stato interrotto a metà.", "Installation is paused between items. No driver was interrupted midway.")
+    public string PauseButtonText => IsUpdatePaused
+        ? IsUpdatePauseRequested ? T("Riprendi", "Resume") : T("Ripresa richiesta", "Resume requested")
         : IsUpdatePauseRequested
-            ? T("Pausa richiesta: l'elemento corrente terminerà in sicurezza.", "Pause requested: the current item will finish safely.")
-            : T("La pausa viene applicata dopo l'elemento corrente.", "Pause takes effect after the current item.");
+            ? T("Annulla pausa", "Cancel pause")
+            : T("Pausa dopo questo aggiornamento", "Pause after this update");
+    public string UpdatePauseHint => IsUpdatePaused
+        ? T("Batch in pausa tra due aggiornamenti.", "Batch paused between updates.")
+        : IsUpdatePauseRequested
+            ? T("Pausa richiesta dopo questo aggiornamento.", "Pause requested after this update.")
+            : "";
     public string AppUpdateStatus
     {
         get => LocalizationService.Translate(_appUpdateStatus);
@@ -267,13 +344,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string SearchText
     {
         get => _searchText;
-        set { _searchText = value ?? ""; OnPropertyChanged(); RefreshUpdatesView(); }
+        set { if (_searchText == (value ?? "")) return; _searchText = value ?? ""; _revealedBlockedQuery = null; OnPropertyChanged(); RefreshUpdatesView(); }
     }
 
     public string UpdateTypeFilter
     {
         get => _updateTypeFilter;
-        set { _updateTypeFilter = value ?? "Tutti"; OnPropertyChanged(); RefreshUpdatesView(); }
+        set { if (_updateTypeFilter == (value ?? "Tutti")) return; _updateTypeFilter = value ?? "Tutti"; _revealedBlockedQuery = null; OnPropertyChanged(); RefreshUpdatesView(); }
     }
 
     public string DriverSearchText
@@ -288,13 +365,38 @@ public sealed class MainViewModel : INotifyPropertyChanged
         set { _driverInventoryFilter = value ?? "Tutti"; OnPropertyChanged(); RefreshDriverInventoryView(); }
     }
 
+    private readonly SemaphoreSlim _pendingVerificationGate = new(1, 1);
+
+    internal async Task ResumePendingVerificationAsync(CancellationToken token = default)
+    {
+        if (!await _pendingVerificationGate.WaitAsync(0, token)) return;
+        try
+        {
+            if (await DeferredWinGetVerification.ReconcileAsync(History.ToArray(), token))
+                JsonStorage.SaveHistory(History);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { LogService.Write("Ripresa della verifica automatica non disponibile.", ex); }
+        finally { _pendingVerificationGate.Release(); }
+    }
+
     public async Task ScanAsync()
     {
         if (IsBusy) return;
-        var quickHardwareTask = GetOrStartQuickHardwareData();
-        _quickHardwareDataApplied = true;
+        using var diagnostics = ScanDiagnostics.Start();
+        _initialSelectionPending = true;
+        _hasStartedScan = true;
+        _scanSelectionOverridden = false;
+        _scanSelectionTouched.Clear();
+        _revealedBlockedQuery = null;
+        IsBlockedUpdatesExpanded = false;
+        using var scanCancellation = new CancellationTokenSource();
+        _scanCancellation = scanCancellation;
+        var token = scanCancellation.Token;
+        _startupInventorySuperseded = true;
         IsBusy = true;
-        Progress = 2;
+        Progress = 0;
+        IsProgressIndeterminate = true;
         ScannedCount = 0;
         _hasCurrentScan = false;
         OnPropertyChanged(nameof(HomeScanSummary));
@@ -303,9 +405,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ClearUpdates();
         ClearHardware();
         HardwareCheckStatus = T("Controllo automatico dei driver in corso…", "Automatic driver check in progress…");
-        _scanCancellation = new CancellationTokenSource();
         IsScanRunning = true;
+        var completed = false;
         var warnings = new List<string>();
+        QuickHardwareSnapshot? snapshot = null;
         HardwareScanResult? hardwareScan = null;
         var driverSources = new List<string>();
         var microsoftDriverCount = 0;
@@ -313,41 +416,57 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            Progress = 12;
-            CurrentItemText = T("Ricerca dei software aggiornabili con WinGet…", "Searching for software updates with WinGet…");
+            var quickHardwareTask = ScanDiagnostics.ObserveAsync("provider.quick-hardware", () => _scans.QuickHardware(token), token);
+            token.ThrowIfCancellationRequested();
+            await SetScanPhaseAsync("Ricerca degli aggiornamenti software…", "Searching for software updates…", token);
             try
             {
-                var software = await _winGet.ScanAsync(Settings.IncludeUnknownVersions, _scanCancellation.Token);
-                AddUpdates(software);
+                var software = await ScanDiagnostics.ObserveAsync("provider.software",
+                    () => _scans.Software(Settings.IncludeUnknownVersions, token), token);
+                ScanDiagnostics.Count("software.returned", software.Count);
+                await AddScanUpdatesAsync(software, token);
                 ScannedCount += software.Count;
+                await ResumePendingVerificationAsync(token);
             }
             catch (Exception ex)
             {
+                token.ThrowIfCancellationRequested();
                 warnings.Add(ex.Message);
                 LogService.Write("Scansione software fallita.", ex);
             }
 
-            Progress = 38;
-            CurrentItemText = T("Inventario di processore, chipset e driver installati…", "Inventorying processor, chipset and installed drivers…");
+            token.ThrowIfCancellationRequested();
+            await SetScanPhaseAsync("Inventario di processore, chipset e driver installati…", "Inventorying processor, chipset and installed drivers…", token);
             try
             {
-                var quickSnapshot = await quickHardwareTask;
-                hardwareScan = quickSnapshot.Hardware ?? await _hardwareInventory.ScanAsync(_scanCancellation.Token);
+                using (var wait = ScanDiagnostics.Begin("wait.quick-hardware", token))
+                {
+                    snapshot = await quickHardwareTask;
+                    wait?.Complete();
+                }
+                token.ThrowIfCancellationRequested();
+                ScanDiagnostics.Count("hardware.snapshot-reused", snapshot.Hardware is null ? 0 : 1);
+                hardwareScan = snapshot.Hardware ?? await ScanDiagnostics.ObserveAsync("provider.hardware-fallback",
+                    () => _scans.Hardware(token), token);
+                ScanDiagnostics.Count("hardware.drivers", hardwareScan.Drivers.Count);
                 ScannedCount += hardwareScan.Drivers.Count;
             }
             catch (Exception ex)
             {
+                token.ThrowIfCancellationRequested();
                 warnings.Add(ex.Message);
                 LogService.Write("Inventario hardware fallito.", ex);
             }
 
-            Progress = 68;
-            CurrentItemText = T("Ricerca dei driver proposti da Windows Update…", "Searching for drivers offered by Windows Update…");
+            token.ThrowIfCancellationRequested();
+            await SetScanPhaseAsync("Ricerca degli aggiornamenti driver…", "Searching for driver updates…", token);
             try
             {
-                var driverScan = await _windowsUpdate.ScanDriversAsync(
-                    _scanCancellation.Token, hardwareScan?.Drivers);
-                AddUpdates(driverScan.Updates);
+                var driverScan = await ScanDiagnostics.ObserveAsync("provider.windows-update",
+                    () => _scans.Drivers(token, hardwareScan?.Drivers), token);
+                ScanDiagnostics.Count("windows-update.returned", driverScan.Updates.Count);
+                ScanDiagnostics.Count("windows-update.source-warnings", driverScan.SourceWarnings.Count);
+                await AddScanUpdatesAsync(driverScan.Updates, token);
                 ScannedCount += driverScan.Updates.Count;
                 microsoftDriverCount = driverScan.Updates.Count;
                 driverSources.AddRange(driverScan.SourcesChecked);
@@ -356,6 +475,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             catch (Exception ex)
             {
+                token.ThrowIfCancellationRequested();
                 warnings.Add(ex.Message);
                 LogService.Write("Scansione driver fallita.", ex);
                 HardwareCheckStatus = T("Controllo automatico dei driver non completato.", "The automatic driver check did not complete.");
@@ -363,13 +483,15 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (hardwareScan is not null)
             {
-                Progress = 84;
-                CurrentItemText = T("Confronto con il catalogo verificato dei produttori…", "Comparing with the verified manufacturer catalog…");
+                token.ThrowIfCancellationRequested();
+                await SetScanPhaseAsync("Confronto con il catalogo verificato dei produttori…", "Comparing with the verified manufacturer catalog…", token);
                 try
                 {
-                    var catalogScan = await _officialDriverCatalog.ScanAsync(
-                        hardwareScan.Drivers, _scanCancellation.Token);
-                    AddUpdates(catalogScan.Updates);
+                    var catalogScan = await ScanDiagnostics.ObserveAsync("provider.catalog",
+                        () => _scans.Catalog(hardwareScan.Drivers, token), token);
+                    ScanDiagnostics.Count("catalog.returned", catalogScan.Updates.Count);
+                    ScanDiagnostics.Count("catalog.warnings", catalogScan.Warnings.Count);
+                    await AddScanUpdatesAsync(catalogScan.Updates, token);
                     ScannedCount += catalogScan.Updates.Count;
                     catalogDriverCount = catalogScan.Updates.Count;
                     driverSources.AddRange(catalogScan.SourcesChecked);
@@ -378,6 +500,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 }
                 catch (Exception ex)
                 {
+                    token.ThrowIfCancellationRequested();
                     warnings.Add(ex.Message);
                     LogService.Write("Catalogo driver ufficiali non disponibile.", ex);
                 }
@@ -386,6 +509,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             if (hardwareScan is not null)
             {
+                token.ThrowIfCancellationRequested();
                 ApplyHardware(hardwareScan);
                 var sourceLabel = string.Join(", ", driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase));
                 var verifiedCount = microsoftDriverCount + catalogDriverCount;
@@ -398,11 +522,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
                         $"No verified installable drivers. Checked {driverSources.Distinct(StringComparer.CurrentCultureIgnoreCase).Count()} automatic sources; {hardwareScan.VendorTools.Count} manual manufacturer checks are available without extra apps.");
             }
 
-            Progress = 90;
-            CurrentItemText = T("Controllo runtime condivisi e salute dello storage…", "Checking shared runtimes and storage health…");
+            token.ThrowIfCancellationRequested();
+            await SetScanPhaseAsync("Controllo runtime condivisi e salute dello storage…", "Checking shared runtimes and storage health…", token);
             try
             {
-                var dependencies = await _gameDependencies.ScanAsync(_scanCancellation.Token);
+                var dependencies = await ScanDiagnostics.ObserveAsync("provider.dependencies",
+                    () => _scans.Dependencies(token), token);
+                ScanDiagnostics.Count("dependencies.returned", dependencies.Count);
                 foreach (var dependency in dependencies)
                 {
                     GameDependencies.Add(dependency);
@@ -418,6 +544,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
             catch (Exception ex)
             {
+                token.ThrowIfCancellationRequested();
                 warnings.Add(ex.Message);
                 GameDependencyStatus = T("Controllo dei runtime non completato.", "Runtime check did not complete.");
                 LogService.Write("Scansione runtime fallita.", ex);
@@ -425,47 +552,78 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             try
             {
-                ScannedCount += await RefreshStorageHealthAsync(_scanCancellation.Token, _cachedStorageScan);
+                token.ThrowIfCancellationRequested();
+                ScannedCount += await RefreshStorageHealthAsync(token, snapshot?.Storage);
             }
             catch (Exception ex)
             {
+                token.ThrowIfCancellationRequested();
                 warnings.Add(ex.Message);
                 StorageHealthStatus = T("Controllo della salute dello storage non completato.", "Storage health check did not complete.");
                 LogService.Write("Controllo salute storage fallito.", ex);
             }
 
-            Progress = 100;
+            token.ThrowIfCancellationRequested();
+            await SetScanPhaseAsync("Finalizzazione e pubblicazione dei risultati…", "Finalizing and publishing results…", token);
+            var previousScanUtc = Settings.LastScanUtc;
+            Settings.LastScanUtc = DateTime.UtcNow;
+            try
+            {
+                using var phase = ScanDiagnostics.Begin("persist.settings", token);
+                JsonStorage.SaveSettings(Settings);
+                phase?.Complete();
+            }
+            catch
+            {
+                Settings.LastScanUtc = previousScanUtc;
+                throw;
+            }
+            _hasCurrentScan = true;
+            OnPropertyChanged(nameof(LastScanLabel));
+            OnPropertyChanged(nameof(HomeScanSummary));
             StatusText = warnings.Count > 0 && Updates.Count == 0
                 ? T("Scansione incompleta", "Incomplete scan")
+                : warnings.Count > 0
+                    ? T("Scansione completata con avvisi", "Scan completed with warnings")
                 : Updates.Count == 0
                     ? T("Il PC risulta aggiornato", "The PC is up to date")
                     : T($"{Updates.Count} aggiornamenti disponibili", $"{Updates.Count} updates available");
             CurrentItemText = warnings.Count == 0
                 ? T(
-                    "Scansione completata usando WinGet, Windows Update e il catalogo verificato dei produttori.",
-                    "Scan completed using WinGet, Windows Update and the verified manufacturer catalog.")
+                    "Scansione completata. I risultati sono pronti per la verifica.",
+                    "Scan completed. Results are ready to review.")
                 : T(
                     $"Scansione completata con avvisi: {string.Join(" · ", warnings)}",
                     $"Scan completed with warnings: {string.Join(" · ", warnings)}");
-            _hasCurrentScan = true;
-            Settings.LastScanUtc = DateTime.UtcNow;
-            JsonStorage.SaveSettings(Settings);
-            OnPropertyChanged(nameof(LastScanLabel));
-            OnPropertyChanged(nameof(HomeScanSummary));
+            ApplyInitialScanSelection();
+            completed = true;
+            diagnostics?.Complete(warnings.Count == 0 ? "success" : "partial");
         }
         catch (OperationCanceledException)
         {
+            diagnostics?.Complete("cancelled");
             StatusText = T("Scansione annullata", "Scan cancelled");
             CurrentItemText = T("Puoi avviare una nuova scansione.", "You can start a new scan.");
             HardwareCheckStatus = T("Controllo automatico annullato.", "Automatic check cancelled.");
         }
+        catch (Exception ex)
+        {
+            diagnostics?.Complete("error");
+            StatusText = T("Scansione non riuscita", "Scan failed");
+            CurrentItemText = T("Risultati non finalizzati. Puoi riprovare la scansione.", "Results were not finalized. You can retry the scan.");
+            LogService.Write("Finalizzazione della scansione fallita.", ex);
+        }
         finally
         {
-            _scanCancellation.Dispose();
             _scanCancellation = null;
+            _initialSelectionPending = false;
             IsScanRunning = false;
             IsBusy = false;
             NotifyCounts();
+            IsProgressIndeterminate = false;
+            if (completed) Progress = 100;
+            ScanDiagnostics.Count("scan.warnings", warnings.Count);
+            ScanDiagnostics.Count("updates.final", Updates.Count);
         }
     }
 
@@ -473,6 +631,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (!IsScanRunning) return;
         IsScanRunning = false;
+        StatusText = T("Annullamento in corso", "Cancelling scan");
+        CurrentItemText = T("Annullamento richiesto. Attendo la conclusione dell'operazione in corso…", "Cancellation requested. Waiting for the current operation to return…");
         _scanCancellation?.Cancel();
     }
 
@@ -589,12 +749,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public Task<UpdateRunStatus?> InstallSelectedAsync() => InstallItemsAsync(SelectedItems);
 
+    internal void ReportPreflightBlocked(PreflightResult preflight)
+    {
+        StatusText = T("Controlli non superati", "Pre-checks failed");
+        CurrentItemText = string.Join(Environment.NewLine, preflight.BlockingIssues);
+    }
+
     public Task<UpdateRunStatus?> InstallItemsAsync(IReadOnlyList<UpdateItem> items) =>
         InstallItemsAsync(items, processRecoveryPrompt: null);
 
     internal async Task<UpdateRunStatus?> InstallItemsAsync(
         IReadOnlyList<UpdateItem> items,
-        IWinGetProcessRecoveryPrompt? processRecoveryPrompt)
+        IWinGetProcessRecoveryPrompt? processRecoveryPrompt,
+        Func<IReadOnlyList<RunnerPlanSnapshot>, bool>? confirmSummary = null,
+        Action? showProgress = null)
     {
         var selected = items.Distinct().ToList();
         if (selected.Count == 0 ||
@@ -613,7 +781,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             IsUpdatePaused = false;
             IsUpdatePauseRequested = false;
             OnPropertyChanged(nameof(CanPauseUpdates));
-            Progress = 2;
+            Progress = 0;
             StatusText = T("Aggiornamento in corso", "Update in progress");
             CurrentItemText = T("Conferma la richiesta di Controllo account utente di Windows.", "Confirm the Windows User Account Control prompt if requested.");
             foreach (var item in selected)
@@ -623,38 +791,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
             }
 
             var result = await _coordinator.RunAsync(selected, Settings, _activePauseController, status =>
-            {
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    IsUpdatePaused = status.State.Equals("Paused", StringComparison.OrdinalIgnoreCase);
-                    IsUpdatePauseRequested = IsUpdatePaused || _activePauseController?.IsPauseRequested == true;
-                    var itemFraction = status.CurrentIndex < status.Total
-                        ? Math.Clamp(status.CurrentItemProgress, 0, 100) / 100d
-                        : 0;
-                    var completedPercentage = status.Total == 0
-                        ? 0
-                        : (status.CurrentIndex + itemFraction) * 100d / status.Total;
-                    Progress = Math.Max(Progress, completedPercentage);
-                    CurrentItemText = LocalizationService.Translate(status.Message);
-                    StatusText = IsUpdatePaused
-                        ? T("Aggiornamenti in pausa", "Updates paused")
-                        : string.IsNullOrWhiteSpace(status.CurrentName)
-                        ? T("Aggiornamento in corso", "Update in progress")
-                        : LocalizationService.IsEnglish ? $"Updating: {status.CurrentName}" : $"Aggiornamento: {status.CurrentName}";
+                System.Windows.Application.Current.Dispatcher.Invoke(() => ApplyInstallationProgress(selected, status)),
+                CancellationToken.None, processRecoveryPrompt, confirmSummary, showProgress);
 
-                    ApplyRunResultsSafely(selected, status.Results);
-                });
-            }, CancellationToken.None, processRecoveryPrompt);
-
-            ApplyRunResultsSafely(selected, result.Results);
+            ApplyRunResultsSafely(selected, result.Results, isFinal: true);
             SaveRunToHistory(selected, result);
             await RefreshDriversAfterUpdateRunAsync(result.Results);
             Progress = 100;
-            StatusText = result.Results.Any(x => !x.Success)
-                ? T("Completato con alcuni errori", "Completed with some errors")
-                : result.Results.Any(x => !x.Verified)
-                    ? T("Completato · verifica richiesta", "Completed · verification required")
-                    : T("Aggiornamenti completati", "Updates completed");
+            StatusText = UpdateCompletionPresentation.From(result.Results).Title;
             CurrentItemText = LocalizationService.Translate(result.Message);
             return result;
         }
@@ -700,8 +844,14 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public async Task EnsureQuickHardwareDataAsync()
     {
-        var snapshot = await GetOrStartQuickHardwareData();
-        if (_quickHardwareDataApplied || IsScanRunning || !snapshot.HasAnyData) return;
+        if (_startupInventorySuperseded) return;
+        Task<QuickHardwareSnapshot> pending;
+        lock (_startupInventoryGate)
+        {
+            pending = _startupInventoryTask ??= _scans.QuickHardware(CancellationToken.None);
+        }
+        var snapshot = await pending;
+        if (_startupInventorySuperseded || !snapshot.HasAnyData) return;
 
         if (snapshot.Hardware is not null)
         {
@@ -715,7 +865,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         if (snapshot.Storage is not null)
             ApplyStorage(snapshot.Storage);
 
-        _quickHardwareDataApplied = true;
+        _startupInventorySuperseded = true;
         NotifyCounts();
     }
 
@@ -726,7 +876,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         HardwareCheckStatus = T("Verifica del driver riparato in corso…", "Verifying repaired driver…");
         try
         {
-            var scan = await _hardwareInventory.ScanAsync(CancellationToken.None);
+            var scan = await _scans.Hardware(CancellationToken.None);
+            _startupInventorySuperseded = true;
             ClearDriverInventory();
             ApplyHardware(scan);
             HardwareCheckStatus = scan.Problems.Count == 0
@@ -745,33 +896,23 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    private Task<QuickHardwareSnapshot> GetOrStartQuickHardwareData()
-    {
-        lock (_quickHardwareGate)
-        {
-            return _quickHardwareTask ??= LoadAndCacheQuickHardwareDataAsync();
-        }
-    }
-
-    private async Task<QuickHardwareSnapshot> LoadAndCacheQuickHardwareDataAsync()
-    {
-        var snapshot = await _quickHardwareData.LoadAsync(CancellationToken.None);
-        _cachedHardwareScan = snapshot.Hardware;
-        _cachedStorageScan = snapshot.Storage;
-        return snapshot;
-    }
-
     private async Task<int> RefreshStorageHealthAsync(
         CancellationToken cancellationToken,
-        StorageHealthScanResult? cachedStorage = null)
+        StorageHealthScanResult? capturedStorage)
     {
-        var storage = cachedStorage ?? await _storageHealth.ScanAsync(cancellationToken);
+        ScanDiagnostics.Count("storage.snapshot-reused", capturedStorage is null ? 0 : 1);
+        var storage = capturedStorage ?? await ScanDiagnostics.ObserveAsync("provider.storage-fallback",
+            () => _scans.Storage(cancellationToken), cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        ScanDiagnostics.Count("storage.devices", storage.Devices.Count);
+        ScanDiagnostics.Count("storage.volumes", storage.Volumes.Count);
         ApplyStorage(storage);
         return storage.Devices.Count;
     }
 
     private void ApplyStorage(StorageHealthScanResult storage)
     {
+        using var phase = ScanDiagnostics.Begin("apply.storage");
         StorageDevices.Clear();
         StorageVolumes.Clear();
         StorageRows.Clear();
@@ -780,37 +921,73 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var row in StorageTableRowFactory.CreateRows(storage.Devices)) StorageRows.Add(row);
         StorageHealthStatus = storage.Status;
         NotifyCounts();
+        phase?.Complete();
     }
 
     public void ToggleUpdatePause()
     {
-        if (_activePauseController is null) return;
-        if (_activePauseController.IsPauseRequested)
+        if (_activePauseController is not { } pause || !CanPauseUpdates) return;
+        if (pause.IsPauseRequested)
         {
-            _activePauseController.Resume();
+            pause.Resume();
             IsUpdatePauseRequested = false;
-            IsUpdatePaused = false;
-            CurrentItemText = T("Ripresa richiesta…", "Resume requested…");
         }
         else
         {
-            _activePauseController.RequestPause();
+            pause.RequestPause();
             IsUpdatePauseRequested = true;
-            CurrentItemText = T(
-                "Pausa richiesta: l'elemento corrente terminerà prima di fermarsi.",
-                "Pause requested: the current item will finish before stopping.");
         }
+    }
+
+    internal void ApplyInstallationProgress(IReadOnlyList<UpdateItem> selected, UpdateRunStatus status)
+    {
+        IsUpdatePaused = status.State.Equals("Paused", StringComparison.OrdinalIgnoreCase);
+        IsUpdatePauseRequested = _activePauseController?.IsPauseRequested == true;
+        var completedPercentage = status.Total > 0 ? status.CurrentIndex * 100d / status.Total : 0;
+        Progress = Math.Max(Progress, Math.Min(99, completedPercentage));
+        CurrentItemText = LocalizationService.Translate(status.Message);
+        StatusText = status.State == "AwaitingConsent"
+            ? T("In attesa della conferma finale", "Waiting for final confirmation")
+            : IsUpdatePaused
+                ? T("Aggiornamenti in pausa", "Updates paused")
+                : string.IsNullOrWhiteSpace(status.CurrentName)
+                    ? T("Aggiornamento in corso", "Update in progress")
+                    : T($"Aggiornamento: {status.CurrentName}", $"Updating: {status.CurrentName}");
+
+        ApplyRunResultsSafely(selected, status.Results);
+        InstallationProgressChanged?.Invoke(status);
     }
 
     public void SetAllSelected(bool selected)
     {
+        if (_initialSelectionPending) _scanSelectionOverridden = true;
         foreach (var item in Updates)
-            item.IsSelected = selected && item.CanInstall && !item.RequiresRiskConfirmation;
+            // Bulk selection does not grant risk consent, but must preserve an
+            // individual choice. Deselect All still clears every choice.
+            item.IsSelected = selected && item.CanInstall &&
+                              (!item.RequiresRiskConfirmation || item.IsSelected);
         NotifyCounts();
     }
 
-    private void ApplyRunResults(
-        IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results)
+    public void SelectAllWithConfirmation(Func<UpdateItem, bool> confirm)
+    {
+        // Capture this click's candidates. Results arriving during a dialog are not part of this choice.
+        var candidates = Updates.Where(item => item.CanInstall && item.RequiresRiskConfirmation && !item.IsSelected).ToArray();
+        SetAllSelected(true);
+        foreach (var item in candidates)
+        {
+            if (!Updates.Contains(item) || !item.CanInstall || item.IsSelected) continue;
+            var target = ElevatedUpdateRunner.ToPlanItem(item);
+            var accepted = confirm(new RunnerPlanItem(target).ToUpdateItem());
+            if (accepted && Updates.Contains(item) && item.CanInstall && item.RequiresRiskConfirmation &&
+                RunnerPlanItem.Matches(item, target))
+                item.IsSelected = true;
+        }
+        NotifyCounts();
+    }
+
+    internal void ApplyRunResults(
+        IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results, bool isFinal = false)
     {
         foreach (var runResult in results)
         {
@@ -818,13 +995,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 x.Id.Equals(runResult.Id, StringComparison.OrdinalIgnoreCase) &&
                 x.Kind.ToString().Equals(runResult.Kind, StringComparison.OrdinalIgnoreCase));
             if (item is null) continue;
+            // A newly confirmed target must not change the old proposal's status or eligibility.
+            if (runResult.ReportedTarget is { } target && !RunnerPlanItem.Matches(item, target)) continue;
 
             item.Status = runResult.Outcome switch
             {
+                UpdateOutcomes.Cancelled => T("Annullato", "Cancelled"),
                 UpdateOutcomes.NotApplicable => T("Non applicabile", "Not applicable"),
+                UpdateOutcomes.ManualRequired when runResult.Phase == "winget-preflight" => T("Non eseguibile automaticamente", "Cannot run automatically"),
                 UpdateOutcomes.ManualRequired => T("Aggiornamento manuale", "Manual update"),
                 _ => !runResult.InstallerSucceeded
-                    ? T("Errore", "Error")
+                    ? T("Non riuscito", "Failed")
                     : !runResult.Success
                         ? T("Errore di verifica", "Verification failed")
                         : runResult.Verified
@@ -834,12 +1015,28 @@ public sealed class MainViewModel : INotifyPropertyChanged
             item.ResultDetails = LocalizationService.Translate(runResult.Message);
             item.Diagnostics = runResult.Diagnostics;
             if (runResult.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal) ||
-                runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
+                runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal) ||
+                runResult.FailureReason is UpdateFailureReasons.NotApplicable or
+                    UpdateFailureReasons.InstallerTechnologyMismatch or UpdateFailureReasons.UpgradeNotSupported or UpdateFailureReasons.ElevationRequired)
                 item.CanInstall = false;
 
             if (ShouldRemoveCompletedUpdate(runResult) && Updates.Remove(item))
             {
                 item.PropertyChanged -= UpdateItemOnPropertyChanged;
+            }
+        }
+
+        if (isFinal)
+        {
+            foreach (var item in selected.Where(item => !results.Any(result =>
+                item.Id.Equals(result.Id, StringComparison.OrdinalIgnoreCase) &&
+                item.Kind.ToString().Equals(result.Kind, StringComparison.OrdinalIgnoreCase) &&
+                (result.ReportedTarget is null || RunnerPlanItem.Matches(item, result.ReportedTarget)))))
+            {
+                item.Status = T("Da aggiornare", "Update available");
+                item.Progress = 0;
+                item.ResultDetails = T("Nessun risultato per questa selezione preliminare. Esegui una nuova scansione.",
+                    "No result for this preliminary selection. Run a new scan.");
             }
         }
 
@@ -851,11 +1048,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     internal static string GetHistoryResultLabel(ItemRunResult runResult) =>
         runResult.Outcome switch
         {
+            UpdateOutcomes.Cancelled => LocalizationService.Text("Annullato", "Cancelled"),
             UpdateOutcomes.NotApplicable => LocalizationService.Text("Non applicabile", "Not applicable"),
+            UpdateOutcomes.ManualRequired when runResult.Phase == "winget-preflight" => LocalizationService.Text("Non eseguibile automaticamente", "Cannot run automatically"),
             UpdateOutcomes.ManualRequired => LocalizationService.Text("Manuale", "Manual"),
+            _ when runResult.Success && !runResult.Verified => runResult.RestartRequired || runResult.VerificationStatus == UpdateVerificationStatuses.PendingRestart
+                ? LocalizationService.Text("Completato · riavvio richiesto", "Completed · restart required")
+                : LocalizationService.Text("Completato · da verificare", "Completed · verify"),
             _ => (runResult.TerminalDisposition == ItemTerminalDisposition.Succeeded || (runResult.TerminalDisposition == ItemTerminalDisposition.None && runResult.Success))
                 ? (runResult.Verified ? LocalizationService.Text("Riuscito", "Succeeded") : LocalizationService.Text("Completato · da verificare", "Completed · verify"))
-                : LocalizationService.Text("Fallito", "Failed")
+                : LocalizationService.Text("Non riuscito", "Failed")
         };
 
     internal static bool ShouldRemoveCompletedUpdate(ItemRunResult result) =>
@@ -865,11 +1067,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         !result.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal);
 
     private void ApplyRunResultsSafely(
-        IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results)
+        IReadOnlyList<UpdateItem> selected, IReadOnlyList<ItemRunResult> results, bool isFinal = false)
     {
         try
         {
-            ApplyRunResults(selected, results);
+            ApplyRunResults(selected, results, isFinal);
         }
         catch (Exception ex)
         {
@@ -896,8 +1098,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            var hardware = await _hardwareInventory.ScanAsync(CancellationToken.None);
-            _cachedHardwareScan = hardware;
+            var hardware = await _scans.Hardware(CancellationToken.None);
+            _startupInventorySuperseded = true;
             ClearDriverInventory();
             ApplyHardware(hardware);
 
@@ -905,7 +1107,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             var warnings = new List<string>();
             try
             {
-                var microsoft = await _windowsUpdate.ScanDriversAsync(
+                var microsoft = await _scans.Drivers(
                     CancellationToken.None, hardware.Drivers);
                 refreshedUpdates.AddRange(microsoft.Updates);
                 warnings.AddRange(microsoft.SourceWarnings);
@@ -920,7 +1122,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
             try
             {
-                var official = await _officialDriverCatalog.ScanAsync(
+                var official = await _scans.Catalog(
                     hardware.Drivers, CancellationToken.None);
                 refreshedUpdates.AddRange(official.Updates);
                 warnings.AddRange(official.Warnings);
@@ -975,7 +1177,10 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void NotifyCounts()
     {
+        OnPropertyChanged(nameof(ManagedUpdatesHeader));
+        OnPropertyChanged(nameof(BlockedUpdatesHeader));
         OnPropertyChanged(nameof(AvailableCount));
+        OnPropertyChanged(nameof(UpdateAvailabilityLabel));
         OnPropertyChanged(nameof(SelectedCount));
         OnPropertyChanged(nameof(SelectedCountLabel));
         OnPropertyChanged(nameof(VisibleUpdateCount));
@@ -1010,6 +1215,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public void NotifyLanguageChanged()
     {
+        OnPropertyChanged(nameof(ManagedUpdatesHeader));
+        OnPropertyChanged(nameof(BlockedUpdatesHeader));
+        OnPropertyChanged(nameof(ProgressText));
+        OnPropertyChanged(nameof(UpdateSelectionHint));
+        OnPropertyChanged(nameof(SelectAllHint));
         OnPropertyChanged(nameof(StatusText));
         OnPropertyChanged(nameof(CurrentItemText));
         OnPropertyChanged(nameof(AppUpdateStatus));
@@ -1044,30 +1254,102 @@ public sealed class MainViewModel : INotifyPropertyChanged
         JsonStorage.SaveHistory(History);
     }
 
+    private async Task SetScanPhaseAsync(string italian, string english, CancellationToken token)
+    {
+        CurrentItemText = T(italian, english);
+        // Render even cached phases and service queued input before continuing.
+        await Dispatcher.Yield(DispatcherPriority.Background);
+        token.ThrowIfCancellationRequested();
+    }
+
+    private void ApplyInitialScanSelection()
+    {
+        if (!_initialSelectionPending) return;
+        _applyingInitialSelection = true;
+        try
+        {
+            foreach (var item in Updates)
+            {
+                if (!item.CanInstall) item.IsSelected = false;
+                else if (!_scanSelectionOverridden && !_scanSelectionTouched.Contains(item))
+                    item.IsSelected = !item.RequiresRiskConfirmation;
+            }
+        }
+        finally { _initialSelectionPending = false; _applyingInitialSelection = false; }
+        ScanDiagnostics.Count("updates.final-selected", SelectedCount);
+        NotifyCounts();
+    }
+
+    private async Task AddScanUpdatesAsync(IEnumerable<UpdateItem> updates, CancellationToken token)
+    {
+        await SetScanPhaseAsync("Aggregazione e pubblicazione degli aggiornamenti…", "Aggregating and publishing updates…", token);
+        AddUpdates(updates);
+    }
+
     private void AddUpdates(IEnumerable<UpdateItem> updates)
     {
+        using var phase = ScanDiagnostics.Begin("aggregation.updates");
+        // Rebuild from the actual collection for each batch: scans, removals and
+        // incremental driver refreshes must not retain an identity cache.
+        var idsByKind = new Dictionary<UpdateKind, HashSet<string>>();
+        bool Remember(UpdateItem item)
+        {
+            if (!idsByKind.TryGetValue(item.Kind, out var ids))
+                idsByKind.Add(item.Kind, ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            return ids.Add(item.Id);
+        }
+        var useIndex = true;
+        foreach (var existing in Updates)
+        {
+            if (existing is null || existing.Id is null)
+            {
+                useIndex = false;
+                break;
+            }
+            Remember(existing);
+        }
         foreach (var item in updates)
         {
-            if (Updates.Any(existing =>
+            ScanDiagnostics.Count("aggregation.candidates", 1);
+            // Null IDs have asymmetric historical behavior (including Any's
+            // short-circuit and null-reference failure). Keep that exact path.
+            if (item.Id is null) useIndex = false;
+            if (useIndex ? !Remember(item) : Updates.Any(existing =>
                     existing.Kind == item.Kind &&
                     existing.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                ScanDiagnostics.Count("aggregation.duplicates", 1);
                 continue;
+            }
+            // Capture provider decisions before publishing the item to the UI.
+            // Count only new rows: diagnostics sessions accumulate across batches.
+            ScanDiagnostics.Count("updates.initial-selected", item.CanInstall && item.IsSelected ? 1 : 0);
+            ScanDiagnostics.Count("updates.bulk-eligible", item.CanInstall && !item.RequiresRiskConfirmation ? 1 : 0);
+            ScanDiagnostics.Count("updates.individual-risk", item.CanInstall && item.RequiresRiskConfirmation ? 1 : 0);
+            ScanDiagnostics.Count("updates.blocked", item.CanInstall ? 0 : 1);
+            ScanDiagnostics.Count("updates.unknown-metadata", item.HasUnverifiedInstallerMetadata ? 1 : 0);
+            // Publish no automatic choices while results are still arriving.
+            if (_hasStartedScan) item.IsSelected = false;
+            _observedSelections[item] = item.IsSelected;
             item.PropertyChanged += UpdateItemOnPropertyChanged;
             Updates.Add(item);
         }
         RefreshUpdatesView();
         NotifyCounts();
+        phase?.Complete();
     }
 
     private void ClearUpdates()
     {
         foreach (var item in Updates) item.PropertyChanged -= UpdateItemOnPropertyChanged;
         Updates.Clear();
+        _observedSelections.Clear();
         NotifyCounts();
     }
 
     private void ApplyHardware(HardwareScanResult scan)
     {
+        using var phase = ScanDiagnostics.Begin("apply.hardware");
         CpuName = scan.CpuName;
         ComputerName = string.Join(" ", new[] { scan.ComputerManufacturer, scan.ComputerModel }
             .Where(x => !string.IsNullOrWhiteSpace(x)));
@@ -1083,6 +1365,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         foreach (var tool in scan.VendorTools) VendorTools.Add(tool);
         RefreshDriverInventoryView();
         NotifyCounts();
+        phase?.Complete();
     }
 
     private void ClearDriverInventory()
@@ -1113,9 +1396,21 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         if (e.PropertyName == nameof(UpdateItem.IsSelected))
         {
+            if (sender is UpdateItem item)
+            {
+                if (_initialSelectionPending && !_applyingInitialSelection &&
+                    _observedSelections.TryGetValue(item, out var previous) && previous != item.IsSelected)
+                    _scanSelectionTouched.Add(item);
+                _observedSelections[item] = item.IsSelected;
+            }
             NotifyCounts();
         }
-        else if (e.PropertyName == nameof(UpdateItem.Status) && UpdateTypeFilter == "Errori")
+        else if (e.PropertyName is nameof(UpdateItem.CanInstall) or nameof(UpdateItem.RequiresRiskConfirmation))
+        {
+            RefreshUpdatesView();
+            NotifyCounts();
+        }
+        else if (e.PropertyName == nameof(UpdateItem.Status) && (UpdateTypeFilter == "Errori" || !string.IsNullOrWhiteSpace(SearchText)))
         {
             RefreshUpdatesView();
         }
@@ -1130,7 +1425,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
             "Driver" => item.Kind == UpdateKind.Driver,
             "Runtime" => item.Kind == UpdateKind.Runtime,
             "Errori" => item.Status.Equals("Errore", StringComparison.OrdinalIgnoreCase) ||
-                        item.Status.Equals("Error", StringComparison.OrdinalIgnoreCase),
+                        item.Status.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+                        item.Status.Equals("Non riuscito", StringComparison.OrdinalIgnoreCase) ||
+                        item.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase),
             _ => true
         };
         var searchMatches = string.IsNullOrWhiteSpace(SearchText) ||
@@ -1148,6 +1445,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private void RefreshUpdatesView()
     {
         TryRefreshCollectionView(UpdatesView, "updates");
+        TryRefreshCollectionView(ManagedUpdatesView, "managed-updates");
+        TryRefreshCollectionView(BlockedUpdatesView, "blocked-updates");
+        OnPropertyChanged(nameof(ManagedUpdatesHeader));
+        OnPropertyChanged(nameof(BlockedUpdatesHeader));
+        if (!string.IsNullOrWhiteSpace(SearchText) && ManagedUpdatesView.IsEmpty && !BlockedUpdatesView.IsEmpty &&
+            _revealedBlockedQuery != SearchText)
+        {
+            _revealedBlockedQuery = SearchText;
+            IsBlockedUpdatesExpanded = true;
+        }
         OnPropertyChanged(nameof(VisibleUpdateCount));
         OnPropertyChanged(nameof(VisibleUpdateCountLabel));
     }
@@ -1219,7 +1526,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         foreach (var runResult in result.Results)
         {
-            var item = selected.FirstOrDefault(x => x.Id == runResult.Id);
+            var item = runResult.ReportedTarget is { } target
+                ? new RunnerPlanItem(target).ToUpdateItem()
+                : selected.FirstOrDefault(x => x.Id == runResult.Id);
             var entry = new HistoryEntry
             {
                 Timestamp = DateTime.UtcNow,
@@ -1229,7 +1538,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ToVersion = item?.AvailableVersion ?? "",
                 Result = GetHistoryResultLabel(runResult),
                 Details = BuildReadableHistoryDetails(item, runResult),
-                Diagnostics = runResult.Diagnostics
+                Diagnostics = runResult.Diagnostics,
+                PendingVerificationPlan = runResult.ReportedTarget is not null && runResult.InstallerSucceeded && !runResult.Verified &&
+                    runResult.VerificationStatus is UpdateVerificationStatuses.Unavailable or UpdateVerificationStatuses.PendingRestart &&
+                    item is not null && item.Kind != UpdateKind.Driver && WinGetScopeGuard.IsOfficialSource(item.Source)
+                        ? ElevatedUpdateRunner.ToPlanItem(item) : null
             };
             History.Insert(0, entry);
         }
@@ -1251,6 +1564,13 @@ public sealed class MainViewModel : INotifyPropertyChanged
             ? LocalizationService.Text("Nessun dettaglio tecnico aggiuntivo.", "No additional technical details.")
             : LocalizationService.TranslateHistoryDetails(runResult.Message.Trim());
 
+        if (runResult.Outcome.Equals(UpdateOutcomes.Cancelled, StringComparison.Ordinal))
+            return technicalDetail;
+        if (runResult.Phase == "winget-preflight" && runResult.Outcome == UpdateOutcomes.ManualRequired)
+            return $"{runResult.Name}: {technicalDetail}";
+        if (runResult.Outcome == UpdateOutcomes.Failed && runResult.FailureReason is
+            UpdateFailureReasons.NotApplicable or UpdateFailureReasons.InstallerTechnologyMismatch or UpdateFailureReasons.UpgradeNotSupported or UpdateFailureReasons.ElevationRequired)
+            return $"{runResult.Name} ({fromVersion} → {toVersion}): {technicalDetail}";
         if (runResult.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal))
             return LocalizationService.IsEnglish
                 ? $"{runResult.Name} is not applicable to this PC according to WinGet. " +

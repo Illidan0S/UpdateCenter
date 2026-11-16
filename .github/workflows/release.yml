@@ -7,8 +7,13 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      rc_build:
+        description: Build RC 2.0.0 unsigned, solo artefatti scaricabili
+        required: true
+        default: true
+        type: boolean
       release_tag:
-        description: Tag di Release esistente da aggiornare (ad esempio v1.1.4)
+        description: Tag stabile corrispondente al commit della build
         required: false
         type: string
 
@@ -22,21 +27,27 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.value }}
       release_tag: ${{ steps.version.outputs.release_tag }}
+      unsigned_release: ${{ steps.version.outputs.unsigned_release }}
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      - name: Configure .NET 8
+      - name: Configure .NET 10
         uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.404
 
       - name: Resolve and validate version
         id: version
         shell: pwsh
         env:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          RC_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.rc_build }}
+          SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           [xml]$project = Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw
           $node = $project.SelectSingleNode('/Project/PropertyGroup/Version')
@@ -44,6 +55,14 @@ jobs:
             throw 'UpdateCenter.csproj deve contenere Version nel formato MAJOR.MINOR.PATCH.'
           }
           $version = $node.InnerText.Trim()
+          if ($env:SOURCE_BRANCH -eq 'rc/2.0.0-actions-build' -and $env:RC_BUILD -ne 'true') {
+            throw 'Il branch RC richiede workflow_dispatch con rc_build=true.'
+          }
+          if ($env:RC_BUILD -eq 'true' -and ($env:GITHUB_REF_TYPE -ne 'branch' -or
+              $env:SOURCE_BRANCH -ne 'rc/2.0.0-actions-build' -or
+              -not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG_INPUT))) {
+            throw 'La build RC richiede il branch dedicato e release_tag vuoto.'
+          }
           $releaseTag = if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $env:GITHUB_REF_NAME
           } elseif (-not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG_INPUT)) {
@@ -58,63 +77,131 @@ jobs:
             if ($releaseTag.Substring(1) -ne $version) {
               throw "Il tag $releaseTag non coincide con la versione $version del progetto."
             }
+            if ($env:RELEASE_TAG_INPUT -and $releaseTag -cne $env:RELEASE_TAG_INPUT.Trim()) {
+              throw 'Il tag richiesto differisce dal tag selezionato.'
+            }
+            $tagCommit = git rev-parse --verify "refs/tags/$releaseTag^{commit}"
+            if ($LASTEXITCODE -ne 0 -or $tagCommit -ne $env:GITHUB_SHA) {
+              throw "Il tag $releaseTag deve esistere e puntare al commit della build."
+            }
           }
           "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $policy = $project.SelectSingleNode('/Project/PropertyGroup/UnsignedReleaseVersion')
+          $unsigned = $version -ceq '2.0.0' -and $policy -and $policy.InnerText -ceq $version
+          if ($env:RC_BUILD -eq 'true' -and -not $unsigned) {
+            throw 'La build RC richiede esattamente la policy unsigned 2.0.0.'
+          }
+          "unsigned_release=$($unsigned.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Restore dependencies
         shell: pwsh
-        run: |
-          dotnet restore .\UpdateCenter.csproj --runtime win-x64
-          dotnet restore .\Tests\UpdateCenter.SmokeTests\UpdateCenter.SmokeTests.csproj --runtime win-x64
+        run: dotnet restore .\UpdateCenter.sln -p:Configuration=Release
 
       - name: Build Release
         shell: pwsh
-        run: dotnet build .\UpdateCenter.csproj --configuration Release --runtime win-x64 --no-restore
+        run: dotnet build .\UpdateCenter.sln --configuration Release --no-restore
+
+      - name: Run Network Core tests
+        if: github.event_name != 'workflow_dispatch' || !inputs.rc_build
+        shell: pwsh
+        run: dotnet run --project .\Tests\UpdateCenter.NetworkCoreTests --configuration Release --no-build --no-restore
+
+      - name: Run release audit
+        if: github.event_name != 'workflow_dispatch' || !inputs.rc_build
+        shell: pwsh
+        run: dotnet run --project .\Tests\UpdateCenter.SmokeTests --configuration Release --no-build --no-restore -- --release-audit
 
       - name: Run updater smoke tests
+        if: github.event_name != 'workflow_dispatch' || !inputs.rc_build
         shell: pwsh
-        run: dotnet run --project .\Tests\UpdateCenter.SmokeTests\UpdateCenter.SmokeTests.csproj --configuration Release --runtime win-x64 --no-restore
+        run: dotnet run --project .\Tests\UpdateCenter.SmokeTests --configuration Release --no-build --no-restore
+
+      - name: Run build output safety fixtures
+        if: github.event_name != 'workflow_dispatch' || !inputs.rc_build
+        shell: pwsh
+        run: .\Tests\BuildOutputPaths.Tests.ps1
 
       - name: Publish self-contained single-file
         shell: pwsh
-        run: .\build.ps1 -NoRestore
+        env:
+          WINDOWS_SIGNING_CERT_SHA256: ${{ steps.version.outputs.release_tag != '' && steps.version.outputs.unsigned_release != 'true' && vars.WINDOWS_SIGNING_CERT_SHA256 || '' }}
+        run: .\build.ps1
 
       - name: Sign portable executable
+        if: steps.version.outputs.unsigned_release != 'true'
         shell: pwsh
         env:
-          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
-          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: .\sign-windows-artifact.ps1 -Path '.\dist\UpdateCenter.exe'
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          WINDOWS_SIGNING_PFX_BASE64: ${{ steps.version.outputs.release_tag != '' && secrets.WINDOWS_SIGNING_PFX_BASE64 || '' }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ steps.version.outputs.release_tag != '' && secrets.WINDOWS_SIGNING_PFX_PASSWORD || '' }}
+          WINDOWS_SIGNING_CERT_SHA256: ${{ steps.version.outputs.release_tag != '' && vars.WINDOWS_SIGNING_CERT_SHA256 || '' }}
+        run: .\sign-windows-artifact.ps1 -Path '.\dist\UpdateCenter.exe' -AllowUnsignedDevelopment:(!$env:RELEASE_TAG)
 
-      - name: Install Inno Setup
+      - name: Prepare verified Inno Setup 7.1.1 portable
+        id: inno
         shell: pwsh
-        run: choco install innosetup --no-progress -y
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $toolRoot = Join-Path $env:RUNNER_TEMP ('inno-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $toolRoot | Out-Null
+          $package = Join-Path $toolRoot 'innosetup-7.1.1-x64.exe'
+          $compilerDirectory = Join-Path $toolRoot 'compiler'
+          # Digest and publisher verified against the official immutable is-7_1_1 release.
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $package
+          if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -cne '8A5A6711C3766A6E5FB74F280BA0E3551E719CE94538D901FDBD1F8F9920B3F0') {
+            throw 'SHA-256 del distributivo Inno Setup inatteso.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $package
+          if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate -or
+              $signature.SignerCertificate.Subject -cne 'CN=Pyrsys B.V., O=Pyrsys B.V., S=Noord-Holland, C=NL') {
+            throw 'Firma o timestamp del distributivo Inno Setup non attendibile.'
+          }
+          $arguments = @('/PORTABLE=1', '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES',
+            '/NORESTART', '/NOICONS', '/NOCLOSEAPPLICATIONS', '/NORESTARTAPPLICATIONS',
+            ('/DIR="' + $compilerDirectory + '"'))
+          $process = Start-Process -FilePath $package -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Preparazione Inno Setup fallita ($($process.ExitCode))." }
+          $compiler = Join-Path $compilerDirectory 'ISCC.exe'
+          if ((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash -cne 'E0F9F1DC32032650C6629F6DEE41EB6D20BA140E4E3C07C25D8A24F9BA781644') {
+            throw 'SHA-256 del compilatore Inno Setup inatteso.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $compiler
+          if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate -or
+              $signature.SignerCertificate.Subject -cne 'CN=Pyrsys B.V., O=Pyrsys B.V., S=Noord-Holland, C=NL') {
+            throw 'Firma o timestamp del compilatore Inno Setup non attendibile.'
+          }
+          # ISCC retains its built-in signature verification of compiler components.
+          "compiler=$compiler" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Build installer
         shell: pwsh
-        run: .\build-installer.ps1 -NoAppBuild
+        env:
+          INNO_COMPILER: ${{ steps.inno.outputs.compiler }}
+        run: .\build-installer.ps1 -NoAppBuild -SkipChecksum -InnoCompilerPath $env:INNO_COMPILER
 
       - name: Sign installer
+        if: steps.version.outputs.unsigned_release != 'true'
         shell: pwsh
         env:
-          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
-          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          WINDOWS_SIGNING_PFX_BASE64: ${{ steps.version.outputs.release_tag != '' && secrets.WINDOWS_SIGNING_PFX_BASE64 || '' }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ steps.version.outputs.release_tag != '' && secrets.WINDOWS_SIGNING_PFX_PASSWORD || '' }}
+          WINDOWS_SIGNING_CERT_SHA256: ${{ steps.version.outputs.release_tag != '' && vars.WINDOWS_SIGNING_CERT_SHA256 || '' }}
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
-        run: .\sign-windows-artifact.ps1 -Path ".\installer-dist\UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
+        run: .\sign-windows-artifact.ps1 -Path ".\installer-dist\UpdateCenter-Setup-v$env:RELEASE_VERSION.exe" -AllowUnsignedDevelopment:(!$env:RELEASE_TAG)
 
       - name: Create and verify release artifacts
         id: package
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.value }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          WINDOWS_SIGNING_CERT_SHA256: ${{ vars.WINDOWS_SIGNING_CERT_SHA256 }}
+          UNSIGNED_RELEASE: ${{ steps.version.outputs.unsigned_release }}
         run: |
-          $releaseRoot = Join-Path $env:RUNNER_TEMP 'update-center-release'
-          $artifacts = Join-Path $releaseRoot 'artifacts'
-          if (Test-Path -LiteralPath $releaseRoot) {
-            Remove-Item -LiteralPath $releaseRoot -Recurse -Force
-          }
-          New-Item -Path $artifacts -ItemType Directory -Force | Out-Null
+          $artifacts = Join-Path $env:RUNNER_TEMP ("update-center-release-" + [guid]::NewGuid().ToString('N'))
+          New-Item -Path $artifacts -ItemType Directory | Out-Null
 
           $setupName = "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe"
           $portableName = "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe"
@@ -132,6 +219,11 @@ jobs:
             [pscustomobject]@{ Path = $portablePath; Name = $portableName; ChecksumPath = $portableChecksumPath; ChecksumName = $portableChecksumName }
           )
           foreach ($asset in $releaseAssets) {
+            if ($env:UNSIGNED_RELEASE -eq 'true') {
+              if ($env:RELEASE_VERSION -cne '2.0.0' -or (Get-AuthenticodeSignature -LiteralPath $asset.Path).Status -ne 'NotSigned') {
+                throw "Artefatto inatteso per la policy 2.0.0: $($asset.Name)."
+              }
+            } elseif ($env:RELEASE_TAG) { .\sign-windows-artifact.ps1 -Path $asset.Path -VerifyOnly }
             $hash = (Get-FileHash -LiteralPath $asset.Path -Algorithm SHA256).Hash
             Set-Content -LiteralPath $asset.ChecksumPath -Value "$hash  $($asset.Name)" -Encoding ascii
           }
@@ -158,9 +250,10 @@ jobs:
             throw "FileVersion inattesa per ${portableName}: $($portableVersionInfo.FileVersion)"
           }
           foreach ($assetPath in @($setupPath)) {
-            $assetVersion = (Get-Item -LiteralPath $assetPath).VersionInfo.ProductVersion.Trim()
-            if ($assetVersion -ne $env:RELEASE_VERSION) {
-              throw "Versione EXE inattesa per $(Split-Path -Leaf $assetPath): $assetVersion"
+            $assetVersion = (Get-Item -LiteralPath $assetPath).VersionInfo
+            if ($assetVersion.ProductVersion.Trim() -ne $env:RELEASE_VERSION -or
+                $assetVersion.FileVersion.Trim() -ne "$env:RELEASE_VERSION.0") {
+              throw "Versione EXE inattesa per $(Split-Path -Leaf $assetPath)."
             }
           }
           if (@(Get-ChildItem -LiteralPath $artifacts -File -Filter '*.bat').Count -ne 0) {
@@ -177,7 +270,7 @@ jobs:
           retention-days: 30
 
   release:
-    if: needs.build.outputs.release_tag != ''
+    if: needs.build.outputs.release_tag != '' && !(github.event_name == 'workflow_dispatch' && inputs.rc_build)
     needs: build
     runs-on: windows-2022
     timeout-minutes: 10
@@ -185,6 +278,11 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout signature verifier at build commit
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
       - name: Download verified artifacts
         uses: actions/download-artifact@v8
         with:
@@ -198,6 +296,8 @@ jobs:
           RELEASE_VERSION: ${{ needs.build.outputs.version }}
           RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
           ASSET_DIRECTORY: artifacts
+          WINDOWS_SIGNING_CERT_SHA256: ${{ vars.WINDOWS_SIGNING_CERT_SHA256 }}
+          UNSIGNED_RELEASE: ${{ needs.build.outputs.unsigned_release }}
         run: |
           $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
           $expectedAssets = @(
@@ -210,7 +310,23 @@ jobs:
               @($expectedAssets | Where-Object { -not (Test-Path -LiteralPath (Join-Path $env:ASSET_DIRECTORY $_)) }).Count -ne 0) {
             throw "Asset di Release inattesi o mancanti per la versione $env:RELEASE_VERSION."
           }
+          foreach ($exe in ($expectedAssets | Where-Object { $_ -like '*.exe' })) {
+            $path = Join-Path $env:ASSET_DIRECTORY $exe
+            if ($env:UNSIGNED_RELEASE -eq 'true') {
+              if ($env:RELEASE_TAG -cne 'v2.0.0' -or (Get-AuthenticodeSignature -LiteralPath $path).Status -ne 'NotSigned') {
+                throw "Artefatto inatteso per la policy 2.0.0: $exe."
+              }
+            } else { .\sign-windows-artifact.ps1 -Path $path -VerifyOnly }
+            $sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            $checksum = @(Get-Content -LiteralPath "$path.sha256")
+            if ($checksum.Count -ne 1 -or $checksum[0] -cne "$sha256  $exe") {
+              throw "Checksum scaricato non valido per $exe."
+            }
+          }
           if (gh release view $env:RELEASE_TAG --repo "$env:GITHUB_REPOSITORY" 2>$null) {
+            if ($env:RELEASE_TAG -ceq 'v2.0.0') {
+              throw 'Gli asset v2.0.0 già pubblicati sono vincolati al digest e non possono essere sostituiti da questo workflow.'
+            }
             gh release upload $env:RELEASE_TAG $assets --repo "$env:GITHUB_REPOSITORY" --clobber
             if ($LASTEXITCODE -ne 0) { throw "Caricamento degli asset di Release non riuscito (exit code $LASTEXITCODE)." }
           } else {

@@ -3,6 +3,7 @@ namespace UpdateCenter.Models;
 public static class UpdateOutcomes
 {
     public const string Completed = "Completed";
+    public const string Cancelled = "Cancelled";
     public const string Failed = "Failed";
     public const string NotApplicable = "NotApplicable";
     public const string ManualRequired = "ManualRequired";
@@ -22,6 +23,10 @@ public static class UpdateFailureReasons
     public const string None = "";
     public const string FilesInUse = "FilesInUse";
     public const string Infrastructure = "Infrastructure";
+    public const string NotApplicable = "NotApplicable";
+    public const string InstallerTechnologyMismatch = "InstallerTechnologyMismatch";
+    public const string UpgradeNotSupported = "UpgradeNotSupported";
+    public const string ElevationRequired = "ElevationRequired";
 }
 
 public enum ItemExecutionState
@@ -39,11 +44,14 @@ public enum ItemTerminalDisposition
     Succeeded,
     Failed,
     NotAutomaticallyApplicable,
-    Cancelled
+    Cancelled,
+    PendingVerification,
+    PendingRestart
 }
 
 public sealed class UpdateVerificationResult
 {
+    public SoftwareVersionRelation VersionRelation { get; set; } = SoftwareVersionRelation.NotComparable;
     public bool IsDefinitive { get; set; }
     public bool Verified { get; set; }
     public string Status { get; set; } = UpdateVerificationStatuses.NotRun;
@@ -111,11 +119,15 @@ public sealed class PlanItem
     public string InstalledVersion { get; set; } = "";
     public string AvailableVersion { get; set; } = "";
     public string PackageOperation { get; set; } = PackageOperations.Upgrade;
+    public string WinGetClientVersion { get; set; } = "";
+    public WinGetScopeBinding? WinGetBinding { get; set; }
+    public WinGetVerificationBinding? WinGetVerification { get; set; }
     public string? WindowsUpdateId { get; set; }
     public int WindowsUpdateRevision { get; set; }
     public int WindowsUpdateServerSelection { get; set; }
     public string WindowsUpdateServiceId { get; set; } = "";
     public string DriverInstallMode { get; set; } = "";
+    public string DriverDeviceId { get; set; } = "";
     public string Vendor { get; set; } = "";
     public string OfficialReleasePageUrl { get; set; } = "";
     public string OfficialDownloadUrl { get; set; } = "";
@@ -127,6 +139,12 @@ public sealed class PlanItem
 
 public sealed class UpdateRunStatus
 {
+    // Local presentation of the active runner batch. Never persisted or merged into the terminal ledger.
+    internal IReadOnlyList<ItemRunResult> BatchResults { get; init; } = [];
+    internal PlanItem? CurrentTarget { get; init; }
+
+    // Reporting only. This user-writable channel is never evidence of authorization.
+    public List<PlanItem>? ReceivedItems { get; set; }
     public string State { get; set; } = "Starting";
     public int CurrentIndex { get; set; }
     public int Total { get; set; }
@@ -147,6 +165,7 @@ public sealed class UpdateRunStatus
 
 public sealed class ItemRunResult
 {
+    public PlanItem? ReportedTarget { get; set; }
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string Kind { get; set; } = "";
@@ -188,12 +207,15 @@ internal sealed class ItemExecutionStateMachine
 
     internal static ItemTerminalDisposition ResolveDisposition(ItemRunResult result)
     {
+        if (result.Outcome.Equals(UpdateOutcomes.Cancelled, StringComparison.Ordinal))
+            return ItemTerminalDisposition.Cancelled;
         if (result.Outcome.Equals(UpdateOutcomes.NotApplicable, StringComparison.Ordinal) ||
             result.Outcome.Equals(UpdateOutcomes.ManualRequired, StringComparison.Ordinal))
             return ItemTerminalDisposition.NotAutomaticallyApplicable;
-        return result.Success
-            ? ItemTerminalDisposition.Succeeded
-            : ItemTerminalDisposition.Failed;
+        if (!result.Success) return ItemTerminalDisposition.Failed;
+        if (result.Verified) return ItemTerminalDisposition.Succeeded;
+        return result.RestartRequired || result.VerificationStatus == UpdateVerificationStatuses.PendingRestart
+            ? ItemTerminalDisposition.PendingRestart : ItemTerminalDisposition.PendingVerification;
     }
 
     private void Transition(ItemExecutionState expected, ItemExecutionState next)
@@ -220,7 +242,7 @@ internal sealed class UpdateSessionResultLedger
             throw new InvalidOperationException($"Risultato terminale duplicato per {result.Kind}:{result.Id}.");
         _results.Add(result);
         UpdateCenter.Services.LogService.WriteEvent("update", "terminal-result",
-            result.TerminalDisposition == ItemTerminalDisposition.Succeeded && !result.Verified
+            result.TerminalDisposition is ItemTerminalDisposition.PendingVerification or ItemTerminalDisposition.PendingRestart
                 ? "completed-unverified" : result.TerminalDisposition.ToString(),
             result.Id, result.ResultCode,
             $"success={result.Success}; verified={result.Verified}; verification={result.VerificationStatus}; " +
@@ -235,7 +257,9 @@ internal readonly record struct UpdateSessionSummary(
     int SucceededCount,
     int FailedCount,
     int NotAutomaticallyApplicableCount,
-    int CancelledCount)
+    int CancelledCount,
+    int PendingVerificationCount = 0,
+    int PendingRestartCount = 0)
 {
     public bool HasProblems => FailedCount > 0 || NotAutomaticallyApplicableCount > 0 || CancelledCount > 0;
 
@@ -251,14 +275,21 @@ internal readonly record struct UpdateSessionSummary(
                 throw new InvalidOperationException($"Il riepilogo ha ricevuto un risultato duplicato per {result.Kind}:{result.Id}.");
         }
 
+        // Project legacy completions without rewriting persisted records.
+        var dispositions = results.Select(x => x.TerminalDisposition == ItemTerminalDisposition.Succeeded && !x.Verified
+            ? (x.RestartRequired || x.VerificationStatus == UpdateVerificationStatuses.PendingRestart
+                ? ItemTerminalDisposition.PendingRestart : ItemTerminalDisposition.PendingVerification)
+            : x.TerminalDisposition).ToArray();
         var summary = new UpdateSessionSummary(
             results.Count,
-            results.Count(x => x.TerminalDisposition == ItemTerminalDisposition.Succeeded),
-            results.Count(x => x.TerminalDisposition == ItemTerminalDisposition.Failed),
-            results.Count(x => x.TerminalDisposition == ItemTerminalDisposition.NotAutomaticallyApplicable),
-            results.Count(x => x.TerminalDisposition == ItemTerminalDisposition.Cancelled));
+            dispositions.Count(x => x == ItemTerminalDisposition.Succeeded),
+            dispositions.Count(x => x == ItemTerminalDisposition.Failed),
+            dispositions.Count(x => x == ItemTerminalDisposition.NotAutomaticallyApplicable),
+            dispositions.Count(x => x == ItemTerminalDisposition.Cancelled),
+            dispositions.Count(x => x == ItemTerminalDisposition.PendingVerification),
+            dispositions.Count(x => x == ItemTerminalDisposition.PendingRestart));
         if (summary.ProcessedTerminalCount != summary.SucceededCount + summary.FailedCount +
-            summary.NotAutomaticallyApplicableCount + summary.CancelledCount)
+            summary.NotAutomaticallyApplicableCount + summary.CancelledCount + summary.PendingVerificationCount + summary.PendingRestartCount)
             throw new InvalidOperationException("I contatori terminali della sessione non sono coerenti.");
         return summary;
     }

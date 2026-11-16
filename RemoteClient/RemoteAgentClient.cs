@@ -17,16 +17,13 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
         string address,
         int port,
         string code,
+        string trustedAgentSha256,
         string displayName = "",
         CancellationToken cancellationToken = default)
     {
+        var trustedFingerprint = NormalizeTrustedFingerprint(trustedAgentSha256);
         using var controllerCertificate = identityStore.GetOrCreateCertificate();
-        string observedFingerprint = "";
-        using var handler = CreateHandler(certificate =>
-        {
-            observedFingerprint = Fingerprint(certificate);
-            return true;
-        });
+        using var handler = CreateHandler(certificate => FixedEquals(trustedFingerprint, Fingerprint(certificate)));
         using var http = CreateHttpClient(address, port, handler);
         using var response = await http.PostAsJsonAsync("/api/v1/pair", new PairingRequest
         {
@@ -40,8 +37,7 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
                       ?? throw new InvalidDataException("Risposta pairing non valida.");
         if (!response.IsSuccessStatusCode || !pairing.Success)
             throw new InvalidOperationException($"{pairing.ErrorCode}: {pairing.Message}");
-        if (string.IsNullOrWhiteSpace(observedFingerprint) ||
-            !FixedEquals(observedFingerprint, pairing.AgentCertificateSha256))
+        if (!FixedEquals(trustedFingerprint, pairing.AgentCertificateSha256))
             throw new InvalidOperationException("Il certificato dell'Agent è cambiato durante il pairing.");
 
         var record = new PairedAgentRecord
@@ -50,7 +46,7 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
             DisplayName = string.IsNullOrWhiteSpace(displayName) ? address : displayName,
             Address = address,
             ApiPort = port,
-            CertificateSha256 = observedFingerprint,
+            CertificateSha256 = trustedFingerprint,
             PairedUtc = DateTime.UtcNow
         };
         identityStore.SaveAgent(record);
@@ -60,16 +56,13 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
     public async Task<PendingRemoteConnectionRequest> RequestConnectionAsync(
         string address,
         int port,
-        string displayName,
+        string trustedAgentSha256,
+        string displayName = "",
         CancellationToken cancellationToken = default)
     {
+        var trustedFingerprint = NormalizeTrustedFingerprint(trustedAgentSha256);
         using var controllerCertificate = identityStore.GetOrCreateCertificate();
-        string observedFingerprint = "";
-        using var handler = CreateHandler(certificate =>
-        {
-            observedFingerprint = Fingerprint(certificate);
-            return true;
-        });
+        using var handler = CreateHandler(certificate => FixedEquals(trustedFingerprint, Fingerprint(certificate)));
         using var http = CreateHttpClient(address, port, handler);
         using var response = await http.PostAsJsonAsync("/api/v1/connection-requests", new ConnectionRequestCreate
         {
@@ -83,15 +76,14 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
         if (!response.IsSuccessStatusCode || !result.Success)
             throw new RemoteAgentException(result.ErrorCode, result.Message, (int)response.StatusCode);
         if (result.RequestId == Guid.Empty || string.IsNullOrWhiteSpace(result.PollToken) ||
-            string.IsNullOrWhiteSpace(observedFingerprint) ||
-            !FixedEquals(observedFingerprint, result.AgentCertificateSha256))
+            !FixedEquals(trustedFingerprint, result.AgentCertificateSha256))
             throw new InvalidDataException("Identità dell'Agent non verificabile durante la richiesta.");
         return new PendingRemoteConnectionRequest(
             result.RequestId,
             address,
             port,
             displayName,
-            observedFingerprint,
+            trustedFingerprint,
             result.AgentId,
             result.PollToken,
             result.ExpiresUtc);
@@ -200,6 +192,16 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
         return result;
     }
 
+    public static bool IsValidFingerprint(string? value) =>
+        value?.Trim() is { Length: 64 } pin && pin.All(Uri.IsHexDigit);
+
+    private static string NormalizeTrustedFingerprint(string value)
+    {
+        if (!IsValidFingerprint(value))
+            throw new ArgumentException("Impronta SHA-256 non valida.", nameof(value));
+        return value.Trim().ToUpperInvariant();
+    }
+
     private static HttpClientHandler CreateHandler(Func<X509Certificate2, bool> validateServer)
     {
         var handler = new HttpClientHandler
@@ -207,7 +209,7 @@ public sealed class RemoteAgentClient(ControllerIdentityStore identityStore)
             AllowAutoRedirect = false,
             UseProxy = false,
             ServerCertificateCustomValidationCallback = (_, certificate, _, _) =>
-                certificate is not null && validateServer(new X509Certificate2(certificate))
+                certificate is not null && validateServer(certificate)
         };
         return handler;
     }

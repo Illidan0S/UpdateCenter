@@ -16,6 +16,24 @@ internal enum WinGetUpgradeSafety
 
 internal sealed class WinGetManifestSafetyService
 {
+    private readonly Func<string, string, CancellationToken, Task<ManifestInspection>> _inspect;
+    private readonly Func<WinGetCommand, WinGetScopeGuard> _createGuard;
+    private readonly Func<string, string, string> _readScope;
+    private readonly string _architecture;
+    private readonly Func<bool> _isAdministrator;
+
+    internal WinGetManifestSafetyService(
+        Func<string, string, CancellationToken, Task<ManifestInspection>>? inspect = null,
+        Func<WinGetCommand, WinGetScopeGuard>? createGuard = null,
+        Func<string, string, string>? readScope = null,
+        string? architecture = null, Func<bool>? isAdministrator = null)
+    {
+        _inspect = inspect ?? InspectAsync;
+        _createGuard = createGuard ?? WinGetScopeGuard.Native;
+        _readScope = readScope ?? WinGetInstalledScopeService.Detect;
+        _architecture = architecture ?? GetSystemArchitecture();
+        _isAdministrator = isAdministrator ?? WinGetScopeGuard.CurrentIsAdministrator;
+    }
     private static readonly HttpClient Client = CreateClient();
     private static readonly Regex UpgradeBehaviorLine = new(
         "^\\s*UpgradeBehavior\\s*:\\s*([^\\s#]+)",
@@ -26,11 +44,7 @@ internal sealed class WinGetManifestSafetyService
     private static readonly Regex ScopeLine = new(
         "^\\s*Scope\\s*:\\s*['\\\"]?([^'\\\"\\s#]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
-    private static readonly Regex InstallerEntryStart = new(
-        "^(?<indent>\\s*)-\\s+Architecture\\s*:\\s*['\\\"]?(?<architecture>[^'\\\"\\s#]+)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline);
-
-    public async Task ApplyAsync(IReadOnlyList<UpdateItem> items, CancellationToken cancellationToken)
+    public async Task ApplyAsync(IReadOnlyList<UpdateItem> items, CancellationToken cancellationToken, WinGetCommand execute)
     {
         using var concurrency = new SemaphoreSlim(6);
         var checks = items
@@ -40,18 +54,54 @@ internal sealed class WinGetManifestSafetyService
                 await concurrency.WaitAsync(cancellationToken);
                 try
                 {
-                    var inspection = await InspectAsync(item.Id, item.AvailableVersion, cancellationToken);
+                    var inspection = await _inspect(item.Id, item.AvailableVersion, cancellationToken);
                     if (inspection.DownloadSizeBytes > 0)
                     {
                         item.DownloadSizeBytes = inspection.DownloadSizeBytes;
                         item.Size = FormatBytes(inspection.DownloadSizeBytes);
                     }
 
+                    if (item.CanInstall && inspection.Manifest is { } manifest)
+                    {
+                        var guard = _createGuard(execute);
+                        try
+                        {
+                            var binding = await guard.PrepareAsync(item, manifest, cancellationToken);
+                            if (binding is null)
+                                item.WinGetVerification = await guard.PrepareVerificationAsync(item, manifest, cancellationToken);
+                            if (binding is not null)
+                            {
+                                item.WinGetBinding = binding;
+                                ApplySafetyClassification(item, Enum.Parse<WinGetUpgradeSafety>(binding.Safety));
+                                ApplyInstallationRequirements(item, WinGetScopeGuard.AssessRequirements(
+                                    WinGetInstallerMetadata.Parse(manifest), item.Id, item.AvailableVersion,
+                                    _architecture, binding.Scope, binding,
+                                    isAdministrator: _isAdministrator()));
+                                if (WinGetScopeGuard.PreparedCopyIsCurrent(binding, manifest, item.AvailableVersion))
+                                {
+                                    item.CanInstall = false;
+                                    item.IsSelected = false;
+                                    item.Status = LocalizationService.Text("Già aggiornato", "Already up to date");
+                                    item.ResultDetails = LocalizationService.Text(
+                                        "Il target è già verificato sulla stessa copia locale. Nessun installer necessario.",
+                                        "The target is already verified on the same local installation. No installer is needed.");
+                                }
+                                return;
+                            }
+                        }
+                        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or System.ComponentModel.Win32Exception)
+                        { LogService.Write("Identità WinGet non verificabile; recupero scope escluso.", ex); }
+                    }
                     ApplySafetyClassification(item, inspection.Safety);
                     ApplyScopeCompatibility(
                         item,
-                        WinGetInstalledScopeService.Detect(item.Name, item.InstalledVersion),
+                        _readScope(item.Name, item.InstalledVersion),
                         inspection.Scope);
+                    ApplyInstallationRequirements(item, WinGetScopeGuard.AssessRequirements(
+                        inspection.Manifest is null ? null : WinGetInstallerMetadata.Parse(inspection.Manifest),
+                        item.Id, item.AvailableVersion, _architecture,
+                        _readScope(item.Name, item.InstalledVersion),
+                        isAdministrator: _isAdministrator()));
                 }
                 finally
                 {
@@ -61,8 +111,9 @@ internal sealed class WinGetManifestSafetyService
         await Task.WhenAll(checks);
     }
 
-    private static void ApplySafetyClassification(UpdateItem item, WinGetUpgradeSafety safety)
+    internal static void ApplySafetyClassification(UpdateItem item, WinGetUpgradeSafety safety)
     {
+        if (!item.CanInstall) return;
         switch (safety)
         {
             case WinGetUpgradeSafety.Safe:
@@ -71,9 +122,7 @@ internal sealed class WinGetManifestSafetyService
                 item.RequiresRiskConfirmation = true;
                 item.IsSelected = false;
                 item.Status = LocalizationService.Text("Conferma richiesta", "Confirmation required");
-                item.ResultDetails = LocalizationService.Text(
-                    "L'installer compatibile con questo PC dichiara la rimozione della versione attuale prima di installare quella nuova. È richiesta una conferma aggiuntiva.",
-                    "The installer compatible with this PC declares that it removes the current version before installing the new one. Additional confirmation is required.");
+                item.ResultDetails = LocalizationService.Translate(LocalizationService.InstallerRemovalRiskMessage);
                 return;
             case WinGetUpgradeSafety.UpgradeUnsupported:
                 item.IsSelected = false;
@@ -86,10 +135,32 @@ internal sealed class WinGetManifestSafetyService
             default:
                 item.HasUnverifiedInstallerMetadata = true;
                 item.IsSelected = false;
-                item.ResultDetails = LocalizationService.Text(
-                    "I metadati sul comportamento dell'installer non sono disponibili o non sono stati verificati. Non risulta dichiarata una rimozione preventiva.",
-                    "Installer behavior metadata is unavailable or could not be verified. No prior removal is declared.");
+                item.ResultDetails = LocalizationService.Translate(LocalizationService.InstallerBehaviorUnknownMessage);
                 return;
+        }
+    }
+
+    internal static void ApplyInstallationRequirements(UpdateItem item, WinGetRequirementAssessment requirements)
+    {
+        // A requirements summary must never overwrite a stronger B2/risk rejection.
+        if (!item.CanInstall) return;
+        item.Diagnostics = string.Join(Environment.NewLine, new[] { item.Diagnostics,
+            $"WinGet requirements: state={requirements.State}; canContinue={requirements.CanContinue}; " +
+            $"id={item.Id}; version={item.AvailableVersion}; source={item.Source}; " +
+            $"installerConstraint={item.WinGetBinding?.InstallerType ?? "unbound"}; " +
+            $"scopeConstraint={item.WinGetBinding?.Scope ?? "unbound"}." }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        item.ResultDetails = string.Join(" ", new[] { item.ResultDetails, requirements.Message }
+            .Where(x => !string.IsNullOrWhiteSpace(x)));
+        if (requirements.State == WinGetRequirementState.Unknown)
+        {
+            item.HasUnverifiedInstallerMetadata = true;
+            item.IsSelected = false;
+        }
+        if (!requirements.CanContinue)
+        {
+            item.CanInstall = false;
+            item.IsSelected = false;
+            item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
         }
     }
 
@@ -112,7 +183,7 @@ internal sealed class WinGetManifestSafetyService
 
                     var manifest = await response.Content.ReadAsStringAsync(cancellationToken);
                     var size = await ResolveDownloadSizeAsync(ParseInstallerUrls(manifest), cancellationToken);
-                    return new(ParseUpgradeSafety(manifest), size, ParseInstallerScope(manifest));
+                    return new(ParseUpgradeSafety(manifest), size, ParseInstallerScope(manifest), manifest);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
@@ -125,16 +196,67 @@ internal sealed class WinGetManifestSafetyService
             }
         }
 
-        return new(WinGetUpgradeSafety.Unknown, 0, "");
+        return new(WinGetUpgradeSafety.Unknown, 0, "", null);
     }
 
-    internal static string ParseInstallerScope(string manifest) =>
-        ScopeLine.Match(manifest) is { Success: true } match
-            ? match.Groups[1].Value.Trim().ToLowerInvariant()
-            : "";
+    internal static async Task<string?> ReadManifestAsync(string id, string version, CancellationToken token)
+    {
+        foreach (var uri in BuildManifestUris(id, version))
+        {
+            try
+            {
+                using var response = await Client.GetAsync(uri, token).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.NotFound) continue;
+                if (!response.IsSuccessStatusCode) return null;
+                return await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            }
+            catch (HttpRequestException) { return null; }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested) { return null; }
+        }
+        return null;
+    }
+
+    internal static string ParseInstallerScope(string manifest)
+    {
+        // Resolve common values with installer overrides before summarizing.
+        // This still does not select an installer or authorize another scope.
+        var parsed = WinGetInstallerMetadata.Parse(manifest);
+        if (parsed is null) return "ambiguous";
+        var scopes = parsed.Installers.Select(x => x.Scope).Distinct(StringComparer.Ordinal).ToArray();
+        return scopes.Length == 1 && scopes[0] is "" or "user" or "machine" ? scopes[0] : "ambiguous";
+    }
 
     internal static void ApplyScopeCompatibility(UpdateItem item, string installedScope, string availableScope)
     {
+        // Keep the substantive rejection (for example UpgradeBehavior: deny).
+        // An additional scope summary must never replace it with a promise of recovery.
+        if (!item.CanInstall) return;
+        if (installedScope == "ambiguous")
+        {
+            item.CanInstall = false;
+            item.IsSelected = false;
+            item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
+            item.ResultDetails = LocalizationService.Text(
+                "Installazione non univoca: sono presenti più copie con lo stesso nome nel registro. " +
+                "Nome e versione non identificano quale copia verrà aggiornata. È necessaria una verifica manuale.",
+                "Installation is ambiguous: multiple copies with the same name are present in the registry. " +
+                "Name and version do not identify which copy will be upgraded. Manual verification is required.");
+            return;
+        }
+        if (availableScope == "ambiguous")
+        {
+            item.CanInstall = false;
+            item.IsSelected = false;
+            item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
+            item.ResultDetails = LocalizationService.Text(
+                "Ambito non confermato: il manifest dichiara ambiti diversi o non riconosciuti. " +
+                "La presenza di una variante compatibile non garantisce che venga utilizzata. " +
+                "L'aggiornamento automatico resta bloccato finché non è possibile vincolare e verificare lo stesso ambito nell'esecuzione.",
+                "Scope not confirmed: the manifest declares different or unrecognized scopes. " +
+                "The presence of a compatible variant does not guarantee it will be used. " +
+                "Automatic updating remains blocked until the same scope can be bound and verified during execution.");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(installedScope) || string.IsNullOrWhiteSpace(availableScope) ||
             installedScope.Equals(availableScope, StringComparison.OrdinalIgnoreCase)) return;
 
@@ -142,11 +264,12 @@ internal sealed class WinGetManifestSafetyService
         item.IsSelected = false;
         item.Status = LocalizationService.Text("Aggiornamento manuale", "Manual update");
         item.ResultDetails = LocalizationService.Text(
-            $"WinGet ha rilevato un cambio di ambito: la copia installata è {ScopeLabel(installedScope)}, " +
-            $"mentre il nuovo installer è {ScopeLabel(availableScope)}. L'installazione automatica potrebbe creare " +
-            "una seconda copia; usa l'aggiornamento interno del programma o il sito ufficiale.",
-            $"WinGet detected a scope change: the installed copy is {installedScope}, while the new installer is " +
-            $"{availableScope}. Automatic installation could create a second copy; use the application's built-in updater or official website.");
+            $"Ambito non confermato: la copia rilevata è {ScopeLabel(installedScope)}, " +
+            $"mentre una voce dei metadati riporta {ScopeLabel(availableScope)}. Il manifest può contenere più installer. " +
+            "L'aggiornamento automatico resta bloccato: occorre verificare un installer della versione esatta per lo stesso ambito.",
+            $"Scope not confirmed: the detected installation is {installedScope}, while one metadata entry declares " +
+            $"{availableScope}. The manifest may contain multiple installers. Automatic updating remains blocked: " +
+            "an installer for the exact version and the same scope must be verified.");
     }
 
     private static string ScopeLabel(string scope) => scope.Equals("machine", StringComparison.OrdinalIgnoreCase)
@@ -171,22 +294,21 @@ internal sealed class WinGetManifestSafetyService
         return lengths.DefaultIfEmpty(0).Max();
     }
 
-    private static async Task<long> ReadDownloadSizeAsync(Uri uri, CancellationToken cancellationToken)
+    private static Task<long> ReadDownloadSizeAsync(Uri uri, CancellationToken cancellationToken) =>
+        ReadDownloadSizeAsync(Client, uri, cancellationToken);
+
+    internal static async Task<long> ReadDownloadSizeAsync(HttpClient client, Uri uri, CancellationToken cancellationToken)
     {
         try
         {
             using var head = new HttpRequestMessage(HttpMethod.Head, uri);
-            using var headResponse = await Client.SendAsync(
+            using var headResponse = await client.SendAsync(
                 head, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-            var length = headResponse.Content.Headers.ContentLength ?? 0;
-            if (length <= 0)
-            {
-                using var get = new HttpRequestMessage(HttpMethod.Get, uri);
-                using var getResponse = await Client.SendAsync(
-                    get, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-                length = getResponse.Content.Headers.ContentLength ?? 0;
-            }
-            return Math.Max(length, 0);
+            // Optional scan metadata must never request an installer payload.
+            // A failed HEAD may describe an error page, not the installer.
+            return headResponse.IsSuccessStatusCode
+                ? Math.Max(headResponse.Content.Headers.ContentLength ?? 0, 0)
+                : 0;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return 0; }
         catch (HttpRequestException) { return 0; }
@@ -194,50 +316,18 @@ internal sealed class WinGetManifestSafetyService
 
     internal static WinGetUpgradeSafety ParseUpgradeSafety(string manifest, string? systemArchitecture = null)
     {
-        var entries = InstallerEntryStart.Matches(manifest).Cast<Match>().ToList();
-        var commonSection = entries.Count == 0 ? manifest : manifest[..entries[0].Index];
-        var commonValues = ReadUpgradeBehaviorValues(commonSection);
-        if (commonValues.Count > 0)
-            return ClassifyUpgradeBehavior(commonValues);
-
-        if (entries.Count == 0)
-            return WinGetUpgradeSafety.Unknown;
-
-        var architecture = NormalizeArchitecture(systemArchitecture ?? GetSystemArchitecture());
-        var installerSections = entries.Select((entry, index) => new InstallerManifestSection(
-            NormalizeArchitecture(entry.Groups["architecture"].Value),
-            manifest.Substring(
-                entry.Index,
-                (index + 1 < entries.Count ? entries[index + 1].Index : manifest.Length) - entry.Index)))
-            .ToList();
-
-        var applicable = SelectApplicableSections(installerSections, architecture);
-        var values = applicable.SelectMany(x => ReadUpgradeBehaviorValues(x.Content)).ToList();
-        return ClassifyUpgradeBehavior(values);
-    }
-
-    private static IReadOnlyList<InstallerManifestSection> SelectApplicableSections(
-        IReadOnlyList<InstallerManifestSection> sections, string architecture)
-    {
-        var exact = sections.Where(x => x.Architecture == architecture).ToList();
-        if (exact.Count > 0) return exact;
-
-        var neutral = sections.Where(x => x.Architecture == "neutral").ToList();
-        if (neutral.Count > 0) return neutral;
-
-        var compatibleArchitectures = architecture switch
+        var parsed = WinGetInstallerMetadata.Parse(manifest);
+        if (parsed is not null)
         {
-            "arm64" => new[] { "x64", "x86", "arm" },
-            "x64" => new[] { "x86" },
-            _ => Array.Empty<string>()
-        };
-        foreach (var compatibleArchitecture in compatibleArchitectures)
-        {
-            var compatible = sections.Where(x => x.Architecture == compatibleArchitecture).ToList();
-            if (compatible.Count > 0) return compatible;
+            var arch = NormalizeArchitecture(systemArchitecture ?? GetSystemArchitecture());
+            return ClassifyUpgradeBehavior(parsed.Installers.Where(x => WinGetInstallerMetadata.Compatible(x.Architecture, arch))
+                .Select(x => x.Behavior).ToArray());
         }
-
-        return [];
+        // Unsupported YAML cannot certify safety. Explicit adverse declarations
+        // still remain conservative evidence; never turn them into a safe fallback.
+        var adverse = ClassifyUpgradeBehavior(ReadUpgradeBehaviorValues(manifest));
+        return adverse is WinGetUpgradeSafety.UpgradeUnsupported or WinGetUpgradeSafety.RemovesPreviousVersion
+            ? adverse : WinGetUpgradeSafety.Unknown;
     }
 
     private static List<string> ReadUpgradeBehaviorValues(string manifestSection) =>
@@ -245,13 +335,13 @@ internal sealed class WinGetManifestSafetyService
             .Select(x => x.Groups[1].Value.Trim())
             .ToList();
 
-    private static WinGetUpgradeSafety ClassifyUpgradeBehavior(IReadOnlyCollection<string> values)
+    internal static WinGetUpgradeSafety ClassifyUpgradeBehavior(IReadOnlyCollection<string> values)
     {
-        if (values.Any(x => x.Equals("uninstallPrevious", StringComparison.OrdinalIgnoreCase)))
-            return WinGetUpgradeSafety.RemovesPreviousVersion;
         if (values.Any(x => x.Equals("deny", StringComparison.OrdinalIgnoreCase)))
             return WinGetUpgradeSafety.UpgradeUnsupported;
-        if (values.Any(x => x.Equals("install", StringComparison.OrdinalIgnoreCase)))
+        if (values.Any(x => x.Equals("uninstallPrevious", StringComparison.OrdinalIgnoreCase)))
+            return WinGetUpgradeSafety.RemovesPreviousVersion;
+        if (values.Count > 0 && values.All(x => x.Equals("install", StringComparison.OrdinalIgnoreCase)))
             return WinGetUpgradeSafety.Safe;
         return WinGetUpgradeSafety.Unknown;
     }
@@ -294,10 +384,10 @@ internal sealed class WinGetManifestSafetyService
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.1.4");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/2.0.0");
         return client;
     }
 
-    private sealed record ManifestInspection(WinGetUpgradeSafety Safety, long DownloadSizeBytes, string Scope);
-    private sealed record InstallerManifestSection(string Architecture, string Content);
+    internal sealed record ManifestInspection(WinGetUpgradeSafety Safety, long DownloadSizeBytes, string Scope, string? Manifest);
+
 }

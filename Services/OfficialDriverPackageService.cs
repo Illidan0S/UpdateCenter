@@ -17,11 +17,12 @@ public static class OfficialDriverPackageService
     public static ItemRunResult Install(PlanItem item, Action<int, string>? progress = null)
     {
         var workRoot = Path.Combine(Path.GetTempPath(), "UpdateCenter", "driver-" + Guid.NewGuid().ToString("N"));
-        var currentPhase = "official-inf-prepare";
+        var currentPhase = "official-inf-preflight";
         try
         {
             progress?.Invoke(10, "Verifica del piano di installazione driver...");
             ValidatePlan(item);
+            ValidateInstalledDevice(item, new HardwareInventoryService().ScanAsync(CancellationToken.None).GetAwaiter().GetResult().Drivers);
             Directory.CreateDirectory(workRoot);
             var packagePath = Path.Combine(workRoot,
                 item.DriverPackageType.Equals("cab-inf", StringComparison.OrdinalIgnoreCase) ? "driver.cab" : "driver.zip");
@@ -61,6 +62,8 @@ public static class OfficialDriverPackageService
             var installerDiagnostics = new List<string>();
             var restartRequired = false;
             int? installerResultCode = null;
+            currentPhase = "official-inf-preflight";
+            ValidateInstalledDevice(item, new HardwareInventoryService().ScanAsync(CancellationToken.None).GetAwaiter().GetResult().Drivers);
             currentPhase = "official-inf-install";
             for (var infIndex = 0; infIndex < matchingInfs.Count; infIndex++)
             {
@@ -157,7 +160,9 @@ public static class OfficialDriverPackageService
         catch (Exception ex)
         {
             LogService.Write($"Installazione del pacchetto driver ufficiale {item.Name} rifiutata o fallita.", ex);
-            return Failed(item, ex.Message, currentPhase, ex.HResult, ex.ToString());
+            var failure = Failed(item, ex.Message, currentPhase, ex.HResult, ex.ToString());
+            if (currentPhase == "official-inf-preflight") failure.Outcome = UpdateOutcomes.ManualRequired;
+            return failure;
         }
         finally
         {
@@ -165,8 +170,10 @@ public static class OfficialDriverPackageService
         }
     }
 
-    private static void ValidatePlan(PlanItem item)
+    internal static void ValidatePlan(PlanItem item)
     {
+        if (string.IsNullOrWhiteSpace(item.DriverDeviceId) || item.DriverDeviceId.Length > 4096 || item.DriverDeviceId.Any(char.IsControl))
+            throw new InvalidOperationException(LocalizationService.Text("Identità del dispositivo mancante o non valida: ripetere la scansione.", "Missing or invalid device identity: run a new scan."));
         if (!item.DriverInstallMode.Equals(DriverInstallModes.OfficialInfPackage, StringComparison.Ordinal))
             throw new InvalidOperationException("Modalità di installazione driver non valida.");
         if (Regex.IsMatch(item.Name, @"\b(bios|uefi|firmware)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
@@ -191,7 +198,7 @@ public static class OfficialDriverPackageService
     {
         using var handler = new HttpClientHandler { AllowAutoRedirect = false };
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/1.1.4");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("UpdateCenter/2.0.0");
         var current = new Uri(item.OfficialDownloadUrl, UriKind.Absolute);
         for (var redirect = 0; redirect <= 5; redirect++)
         {
@@ -377,55 +384,7 @@ public static class OfficialDriverPackageService
         {
             var scan = new HardwareInventoryService()
                 .ScanAsync(CancellationToken.None).GetAwaiter().GetResult();
-            var expectedIds = item.CompatibleHardwareIds
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Select(NormalizeId)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            var candidates = scan.Drivers.Where(driver =>
-                driver.HardwareIds.Concat(driver.CompatibleIds).Append(driver.DeviceId)
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .Select(NormalizeId)
-                    .Any(expectedIds.Contains))
-                .ToList();
-
-            if (candidates.Count == 0)
-            {
-                return new UpdateVerificationResult
-                {
-                    IsDefinitive = !restartRequired,
-                    Status = restartRequired
-                        ? UpdateVerificationStatuses.PendingRestart
-                        : UpdateVerificationStatuses.Failed,
-                    Message = restartRequired
-                        ? LocalizationService.Text("La verifica dell'inventario verrà completata dopo il riavvio.", "Inventory verification will be completed after restart.")
-                        : LocalizationService.Text("Il dispositivo aggiornato non è stato ritrovato nell'inventario hardware.", "Updated device was not found in the hardware inventory."),
-                    Diagnostics = "Nessun dispositivo compatibile trovato nella verifica post-installazione."
-                };
-            }
-
-            var targetHasVersion = !string.IsNullOrWhiteSpace(item.AvailableVersion) &&
-                                   item.AvailableVersion.Any(char.IsDigit);
-            var verified = !targetHasVersion || candidates.Any(driver =>
-                DriverVersionComparer.Compare(driver.InstalledVersion, item.AvailableVersion) >= 0);
-            return new UpdateVerificationResult
-            {
-                IsDefinitive = verified || !restartRequired,
-                Verified = verified,
-                Status = verified
-                    ? UpdateVerificationStatuses.Verified
-                    : restartRequired
-                        ? UpdateVerificationStatuses.PendingRestart
-                        : UpdateVerificationStatuses.Failed,
-                Message = verified
-                    ? LocalizationService.Text("Versione driver verificata nell'inventario hardware.", "Driver version verified in hardware inventory.")
-                    : restartRequired
-                        ? LocalizationService.Text("La nuova versione non è ancora visibile; verifica da completare dopo il riavvio.", "The new version is not yet visible; verification to be completed after restart.")
-                        : LocalizationService.Text("La versione attesa non risulta installata nell'inventario hardware.", "The expected version does not appear installed in the hardware inventory."),
-                Diagnostics = "Versioni rilevate: " + string.Join(", ",
-                    candidates.Select(x => $"{x.DeviceName}={x.InstalledVersion}"))
-            };
+            return EvaluateInstalledDrivers(item, restartRequired, scan.Drivers);
         }
         catch (Exception ex)
         {
@@ -441,6 +400,81 @@ public static class OfficialDriverPackageService
                 Diagnostics = ex.ToString()
             };
         }
+    }
+
+    internal static void ValidateInstalledDevice(PlanItem item, IReadOnlyList<DriverInventoryItem> drivers)
+    {
+        var matches = MatchingDevices(item, drivers);
+        if (matches.Count != 1 || matches[0].Quantity != 1 || string.IsNullOrWhiteSpace(item.DriverDeviceId) ||
+            !string.Equals(matches[0].DeviceId, item.DriverDeviceId, StringComparison.OrdinalIgnoreCase) ||
+            !Version.TryParse(matches[0].InstalledVersion, out _) || !Version.TryParse(item.InstalledVersion, out _) ||
+            DriverVersionComparer.Compare(matches[0].InstalledVersion, item.InstalledVersion) != 0)
+            throw new InvalidOperationException(LocalizationService.Text(
+                "Il dispositivo o la versione installata sono cambiati o non sono univoci. Ripetere scansione e consenso.",
+                "The device or installed version changed or is not unique. Repeat the scan and consent."));
+    }
+
+    internal static UpdateVerificationResult EvaluateInstalledDrivers(
+        PlanItem item, bool restartRequired, IReadOnlyList<DriverInventoryItem> drivers)
+    {
+        var candidates = MatchingDevices(item, drivers);
+
+        // Inventory rows may aggregate several physical instances. An active
+        // driver on another compatible device, or a staged package alone, is
+        // never proof that this proposal reached its target.
+        var driver = candidates.Count == 1 ? candidates[0] : null;
+        if (driver is null || driver.Quantity != 1 || string.IsNullOrWhiteSpace(item.DriverDeviceId) ||
+            !string.Equals(driver.DeviceId, item.DriverDeviceId, StringComparison.OrdinalIgnoreCase) ||
+            !driver.IsSigned || !Regex.IsMatch(driver.InfName ?? "", @"^[^\\/:*?""<>|]+\.inf$", RegexOptions.IgnoreCase) ||
+            !Version.TryParse(item.AvailableVersion, out _) || !Version.TryParse(driver.InstalledVersion, out _))
+        {
+            return new UpdateVerificationResult
+            {
+                IsDefinitive = false,
+                Status = restartRequired ? UpdateVerificationStatuses.PendingRestart : UpdateVerificationStatuses.Unavailable,
+                Message = LocalizationService.Text(
+                    "Verifica driver inconcludente: servono un dispositivo univoco, un INF attivo firmato e versioni valide.",
+                    "Driver verification is inconclusive: a unique device, a signed active INF and valid versions are required."),
+                Diagnostics = $"matches={candidates.Count}; target={item.AvailableVersion}; " +
+                    string.Join("; ", candidates.Select(x => $"device={x.DeviceId}; quantity={x.Quantity}; inf={x.InfName}; signed={x.IsSigned}; version={x.InstalledVersion}"))
+            };
+        }
+
+        var verified = DriverVersionComparer.Compare(driver.InstalledVersion, item.AvailableVersion) >= 0;
+        return new UpdateVerificationResult
+        {
+            IsDefinitive = verified || !restartRequired,
+            Verified = verified,
+            Status = verified
+                ? UpdateVerificationStatuses.Verified
+                : restartRequired
+                    ? UpdateVerificationStatuses.PendingRestart
+                    : UpdateVerificationStatuses.Failed,
+            Message = verified
+                ? LocalizationService.Text("Versione driver verificata nell'inventario hardware.", "Driver version verified in hardware inventory.")
+                : restartRequired
+                    ? LocalizationService.Text("La nuova versione non è ancora visibile; verifica da completare dopo il riavvio.", "The new version is not yet visible; verification to be completed after restart.")
+                    : LocalizationService.Text("La versione attesa non risulta installata nell'inventario hardware.", "The expected version does not appear installed in the hardware inventory."),
+            Diagnostics = "Versioni rilevate: " + string.Join(", ",
+                candidates.Select(x => $"{x.DeviceName}={x.InstalledVersion}"))
+        };
+    }
+
+    private static List<DriverInventoryItem> MatchingDevices(PlanItem item, IReadOnlyList<DriverInventoryItem> drivers)
+    {
+        var expectedIds = item.CompatibleHardwareIds
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(NormalizeId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return drivers.Where(driver =>
+            driver.HardwareIds.Concat(driver.CompatibleIds).Append(driver.DeviceId)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(NormalizeId)
+                .Any(expectedIds.Contains))
+            .ToList();
+
     }
 
     private static string NormalizeId(string value) =>

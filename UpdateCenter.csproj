@@ -1,22 +1,27 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Separate evidence/build folders must never become application sources. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);_output\**</DefaultItemExcludes>
     <Nullable>enable</Nullable>
     <AssemblyName>UpdateCenter</AssemblyName>
     <RootNamespace>UpdateCenter</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\UpdateCenter.ico</ApplicationIcon>
-    <Version>1.1.5</Version>
-    <AssemblyVersion>1.1.5.0</AssemblyVersion>
-    <FileVersion>1.1.5.0</FileVersion>
-    <InformationalVersion>1.1.5</InformationalVersion>
-    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+    <InformationalVersion>2.0.0</InformationalVersion>
+    <UnsignedReleaseVersion>2.0.0</UnsignedReleaseVersion>
+    <!-- WPF owns startup and reads PerMonitorV2 from the manifest. WinForms supplies
+         the tray NotifyIcon. See https://github.com/dotnet/wpf/issues/6811. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Authors>Illidan0S</Authors>
     <Copyright>Copyright © 2026 Illidan0S</Copyright>
@@ -50,6 +55,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AssemblyMetadata Include="UnsignedReleaseVersion" Value="$(UnsignedReleaseVersion)"
+                      Condition="'$(Version)' == '2.0.0' And '$(UnsignedReleaseVersion)' == '2.0.0' And '$(WINDOWS_SIGNING_CERT_SHA256)' == ''" />
+    <AssemblyMetadata Include="ReleasePublisherSha256" Value="$(WINDOWS_SIGNING_CERT_SHA256)"
+                      Condition="'$(WINDOWS_SIGNING_CERT_SHA256)' != ''" />
     <ProjectReference Include="Contracts\UpdateCenter.Contracts.csproj" />
     <ProjectReference Include="Core\UpdateCenter.Core.csproj" />
     <ProjectReference Include="RemoteClient\UpdateCenter.RemoteClient.csproj" />

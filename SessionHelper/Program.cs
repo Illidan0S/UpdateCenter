@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.Principal;
 using UpdateCenter.Contracts;
 using UpdateCenter.Core;
 using UpdateCenter.Models;
@@ -26,8 +27,10 @@ try
     await using var pipe = new NamedPipeClientStream(
         ".",
         args[pipeIndex + 1],
-        PipeDirection.InOut,
-        PipeOptions.Asynchronous);
+        PipeAccessRights.ReadWrite,
+        PipeOptions.Asynchronous,
+        TokenImpersonationLevel.Identification,
+        HandleInheritability.None);
     using var timeout = new CancellationTokenSource(TimeSpan.FromHours(2));
     await pipe.ConnectAsync(timeout.Token);
     var request = await PipeJsonProtocol.ReadAsync<SessionHelperRequest>(pipe, timeout.Token);
@@ -131,6 +134,7 @@ static UpdateItem MapUpdate(RemoteUpdateItem item)
         AvailableVersion = item.AvailableVersion,
         Source = item.Source,
         PackageOperation = item.PackageOperation,
+        WinGetClientVersion = item.WinGetClientVersion,
         CanInstall = item.CanInstall,
         RequiresRestart = item.RequiresRestart,
         RequiresRiskConfirmation = item.RequiresRiskConfirmation,

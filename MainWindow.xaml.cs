@@ -1,6 +1,5 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.ComponentModel;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -17,41 +16,60 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
     private readonly DispatcherTimer _hardwareTimer;
-    private readonly DispatcherTimer _historyHoverTimer;
     private readonly DispatcherTimer _scheduledScanTimer;
     private readonly DispatcherTimer _networkStatusTimer;
     private System.Windows.Forms.NotifyIcon? _notifyIcon;
-    private HistoryEntry? _pendingHistoryEntry;
-    private FrameworkElement? _pendingHistoryElement;
+    private FrameworkElement? _updateStatusAnchor;
     private bool _appUpdateDialogOpen;
     private bool _scheduledScanRunning;
     private bool _driverRepairInProgress;
     private UpdateProgressWindow? _activeProgressWindow;
+    private string _currentPageTitle = "Home";
+    private readonly Task? _updateStartup;
 
-    public MainWindow()
+    public MainWindow() : this(null) { }
+
+    internal MainWindow(Task? updateStartup)
     {
+        _updateStartup = updateStartup;
         InitializeComponent();
-        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "1.1.0"}";
+        InitializeBlockedUpdatesGrid();
+        new NativeCaptionBridge(this, () => MaximizeWindowButton).Attach();
+        VersionText.Text = $"v{typeof(MainWindow).Assembly.GetName().Version?.ToString(3) ?? "2.0.0"}";
         _viewModel = new MainViewModel();
         DataContext = _viewModel;
+        UpdateOperationsLabels();
+        UpdateManagementLabels();
         _hardwareTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _hardwareTimer.Tick += async (_, _) => await _viewModel.RefreshHardwareMetricsAsync();
-        _historyHoverTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        _historyHoverTimer.Tick += HistoryHoverTimer_Tick;
+        InitializeDriverHistoryUi();
         _scheduledScanTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         _scheduledScanTimer.Tick += ScheduledScanTimer_Tick;
         _networkStatusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _networkStatusTimer.Tick += async (_, _) => await _viewModel.Network.RefreshNetworkPageStatusAsync();
         HistoryDetailPopup.CustomPopupPlacementCallback = PlaceHistoryDetailPopup;
-        StateChanged += (_, _) => WindowBorder.CornerRadius = WindowState == WindowState.Maximized
-            ? new CornerRadius(0)
-            : new CornerRadius(22);
+        UpdateStatusPopup.CustomPopupPlacementCallback = PlaceHistoryDetailPopup;
+        UpdatesGrid.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(UpdatesGrid_ScrollChanged));
+        BlockedUpdatesGrid.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(UpdatesGrid_ScrollChanged));
+        UpdatesSectionsViewport.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(UpdatesGrid_ScrollChanged));
+        _viewModel.UpdatesView.CollectionChanged += (_, _) => CloseUpdateStatus();
+        _viewModel.ManagedUpdatesView.CollectionChanged += (_, _) => CloseUpdateStatus();
+        _viewModel.BlockedUpdatesView.CollectionChanged += (_, _) => CloseUpdateStatus();
+        LocationChanged += (_, _) => CloseUpdateStatus();
+        SizeChanged += (_, _) => CloseUpdateStatus();
+        Deactivated += (_, _) => CloseUpdateStatus();
+        StateChanged += (_, _) =>
+        {
+            WindowBorder.CornerRadius = new CornerRadius(0);
+            UpdateWindowControlLabels();
+        };
         Loaded += MainWindow_Loaded;
         SizeChanged += MainWindow_SizeChanged;
         Closed += (_, _) =>
         {
+            CloseUpdateStatus();
             _hardwareTimer.Stop();
-            _historyHoverTimer.Stop();
+            CloseHistoryDetail();
             _scheduledScanTimer.Stop();
             _networkStatusTimer.Stop();
             _viewModel.Network.Dispose();
@@ -74,31 +92,26 @@ public partial class MainWindow : Window
         UpdateLanguageChoices();
         ApplyResponsiveLayout();
         LocalizationService.ApplyTo(this);
+        UpdateNavigationLabels();
         InitializeNotificationIcon();
+        if (_updateStartup is not null) await _updateStartup;
         _scheduledScanTimer.Start();
         _ = CheckForAppUpdatesAsync(false);
         _ = _viewModel.EnsureQuickHardwareDataAsync();
+        _ = _viewModel.ResumePendingVerificationAsync();
         if (_viewModel.Settings.ScanAtStartup || _viewModel.IsScheduledScanDue)
             await RunScanAsync(navigateToResults: false);
     }
 
-    private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ClickCount == 2)
-        {
-            ToggleMaximize();
-            return;
-        }
-        if (e.ButtonState == MouseButtonState.Pressed) DragMove();
-    }
-
-    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void Minimize_Click(object sender, RoutedEventArgs e) => SystemCommands.MinimizeWindow(this);
     private void Maximize_Click(object sender, RoutedEventArgs e) => ToggleMaximize();
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Close_Click(object sender, RoutedEventArgs e) => SystemCommands.CloseWindow(this);
 
-    private void ToggleMaximize() => WindowState = WindowState == WindowState.Maximized
-        ? WindowState.Normal
-        : WindowState.Maximized;
+    private void ToggleMaximize()
+    {
+        if (WindowState == WindowState.Maximized) SystemCommands.RestoreWindow(this);
+        else SystemCommands.MaximizeWindow(this);
+    }
 
     private void HomeNav_Click(object sender, RoutedEventArgs e) => ShowPage(HomePage, "Home");
     private void UpdatesNav_Click(object sender, RoutedEventArgs e) => ShowPage(UpdatesPage, "Aggiornamenti");
@@ -143,6 +156,8 @@ public partial class MainWindow : Window
 
     private void ShowPage(UIElement page, string title)
     {
+        CloseUpdateStatus();
+        CloseHistoryDetail();
         HomePage.Visibility = Visibility.Collapsed;
         UpdatesPage.Visibility = Visibility.Collapsed;
         SystemInfoPage.Visibility = Visibility.Collapsed;
@@ -151,7 +166,8 @@ public partial class MainWindow : Window
         NetworkPage.Visibility = Visibility.Collapsed;
         SettingsPage.Visibility = Visibility.Collapsed;
         page.Visibility = Visibility.Visible;
-        PageTitle.Text = LocalizationService.Translate(title);
+        _currentPageTitle = title;
+        UpdateNavigationLabels();
         if (ReferenceEquals(page, SystemInfoPage))
             _hardwareTimer.Start();
         else
@@ -189,14 +205,14 @@ public partial class MainWindow : Window
         if (sender is not Button { Tag: NetworkAgentItem agent }) return;
         if (agent.ConnectionRequestsEnabled)
         {
-            await _viewModel.Network.RequestConnectionsAsync(agent);
+            await _viewModel.Network.RequestConnectionsAsync(RequestFingerprint, agent);
             return;
         }
         ShowNetworkPairingDialog(agent);
     }
 
     private async void NetworkRequestConnections_Click(object sender, RoutedEventArgs e) =>
-        await _viewModel.Network.RequestConnectionsAsync();
+        await _viewModel.Network.RequestConnectionsAsync(RequestFingerprint);
 
     private void ShowNetworkPairingDialog(NetworkAgentItem agent)
     {
@@ -204,8 +220,14 @@ public partial class MainWindow : Window
         dialog.ShowDialog();
     }
 
-    private async void NetworkPair_Click(object sender, RoutedEventArgs e) =>
-        await _viewModel.Network.PairAsync();
+    private async void NetworkPair_Click(object sender, RoutedEventArgs e)
+    {
+        var network = _viewModel.Network;
+        var pin = RequestFingerprint($"{network.Address}:{network.Port}");
+        if (pin is not null) await network.PairAsync(pin);
+    }
+
+    private string? RequestFingerprint(string endpoint) => AgentFingerprintWindow.Prompt(this, endpoint);
 
     private async void NetworkStatus_Click(object sender, RoutedEventArgs e) =>
         await _viewModel.Network.RefreshStatusAsync();
@@ -303,11 +325,146 @@ public partial class MainWindow : Window
                 MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
-    private void SelectAll_Click(object sender, RoutedEventArgs e) => _viewModel.SetAllSelected(true);
+    private void SelectAll_Click(object sender, RoutedEventArgs e) =>
+        _viewModel.SelectAllWithConfirmation(item => MessageBox.Show(this,
+            $"{item.Name}\n{item.InstalledVersion} → {item.AvailableVersion}\n{item.Source}\n\n" +
+            item.PriorityDescription + "\n\n" +
+            LocalizationService.Text(
+                "Vuoi includere questo aggiornamento nella selezione? Il consenso all'installazione verrà richiesto prima dell'esecuzione.",
+                "Include this update in the selection? Installation consent will be requested before execution."),
+            LocalizationService.Text("Conferma selezione", "Confirm selection"),
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes);
     private void DeselectAll_Click(object sender, RoutedEventArgs e) => _viewModel.SetAllSelected(false);
 
     private async void InstallSelected_Click(object sender, RoutedEventArgs e) =>
         await RunUpdatesAsync(_viewModel.SelectedItems);
+
+    private void UpdateStatus_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: UpdateItem item } anchor) return;
+        CloseUpdateStatus();
+        CloseHistoryDetail();
+        _updateStatusAnchor = anchor;
+        anchor.Unloaded += UpdateStatusAnchor_Unloaded;
+        anchor.DataContextChanged += UpdateStatusAnchor_DataContextChanged;
+        UpdateStatusContent.DataContext = item;
+        UpdateStatusPopup.PlacementTarget = anchor;
+        SizeDetailPopup(UpdateStatusContent, anchor);
+        UpdateStatusPopup.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private void UpdateStatusPopup_Opened(object? sender, EventArgs e)
+    {
+        // Focusing a long TextBox scrolls its heading out of view. Keep the top visible;
+        // Tab reaches the read-only text for keyboard selection/copy.
+        UpdateStatusScrollViewer.ScrollToTop();
+        UpdateStatusCloseButton.Focus();
+    }
+
+    private void UpdateStatusPopup_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            CloseUpdateStatus(restoreFocus: true);
+            e.Handled = true;
+            return;
+        }
+        // The read-only TextBox is measured by the outer viewer. Its own caret scrolling
+        // cannot reveal clipped paragraphs; route document navigation to that viewer.
+        // Keep Shift shortcuts available for selecting/copying text.
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) return;
+        switch (e.Key)
+        {
+            case Key.PageDown: UpdateStatusScrollViewer.PageDown(); break;
+            case Key.PageUp: UpdateStatusScrollViewer.PageUp(); break;
+            case Key.Home: UpdateStatusScrollViewer.ScrollToTop(); break;
+            case Key.End: UpdateStatusScrollViewer.ScrollToEnd(); break;
+            default: return;
+        }
+        e.Handled = true;
+    }
+
+    private void CloseUpdateStatus_Click(object sender, RoutedEventArgs e) => CloseUpdateStatus(restoreFocus: true);
+
+    private void CloseUpdateStatus(bool restoreFocus = false)
+    {
+        var anchor = _updateStatusAnchor;
+        var item = UpdateStatusContent.DataContext;
+        UpdateStatusPopup.IsOpen = false;
+        if (restoreFocus && anchor is { IsVisible: true, IsEnabled: true } && ReferenceEquals(anchor.DataContext, item))
+            anchor.Focus();
+    }
+
+    private void UpdateStatusPopup_Closed(object? sender, EventArgs e)
+    {
+        if (_updateStatusAnchor is { } anchor)
+        {
+            anchor.Unloaded -= UpdateStatusAnchor_Unloaded;
+            anchor.DataContextChanged -= UpdateStatusAnchor_DataContextChanged;
+        }
+        _updateStatusAnchor = null;
+        UpdateStatusContent.DataContext = null;
+        UpdateStatusPopup.PlacementTarget = null;
+    }
+
+    private void UpdateStatusAnchor_Unloaded(object sender, RoutedEventArgs e) => CloseUpdateStatus();
+    private void UpdateStatusAnchor_DataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => CloseUpdateStatus();
+
+    private void UpdatesGrid_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        // Popup content participates in the logical route, but scrolling its
+        // own details does not move the row anchor in the page.
+        if (ReferenceEquals(sender, UpdatesSectionsViewport) && !ReferenceEquals(e.OriginalSource, sender)) return;
+        // A resized cell or recycled row must never retain a popup for the previous item.
+        if (e.HorizontalChange != 0 || e.VerticalChange != 0 || e.ViewportWidthChange != 0 || e.ViewportHeightChange != 0)
+            CloseUpdateStatus();
+    }
+
+    private void InitializeBlockedUpdatesGrid()
+    {
+        // Share the existing cell templates, bindings and commands, not a second
+        // set of update objects. WPF columns themselves can have only one owner.
+        foreach (var source in UpdatesGrid.Columns)
+        {
+            DataGridColumn column = source switch
+            {
+                DataGridTemplateColumn template => new DataGridTemplateColumn { CellTemplate = template.CellTemplate },
+                DataGridTextColumn text => new DataGridTextColumn { Binding = text.Binding, ElementStyle = text.ElementStyle },
+                _ => throw new InvalidOperationException("Unsupported update column.")
+            };
+            column.Header = source.Header;
+            column.SortMemberPath = source.SortMemberPath;
+            column.CanUserSort = source.CanUserSort;
+            column.Width = source.Width;
+            column.MinWidth = source.MinWidth;
+            column.MaxWidth = source.MaxWidth;
+            column.IsReadOnly = true;
+            BlockedUpdatesGrid.Columns.Add(column);
+        }
+    }
+
+    private void BlockedUpdatesExpansion_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, BlockedUpdatesExpander)) return;
+        CloseUpdateStatus();
+        if (!BlockedUpdatesExpander.IsExpanded) return;
+
+        // Search can expose the only matching section offscreen. A manual
+        // expansion leaves the page where the user clicked the header.
+        if (!_viewModel.ManagedUpdatesView.IsEmpty || string.IsNullOrWhiteSpace(_viewModel.SearchText))
+        {
+            // Replace a pending ScrollToEnd with its current pixel position.
+            UpdatesSectionsViewport.ScrollToVerticalOffset(UpdatesSectionsViewport.VerticalOffset);
+            return;
+        }
+
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            if (BlockedUpdatesExpander.IsExpanded && UpdatesSectionsViewport.Content is UIElement content)
+                UpdatesSectionsViewport.ScrollToVerticalOffset(BlockedUpdatesExpander.TranslatePoint(new Point(), content).Y);
+        }));
+    }
 
     private async void RetryUpdate_Click(object sender, RoutedEventArgs e)
     {
@@ -319,20 +476,15 @@ public partial class MainWindow : Window
     {
         if (items.Count == 0 || _viewModel.IsBusy) return;
 
+        var summaryHints = items.Select(item => new InstallationSummaryHint(item)).ToArray();
         var preflight = PreflightService.Check(items);
-        var restorePointWillBeCreated = PreflightService.ShouldCreateRestorePoint(items, _viewModel.Settings);
-        var confirmation = new UpdateConfirmationWindow(
-            items,
-            preflight,
-            _viewModel.Settings.CreateRestorePoint,
-            restorePointWillBeCreated)
+        if (!preflight.CanContinue)
         {
-            Owner = this
-        };
-        if (confirmation.ShowDialog() != true) return;
+            _viewModel.ReportPreflightBlocked(preflight);
+            return;
+        }
 
-        var progressWindow = new UpdateProgressWindow(_viewModel) { Owner = this };
-        _activeProgressWindow = progressWindow;
+        var progressWindow = new UpdateProgressWindow(_viewModel, items) { Owner = this };
         progressWindow.PresentationChanged += (_, _) => UpdateProgressRecallButton();
         progressWindow.Closed += (_, _) =>
         {
@@ -340,13 +492,30 @@ public partial class MainWindow : Window
                 _activeProgressWindow = null;
             UpdateProgressRecallButton();
         };
-        progressWindow.Show();
-        progressWindow.Activate();
-        UpdateProgressRecallButton();
+        var progressShown = false;
 
         var result = await _viewModel.InstallItemsAsync(
             items,
-            new WpfWinGetProcessRecoveryPrompt(progressWindow));
+            new WpfWinGetProcessRecoveryPrompt(progressWindow),
+            plans =>
+            {
+                if (!WpfRunnerConsent.HasInteractiveSession()) return false;
+                var confirmation = new UpdateConfirmationWindow(plans, PreflightService.Check(items), summaryHints) { Owner = this };
+                return confirmation.ShowDialog() == true && WpfRunnerConsent.HasInteractiveSession();
+            },
+            () =>
+            {
+                _activeProgressWindow = progressWindow;
+                progressWindow.Show();
+                progressWindow.Activate();
+                progressShown = true;
+                UpdateProgressRecallButton();
+            });
+        if (!progressShown)
+        {
+            progressWindow.Close();
+            return;
+        }
         if (result is null)
         {
             progressWindow.ShowFailure(_viewModel.StatusText, _viewModel.CurrentItemText);
@@ -367,33 +536,76 @@ public partial class MainWindow : Window
             : Visibility.Collapsed;
     }
 
-    private void SaveSettings_Click(object sender, RoutedEventArgs e)
-    {
-        _viewModel.SaveSettings();
-        ThemeService.Apply(_viewModel.Settings.ThemeMode);
-        TypographyService.Apply(_viewModel.Settings.FontSizeMode);
-        if (_notifyIcon is not null)
-            _notifyIcon.Visible = _viewModel.Settings.NotifyWhenUpdatesAreAvailable;
-        ApplyResponsiveLayout();
-        MessageBox.Show(LocalizationService.Text("Impostazioni salvate.", "Settings saved."),
-            "Update Center", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
     private void ThemeChoice_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not RadioButton { Tag: string mode }) return;
         _viewModel.Settings.ThemeMode = ThemeService.Normalize(mode);
         ThemeService.Apply(_viewModel.Settings.ThemeMode);
-        _viewModel.SaveSettings();
+        SavePreferences();
         UpdateThemeChoices();
     }
 
     private void UpdateThemeChoices()
     {
+        UpdateAppearanceTheme();
         var mode = ThemeService.Normalize(_viewModel.Settings.ThemeMode);
         SystemThemeChoice.IsChecked = mode == "Sistema";
         LightThemeChoice.IsChecked = mode == "Chiaro";
         DarkThemeChoice.IsChecked = mode == "Scuro";
+    }
+
+    private void UpdateAppearanceTheme()
+    {
+        var scrollOffset = SettingsScrollViewer.VerticalOffset;
+        UpdateSettingsCardTheme(SettingsPage, "Settings");
+        UpdateSettingsCardTheme(HomeContent, "Settings");
+        UpdateSettingsCardTheme(UpdatesPage, "Operations");
+        UpdateSettingsCardTheme(HardwarePage, "Operations");
+        UpdateSettingsCardTheme(HistoryPage, "Operations");
+        UpdateSettingsCardTheme(SystemInfoContent, "HardwareNetwork");
+        UpdateSettingsCardTheme(NetworkPage, "HardwareNetwork");
+        UpdateSettingsCardTheme(AppearanceCard);
+        UpdateSettingsCardTheme(LanguageCard);
+        UpdateOperationsLabels();
+        UpdateManagementLabels();
+        // Replacing the Fluent ScrollViewer template resets its offset; retain the section in view.
+        SettingsScrollViewer.UpdateLayout();
+        SettingsScrollViewer.ScrollToVerticalOffset(scrollOffset);
+    }
+
+    internal static void UpdateSettingsCardTheme(FrameworkElement card, string dictionaryName = "Appearance")
+    {
+        // Keep Fluent local to the modernized content. Other pages retain their templates.
+        var theme = ThemeService.IsDark ? "Fluent.Dark.xaml" : "Fluent.Light.xaml";
+        var source = new Uri($"pack://application:,,,/PresentationFramework.Fluent;component/Themes/{theme}");
+        var currentAppearance = dictionaryName switch
+        {
+            "Dialogs" => card.Resources.MergedDictionaries[0].MergedDictionaries[0].MergedDictionaries[0].MergedDictionaries[0],
+            "HardwareNetwork" => card.Resources.MergedDictionaries[0].MergedDictionaries[0].MergedDictionaries[0],
+            "Operations" => card.Resources.MergedDictionaries[0].MergedDictionaries[0],
+            "Settings" => card.Resources.MergedDictionaries[0],
+            _ => card.Resources
+        };
+        if (currentAppearance.MergedDictionaries[0].Source == source) return;
+
+        // Recreate the derived styles too: their BasedOn references retain the original
+        // Fluent dictionary. DynamicResource on the controls picks up the new styles.
+        var resources = new ResourceDictionary
+        {
+            Source = new Uri($"/UpdateCenter;component/Styles/{dictionaryName}.xaml", UriKind.Relative)
+        };
+        var appearanceResources = dictionaryName switch
+        {
+            "Dialogs" => resources.MergedDictionaries[0].MergedDictionaries[0].MergedDictionaries[0].MergedDictionaries[0],
+            "HardwareNetwork" => resources.MergedDictionaries[0].MergedDictionaries[0].MergedDictionaries[0],
+            "Operations" => resources.MergedDictionaries[0].MergedDictionaries[0],
+            "Settings" => resources.MergedDictionaries[0],
+            _ => resources
+        };
+        appearanceResources.MergedDictionaries[0] = new ResourceDictionary { Source = source };
+        if (ThemeService.IsDark)
+            appearanceResources["AppearanceSecondaryBrush"] = System.Windows.Application.Current.Resources["MutedTextBrush"];
+        card.Resources = resources;
     }
 
     private void FontSizeChoice_Click(object sender, RoutedEventArgs e)
@@ -401,7 +613,7 @@ public partial class MainWindow : Window
         if (sender is not RadioButton { Tag: string mode }) return;
         _viewModel.Settings.FontSizeMode = TypographyService.Normalize(mode);
         TypographyService.Apply(_viewModel.Settings.FontSizeMode);
-        _viewModel.SaveSettings();
+        SavePreferences();
         UpdateFontSizeChoices();
         ApplyResponsiveLayout();
     }
@@ -409,7 +621,8 @@ public partial class MainWindow : Window
     private void AutomaticScanInterval_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (!IsLoaded || e.AddedItems.Count == 0) return;
-        _viewModel.SaveSettings();
+        ScanFrequencyChoice.GetBindingExpression(Selector.SelectedValueProperty)?.UpdateSource();
+        SavePreferences();
     }
 
     private void UpdateFontSizeChoices()
@@ -432,17 +645,63 @@ public partial class MainWindow : Window
 
         _viewModel.Settings.LanguageMode = normalized;
         LocalizationService.Initialize(normalized);
-        _viewModel.SaveSettings();
+        SavePreferences();
         LocalizationService.ApplyTo(this);
+        UpdateNavigationLabels();
         UpdateLanguageChoices();
         _viewModel.NotifyLanguageChanged();
     }
 
     private void UpdateLanguageChoices()
     {
+        RefreshSettingsSaveStatus();
+        UpdateOperationsLabels();
+        UpdateManagementLabels();
         var language = LocalizationService.Normalize(_viewModel.Settings.LanguageMode);
         ItalianLanguageChoice.IsChecked = language == "it";
         EnglishLanguageChoice.IsChecked = language == "en";
+    }
+
+    private void UpdateOperationsLabels()
+    {
+        Resources["OperationsReleaseNotesText"] = LocalizationService.Text("Novità", "What’s new");
+        Resources["OperationsReleaseNotesLabel"] = LocalizationService.Text("Novità della versione", "Release notes");
+        // DataTemplate contents are deliberately excluded from the static localization cache.
+        // Local dynamic resources update realized and recycled rows without walking the visual tree.
+        (string Key, string Italian)[] labels =
+        [
+            ("OperationsOpenSourceText", "Apri fonte"), ("OperationsRetryText", "Riprova"),
+            ("OperationsViewUpdatesText", "Vedi aggiornamenti"), ("OperationsRestartText", "Riavvio richiesto"),
+            ("OperationsInstalledText", "Installata"), ("OperationsAvailableText", "Disponibile"),
+            ("OperationsUpdatesText", "Aggiornamenti"), ("OperationsInventoryText", "Inventario driver installati"),
+            ("OperationsProblemsText", "Diagnosi driver problematici"), ("OperationsHistoryText", "Cronologia"),
+            ("OperationsSearchUpdatesText", "Cerca aggiornamenti"), ("OperationsSearchDriversText", "Cerca nei dispositivi"),
+            ("OperationsUpdateFilterText", "Filtra gli aggiornamenti"), ("OperationsDriverFilterText", "Filtra i dispositivi"),
+            ("OperationsProgressText", "Avanzamento"), ("OperationsVisibleDriversText", "Dispositivi visibili"),
+            ("OperationsCloseText", "Chiudi"), ("OperationsDetailsText", "Dettaglio attività")
+        ];
+        foreach (var scope in new FrameworkElement[] { UpdatesPage, HardwarePage, HistoryPage })
+            foreach (var (key, italian) in labels)
+                scope.Resources[key] = LocalizationService.Translate(italian);
+        HistoryPage.Resources["OperationsHistoryDetailsHintText"] = LocalizationService.Text("Dettagli: fai clic o premi Invio.", "Details: click or press Enter.");
+        LocalizationService.ApplyTo(DriversContent);
+        RefreshHistoryDetailText();
+        UpdatesPage.Resources["OperationsStatusDetailsText"] = LocalizationService.Text("Dettagli dello stato", "Status details");
+    }
+
+    private void UpdateManagementLabels()
+    {
+        NetworkPage.Language = System.Windows.Markup.XmlLanguage.GetLanguage(LocalizationService.CurrentLanguage);
+        foreach (var scope in new FrameworkElement[] { SystemInfoContent, NetworkPage })
+        {
+            scope.Resources["ManagementStorageText"] = LocalizationService.Translate("Salute dello storage");
+            scope.Resources["ManagementDevicesText"] = LocalizationService.Translate("Dispositivi rilevati");
+            scope.Resources["ManagementResultsText"] = LocalizationService.Translate("Aggiornamenti trovati");
+            scope.Resources["ManagementScopeText"] = LocalizationService.Text("Filtra i risultati per dispositivo", "Filter results by device");
+            scope.Resources["ManagementRiskText"] = LocalizationService.Text(" · richiede conferma", " · confirmation required");
+            scope.Resources["ManagementInstalledText"] = LocalizationService.Text("Installata: ", "Installed: ");
+            scope.Resources["ManagementAvailableText"] = LocalizationService.Text("Disponibile: ", "Available: ");
+        }
     }
 
     private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e) => ApplyResponsiveLayout();
@@ -461,11 +720,34 @@ public partial class MainWindow : Window
         var ultraCompactNetwork = ActualWidth < 900;
         var stackedNetworkResultTools = !ultraCompactNetwork && ActualWidth < 1500;
         var sidebarWidth = iconOnly ? 76d : narrow ? 205d : compact ? 230d : 260d;
+        HardwareSummaryGap.Width = new GridLength(narrow ? 0 : 14);
+        HardwareSummarySecondColumn.Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
+        Grid.SetRow(HardwareSecondaryDetails, narrow ? 1 : 0);
+        Grid.SetColumn(HardwareSecondaryDetails, narrow ? 0 : 2);
+        foreach (var (details, action) in new[] { (HardwareHeaderText, HardwareHeaderButton), (HardwareCopyText, HardwareCopyButton) })
+        {
+            Grid.SetColumnSpan(details, compact ? 2 : 1);
+            Grid.SetRow(action, compact ? 1 : 0);
+            Grid.SetColumn(action, compact ? 0 : 1);
+            Grid.SetColumnSpan(action, compact ? 2 : 1);
+            action.HorizontalAlignment = HorizontalAlignment.Left;
+            action.Margin = compact ? new Thickness(0, 12, 0, 0) : new Thickness(20, 0, 0, 0);
+        }
+        Grid.SetRow(NetworkResultsFooterActions, compact ? 1 : 0);
+        Grid.SetColumn(NetworkResultsFooterActions, compact ? 0 : 2);
+        Grid.SetColumnSpan(NetworkResultsFooterActions, compact ? 3 : 1);
+        NetworkResultsFooterActions.Margin = compact ? new Thickness(0, 10, 0, 0) : new Thickness(0);
+        NetworkVisibleResultsText.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         SidebarColumn.Width = new GridLength(sidebarWidth);
-        TitleSidebarColumn.Width = new GridLength(sidebarWidth);
         ContentHost.Margin = iconOnly ? new Thickness(8, 0, 8, 8) :
             narrow ? new Thickness(10, 0, 10, 10) : new Thickness(18, 0, 18, 18);
-        HomeStatusColumn.Width = new GridLength(iconOnly ? 210d : narrow ? 220d : compact ? 255d : 300d);
+        var stackHomeAction = ActualWidth - sidebarWidth - ContentHost.Margin.Left - ContentHost.Margin.Right < 700;
+        HomeLastScanActionsRow.Height = stackHomeAction ? GridLength.Auto : new GridLength(0);
+        Grid.SetRow(HomeViewUpdatesButton, stackHomeAction ? 1 : 0);
+        Grid.SetColumn(HomeViewUpdatesButton, stackHomeAction ? 0 : 1);
+        Grid.SetColumnSpan(HomeLastScanDetails, stackHomeAction ? 2 : 1);
+        HomeViewUpdatesButton.HorizontalAlignment = HorizontalAlignment.Left;
+        HomeViewUpdatesButton.Margin = stackHomeAction ? new Thickness(0, 12, 0, 0) : new Thickness(20, 0, 0, 0);
         NetworkDevicesColumn.Width = new GridLength(1, GridUnitType.Star);
         NetworkTopCardsColumnGap.Width = new GridLength(0);
         NetworkPairingColumn.Width = new GridLength(0);
@@ -508,10 +790,10 @@ public partial class MainWindow : Window
         Grid.SetColumnSpan(NetworkResultsTools, stackedNetworkResultTools ? 2 : 1);
         NetworkResultsTools.Margin = stackedNetworkResultTools ? new Thickness(0, 10, 0, 0) : new Thickness(0);
         NetworkActionHint.Visibility = ActualWidth < 860 ? Visibility.Collapsed : Visibility.Visible;
-        NetworkStatusBar.Visibility = ActualHeight < 740 ? Visibility.Collapsed : Visibility.Visible;
+        NetworkStatusBar.Visibility = Visibility.Visible;
 
-        NetworkResultNameColumn.MinWidth = ActualWidth < 800 ? 150 : 170;
-        NetworkVersionsColumn.MinWidth = ActualWidth < 800 ? 180 : 200;
+        NetworkResultNameColumn.MinWidth = 230;
+        NetworkVersionsColumn.MinWidth = 210;
         UpdateFilterColumn.Width = new GridLength(iconOnly ? 130d : narrow ? 145d : 165d);
         DriverFilterColumn.Width = new GridLength(iconOnly ? 145d : narrow ? 160d : 190d);
         UpdatesFooterSecondRow.Height = stackedUpdatesFooter ? GridLength.Auto : new GridLength(0);
@@ -523,95 +805,74 @@ public partial class MainWindow : Window
 
         SidebarHeading.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         SidebarSourceCard.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
-        AppNameText.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
-        VersionBadge.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
         HistoryHintBadge.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         NetworkPreviewBadge.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         DriverSummaryPanel.Visibility = compact || shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverMachineName.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverSourceDescription.Visibility = shortDriverLayout ? Visibility.Collapsed : Visibility.Visible;
         DriverHeaderCard.Padding = shortDriverLayout ? new Thickness(14) : new Thickness(18);
-        HomeStatusCard.Visibility = iconOnly ? Visibility.Collapsed : Visibility.Visible;
-        HomeStatusColumn.Width = new GridLength(iconOnly ? 0d : narrow ? 220d : compact ? 255d : 300d);
-        Grid.SetColumnSpan(HomeHeroContent, iconOnly ? 2 : 1);
-        BrandPanel.HorizontalAlignment = iconOnly ? HorizontalAlignment.Center : HorizontalAlignment.Left;
-        BrandPanel.Margin = iconOnly ? new Thickness(0) : new Thickness(20, 0, 0, 0);
 
-        SetNavigationAppearance(HomeNav, iconOnly ? "⌂" : $"⌂   {LocalizationService.Translate("Home")}", iconOnly);
-        SetNavigationAppearance(UpdatesNav, iconOnly ? "↓" : $"↓   {LocalizationService.Translate("Aggiornamenti")}", iconOnly);
-        SetNavigationAppearance(SystemInfoNav, iconOnly ? "▤" : $"▤   {LocalizationService.Translate("Hardware")}", iconOnly);
-        SetNavigationAppearance(HardwareNav, iconOnly ? "▣" : $"▣   {LocalizationService.Translate("Driver e chipset")}", iconOnly);
-        SetNavigationAppearance(HistoryNav, iconOnly ? "◷" : $"◷   {LocalizationService.Translate("Cronologia")}", iconOnly);
-        SetNavigationAppearance(NetworkNav, iconOnly ? "⌘" : $"⌘   {LocalizationService.Translate("Gestione rete")}", iconOnly);
-        SetNavigationAppearance(SettingsNav, iconOnly ? "⚙" : $"⚙   {LocalizationService.Translate("Impostazioni")}", iconOnly);
+        UpdateNavigationLabels();
     }
 
-    private static void SetNavigationAppearance(System.Windows.Controls.Button button, string content, bool centered)
+    private void UpdateNavigationLabels()
     {
-        button.Content = content;
-        button.HorizontalContentAlignment = centered ? HorizontalAlignment.Center : HorizontalAlignment.Left;
-        button.Padding = centered ? new Thickness(10, 12, 10, 12) : new Thickness(16, 12, 16, 12);
+        // These values depend on the current page/width, not the first localization snapshot.
+        PageTitle.Text = LocalizationService.Translate(_currentPageTitle);
+        var iconOnly = ActualWidth < 900;
+        SetNavigationAppearance(HomeNav, "Home", iconOnly);
+        SetNavigationAppearance(UpdatesNav, "Aggiornamenti", iconOnly);
+        SetNavigationAppearance(SystemInfoNav, "Hardware", iconOnly);
+        SetNavigationAppearance(HardwareNav, "Driver e chipset", iconOnly);
+        SetNavigationAppearance(HistoryNav, "Cronologia", iconOnly);
+        SetNavigationAppearance(NetworkNav, "Gestione rete", iconOnly);
+        SetNavigationAppearance(SettingsNav, "Impostazioni", iconOnly);
+        UpdateWindowControlLabels();
+    }
+
+    private void SetNavigationAppearance(System.Windows.Controls.Button button, string title, bool centered)
+    {
+        var label = LocalizationService.Translate(title);
+        button.Content = centered ? string.Empty : label;
+        var selected = _currentPageTitle == title;
+        button.Tag = selected;
+        button.ToolTip = label;
+        System.Windows.Automation.AutomationProperties.SetName(button, label);
+        System.Windows.Automation.AutomationProperties.SetItemStatus(button,
+            selected ? LocalizationService.Text("Pagina corrente", "Current page") : string.Empty);
+        button.Padding = centered ? new Thickness(8, 10, 8, 10) : new Thickness(10, 10, 10, 10);
+    }
+
+    private void UpdateWindowControlLabels()
+    {
+        SetWindowControlLabel(MinimizeWindowButton, LocalizationService.Text("Riduci a icona", "Minimize"));
+        SetWindowControlLabel(MaximizeWindowButton, WindowState == WindowState.Maximized
+            ? LocalizationService.Text("Ripristina finestra", "Restore window")
+            : LocalizationService.Text("Ingrandisci finestra", "Maximize window"));
+        SetWindowControlLabel(CloseWindowButton, LocalizationService.Text("Chiudi", "Close"));
+    }
+
+    private static void SetWindowControlLabel(System.Windows.Controls.Button button, string label)
+    {
+        button.ToolTip = label;
+        System.Windows.Automation.AutomationProperties.SetName(button, label);
     }
 
     private IntPtr WindowMessageHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        const int wmNcHitTest = 0x0084;
         const int wmSettingChange = 0x001A;
         const int wmThemeChanged = 0x031A;
-        if (msg == wmNcHitTest && WindowState == WindowState.Normal && ResizeMode == ResizeMode.CanResize)
-        {
-            var hit = HitTestResizeBorder(hwnd);
-            if (hit != 0)
-            {
-                handled = true;
-                return new IntPtr(hit);
-            }
-        }
         if ((msg == wmSettingChange || msg == wmThemeChanged) &&
             ThemeService.Normalize(_viewModel.Settings.ThemeMode) == "Sistema")
         {
-            Dispatcher.BeginInvoke(new Action(() => ThemeService.Apply("Sistema")));
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ThemeService.Apply("Sistema");
+                UpdateAppearanceTheme();
+            }));
         }
         return IntPtr.Zero;
     }
-
-    private static int HitTestResizeBorder(IntPtr hwnd)
-    {
-        if (!GetCursorPos(out var cursor) || !GetWindowRect(hwnd, out var window)) return 0;
-        var dpi = Math.Max(GetDpiForWindow(hwnd), 96u);
-        var border = Math.Max(7, (int)Math.Ceiling(8 * dpi / 96d));
-        var left = cursor.X >= window.Left && cursor.X < window.Left + border;
-        var right = cursor.X <= window.Right && cursor.X > window.Right - border;
-        var top = cursor.Y >= window.Top && cursor.Y < window.Top + border;
-        var bottom = cursor.Y <= window.Bottom && cursor.Y > window.Bottom - border;
-
-        if (top && left) return 13;     // HTTOPLEFT
-        if (top && right) return 14;    // HTTOPRIGHT
-        if (bottom && left) return 16;  // HTBOTTOMLEFT
-        if (bottom && right) return 17; // HTBOTTOMRIGHT
-        if (left) return 10;            // HTLEFT
-        if (right) return 11;           // HTRIGHT
-        if (top) return 12;             // HTTOP
-        if (bottom) return 15;          // HTBOTTOM
-        return 0;
-    }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorPos(out NativePoint point);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetDpiForWindow(IntPtr hwnd);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint { public int X; public int Y; }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
 
     private void OpenLogs_Click(object sender, RoutedEventArgs e)
     {
@@ -619,16 +880,8 @@ public partial class MainWindow : Window
         Process.Start(new ProcessStartInfo("explorer.exe", AppPaths.LogsDirectory) { UseShellExecute = true });
     }
 
-    private void DriverInventoryGrid_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
-        => ScrollHardwarePage(e);
-
-    private void DriverVendorScrollViewer_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
-        => ScrollHardwarePage(e);
-
     private void StorageHealthCard_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
         => ScrollPage(SystemInfoPage, e);
-
-    private void ScrollHardwarePage(MouseWheelEventArgs e) => ScrollPage(HardwarePage, e);
 
     private static void ScrollPage(ScrollViewer page, MouseWheelEventArgs e)
     {
@@ -862,108 +1115,6 @@ public partial class MainWindow : Window
                 button.IsEnabled = true;
             }
         }
-    }
-
-    private void HistoryDetail_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (sender is not FrameworkElement { DataContext: HistoryEntry entry } element) return;
-        ArmHistoryDetail(element, entry);
-    }
-
-    private void HistoryDetail_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
-    {
-        if (HistoryDetailPopup.IsOpen) return;
-        _historyHoverTimer.Stop();
-        _pendingHistoryEntry = null;
-        _pendingHistoryElement = null;
-    }
-
-    private void HistoryDetail_PreviewMouseDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not FrameworkElement { DataContext: HistoryEntry entry } element) return;
-        _historyHoverTimer.Stop();
-        _pendingHistoryEntry = entry;
-        _pendingHistoryElement = element;
-        if (HistoryDetailPopup.IsOpen)
-            HistoryDetailPopup.IsOpen = false;
-    }
-
-    private void HistoryDetail_PreviewMouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is not FrameworkElement { DataContext: HistoryEntry entry } element || !element.IsMouseOver) return;
-        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-        {
-            if (element.IsMouseOver)
-                ArmHistoryDetail(element, entry);
-        }));
-    }
-
-    private void ArmHistoryDetail(FrameworkElement element, HistoryEntry entry)
-    {
-        _pendingHistoryEntry = entry;
-        _pendingHistoryElement = element;
-        _historyHoverTimer.Stop();
-        _historyHoverTimer.Interval = TimeSpan.FromSeconds(1);
-        if (!HistoryDetailPopup.IsOpen)
-            _historyHoverTimer.Start();
-    }
-
-    private void HistoryHoverTimer_Tick(object? sender, EventArgs e)
-    {
-        _historyHoverTimer.Stop();
-        if (_pendingHistoryEntry is null || _pendingHistoryElement is null) return;
-        if (Mouse.LeftButton == MouseButtonState.Pressed || Mouse.RightButton == MouseButtonState.Pressed)
-        {
-            _historyHoverTimer.Interval = TimeSpan.FromMilliseconds(150);
-            _historyHoverTimer.Start();
-            return;
-        }
-
-        HistoryDetailTitle.Text = _pendingHistoryEntry.Name;
-        var readableDetails = string.IsNullOrWhiteSpace(_pendingHistoryEntry.DisplayDetails)
-            ? LocalizationService.Text("Nessun dettaglio disponibile per questa operazione.", "No details available for this operation.")
-            : _pendingHistoryEntry.DisplayDetails;
-        var diagLabel = LocalizationService.Text("Diagnostica tecnica", "Technical diagnostics");
-        HistoryDetailText.Text = string.IsNullOrWhiteSpace(_pendingHistoryEntry.Diagnostics)
-            ? readableDetails
-            : $"{readableDetails}\n\n--- {diagLabel} ---\n{_pendingHistoryEntry.Diagnostics}";
-        HistoryDetailStatus.Text = "";
-        HistoryDetailPopup.PlacementTarget = _pendingHistoryElement;
-        HistoryDetailPopup.IsOpen = true;
-    }
-
-    private void CopyHistoryDetail_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            Clipboard.SetText(HistoryDetailText.Text);
-            HistoryDetailStatus.Text = LocalizationService.Text("Dettaglio copiato negli appunti.", "Details copied to clipboard.");
-        }
-        catch (Exception ex)
-        {
-            HistoryDetailStatus.Text = LocalizationService.Text("Copia non riuscita.", "Copy failed.");
-            LogService.Write("Impossibile copiare un dettaglio della cronologia.", ex);
-        }
-    }
-
-    private void CloseHistoryDetail_Click(object sender, RoutedEventArgs e) => HistoryDetailPopup.IsOpen = false;
-
-    private void HistoryDetailPopup_Closed(object? sender, EventArgs e)
-    {
-        _historyHoverTimer.Stop();
-        var entry = _pendingHistoryEntry;
-        var element = _pendingHistoryElement;
-        if (entry is not null && element is not null && element.IsMouseOver)
-        {
-            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
-            {
-                if (element.IsMouseOver)
-                    ArmHistoryDetail(element, entry);
-            }));
-            return;
-        }
-        _pendingHistoryEntry = null;
-        _pendingHistoryElement = null;
     }
 
     private static CustomPopupPlacement[] PlaceHistoryDetailPopup(System.Windows.Size popupSize, System.Windows.Size targetSize, System.Windows.Point offset)

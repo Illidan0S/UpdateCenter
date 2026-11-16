@@ -360,6 +360,7 @@ public sealed class RemoteUpdateItem
     public string Status { get; init; } = "";
     public string ResultDetails { get; init; } = "";
     public string PackageOperation { get; init; } = "";
+    public string WinGetClientVersion { get; init; } = "";
     public bool CanInstall { get; init; }
     public bool RequiresRestart { get; init; }
     public bool IsImportant { get; init; }

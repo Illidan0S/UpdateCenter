@@ -70,6 +70,8 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
         get => LocalizationService.Translate(_statusText);
         private set { _statusText = value; OnPropertyChanged(); }
     }
+    public string CertificateSha256 { get; private set; } = "";
+
     public string PairingCode
     {
         get => _pairingCode;
@@ -176,6 +178,8 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
         {
             AgentAvailable = false;
             NetworkEnabled = false;
+            CertificateSha256 = "";
+            OnPropertyChanged(nameof(CertificateSha256));
             NetworkScopeActive = false;
             HasController = false;
             ControllerName = "Nessuno";
@@ -332,6 +336,8 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
             await RunScriptAsync(UninstallScriptPath);
             AgentAvailable = false;
             NetworkEnabled = false;
+            CertificateSha256 = "";
+            OnPropertyChanged(nameof(CertificateSha256));
             NetworkScopeActive = false;
             HasController = false;
             ControllerName = "Nessuno";
@@ -368,6 +374,8 @@ public sealed class LocalAgentSetupViewModel : INotifyPropertyChanged
     {
         AgentAvailable = true;
         NetworkEnabled = configuration.Enabled;
+        CertificateSha256 = configuration.CertificateSha256;
+        OnPropertyChanged(nameof(CertificateSha256));
         NetworkScopeActive = configuration.NetworkScopeActive;
         HasController = configuration.HasController;
         ControllerName = configuration.HasController && !string.IsNullOrWhiteSpace(configuration.ControllerName)
