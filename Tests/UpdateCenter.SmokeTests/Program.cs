@@ -835,6 +835,7 @@ var delayedWinGetVerification = WinGetService.VerifyInstallation(
     {
         Id = "Example.DelayedInventory",
         Name = "Delayed Inventory",
+        Source = "winget",
         InstalledVersion = "1.0.0",
         AvailableVersion = "2.0.0"
     },
@@ -1688,7 +1689,8 @@ var futureHytaleUpdate = new UpdateItem
 if (!WinGetApplicabilityStore.Matches(suppressedHytale, sameHytaleUpdate) ||
     WinGetApplicabilityStore.Matches(suppressedHytale, futureHytaleUpdate))
     throw new InvalidOperationException("La quarantena WinGet non distingue correttamente una nuova versione futura.");
-if (WinGetManifestSafetyService.ParseInstallerScope("InstallerType: nullsoft\nScope: user\n") != "user")
+var userScopeManifest = "InstallerType: nullsoft\nScope: user\nInstallers:\n- Architecture: x64\n";
+if (WinGetManifestSafetyService.ParseInstallerScope(userScopeManifest) != "user")
     throw new InvalidOperationException("L'ambito dell'installer WinGet non viene letto correttamente.");
 WinGetManifestSafetyService.ApplyScopeCompatibility(sameHytaleUpdate, "machine", "user");
 if (sameHytaleUpdate.CanInstall || sameHytaleUpdate.IsSelected ||

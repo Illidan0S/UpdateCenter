@@ -45,6 +45,7 @@ internal static class RunnerWaitTests
 
     private static void LateManifestCannotInstall()
     {
+        const string approvedClient = WinGetScopeGuard.ReviewedClient;
         foreach (var cancelled in new[] { false, true })
         foreach (var interactive in new[] { false, true })
         {
@@ -52,12 +53,18 @@ internal static class RunnerWaitTests
             var late = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
             var entered = new ManualResetEventSlim();
             var calls = 0;
-            Task<ProcessResult> Execute(IReadOnlyList<string> _, CancellationToken __, TimeSpan ___)
-            { Interlocked.Increment(ref calls); return Task.FromResult(new ProcessResult(0, "", "")); }
+            Task<ProcessResult> Execute(IReadOnlyList<string> args, CancellationToken _, TimeSpan __)
+            {
+                if (args is ["--version"]) return Task.FromResult(new ProcessResult(0, approvedClient, ""));
+                Interlocked.Increment(ref calls);
+                return Task.FromResult(new ProcessResult(0, "", ""));
+            }
+            var item = Item();
+            item.WinGetClientVersion = approvedClient;
             var guard = new WinGetScopeGuard(Execute, (_, _, _) => { entered.Set(); return late.Task; },
                 () => "S-1-5-21-1000", (_, _) => "machine", "x64", TimeSpan.FromMilliseconds(150));
-            var running = Task.Run(() => interactive ? WinGetService.RunInteractive(Item(), Execute, guard, cancellation.Token)
-                : WinGetService.Upgrade(Item(), true, Execute, guard, cancellation.Token));
+            var running = Task.Run(() => interactive ? WinGetService.RunInteractive(item, Execute, guard, cancellation.Token)
+                : WinGetService.Upgrade(item, true, Execute, guard, cancellation.Token));
             Check(entered.Wait(1000), "Manifest provider never entered.");
             if (cancelled) cancellation.Cancel();
             try { running.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult(); throw new Exception("Blocked preflight returned success."); }
@@ -71,14 +78,16 @@ internal static class RunnerWaitTests
         var timelyCalls = 0;
         Task<ProcessResult> Timely(IReadOnlyList<string> args, CancellationToken __, TimeSpan ___)
         {
-            if (args[0] == "--version") return Task.FromResult(new ProcessResult(0, "v1.29.290", ""));
+            if (args is ["--version"]) return Task.FromResult(new ProcessResult(0, approvedClient, ""));
             if (args[0] == "list") return Task.FromResult(new ProcessResult(0,
                 "Contoso Tool [Contoso.Tool]\nVersion: 1.0\nLocal Identifier: ARP\\Machine\\X64\\Contoso\nInstalled Scope: machine\nInstalled Architecture: x64\n", ""));
             timelyCalls++; return Task.FromResult(new ProcessResult(0, "", ""));
         }
         var timely = new WinGetScopeGuard(Timely, (_, _, _) => Task.FromResult<string?>(Manifest),
             () => "S-1-5-21-1000", (_, _) => "machine", "x64");
-        Check(WinGetService.Upgrade(Item(), true, Timely, timely).Success && timelyCalls == 1, "Fixture did not reach command boundary.");
+        var timelyItem = Item();
+        timelyItem.WinGetClientVersion = approvedClient;
+        Check(WinGetService.Upgrade(timelyItem, true, Timely, timely).Success && timelyCalls == 1, "Fixture did not reach command boundary.");
         Console.WriteLine("PASS real Upgrade/Interactive timeout and cancellation: late valid manifest cannot install; timely control dispatches exactly once");
     }
 
