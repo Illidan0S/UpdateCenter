@@ -260,16 +260,26 @@ internal static class RunnerWaitTests
 
     private static void CancelledPreflightDoesNotWaitForProvider()
     {
-        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(80));
-        var never = new TaskCompletionSource<string?>();
-        var guard = new WinGetScopeGuard((_, _, _) => throw new Exception("Unexpected command"),
-            (_, _, _) => never.Task, () => "S-1-5-21-1000", (_, _) => "machine", "x64");
-        var pending = guard.ValidateAsync(Item(), cancel.Token);
-        Check(Task.WhenAny(pending, Task.Delay(1000)).GetAwaiter().GetResult() == pending,
-            "Cancellation did not bound a non-cooperative read-only manifest provider.");
-        try { pending.GetAwaiter().GetResult(); throw new Exception("Cancellation was swallowed."); }
-        catch (OperationCanceledException) { }
-        never.SetResult(null);
+        using var cancel = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var manifest = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var item = Item();
+        item.WinGetClientVersion = WinGetScopeGuard.ReviewedClient;
+        var guard = new WinGetScopeGuard((args, _, _) => args is ["--version"]
+            ? Task.FromResult(new ProcessResult(0, WinGetScopeGuard.ReviewedClient, ""))
+            : throw new Exception("Unexpected command"),
+            (_, _, _) => { entered.SetResult(); return manifest.Task; },
+            () => "S-1-5-21-1000", (_, _) => "machine", "x64");
+        var pending = guard.ValidateAsync(item, cancel.Token);
+        try
+        {
+            entered.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            cancel.Cancel();
+            pending.WaitAsync(TimeSpan.FromSeconds(1)).GetAwaiter().GetResult();
+            throw new Exception("Cancellation was swallowed.");
+        }
+        catch (OperationCanceledException) when (pending.IsCanceled && cancel.IsCancellationRequested) { }
+        finally { manifest.SetResult(null); }
         Console.WriteLine("PASS preflight cancellation reaches caller without waiting for provider");
     }
 

@@ -330,10 +330,21 @@ jobs:
             gh release upload $env:RELEASE_TAG $assets --repo "$env:GITHUB_REPOSITORY" --clobber
             if ($LASTEXITCODE -ne 0) { throw "Caricamento degli asset di Release non riuscito (exit code $LASTEXITCODE)." }
           } else {
+            $notesPath = Join-Path 'docs' "RELEASE-$env:RELEASE_VERSION.md"
+            if (Test-Path -LiteralPath $notesPath -PathType Leaf) {
+              if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notesPath -Raw))) {
+                throw "Il file delle note di rilascio è vuoto: $notesPath"
+              }
+              $notesArgs = @('--notes-file', $notesPath)
+            } elseif ($env:RELEASE_TAG -ceq 'v2.0.0') {
+              throw "Mancano le note ufficiali per v2.0.0: $notesPath"
+            } else {
+              $notesArgs = @('--generate-notes')
+            }
             gh release create $env:RELEASE_TAG $assets `
               --repo "$env:GITHUB_REPOSITORY" `
               --title "UpdateCenter $env:RELEASE_VERSION" `
-              --generate-notes `
+              @notesArgs `
               --verify-tag
             if ($LASTEXITCODE -ne 0) { throw "Creazione della Release GitHub non riuscita (exit code $LASTEXITCODE)." }
           }

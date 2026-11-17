@@ -1,77 +1,59 @@
-# Update Center
+# UpdateCenter
 
-Release Candidate locale **2.0.0**. L’ultima versione pubblicata è la **1.1.5**.
+**Versione 2.0.0.** UpdateCenter è un’app desktop per Windows che rileva e gestisce aggiornamenti di software, driver e runtime da fonti verificate. L’app mostra quali aggiornamenti può installare e perché altri richiedono un intervento manuale. L’installazione richiede l’approvazione dell’utente.
 
-Rafforzata la gestione degli esiti di installazione: verifica post-installazione per WinGet e driver, aggiornamento coerente degli elenchi e protezione dai refresh WPF durante transazioni di modifica.
+[GitHub Releases](https://github.com/Illidan0S/UpdateCenter/releases) · [Note della 2.0.0 in italiano e inglese](docs/RELEASE-2.0.0.md)
 
-Risolto l’errore nella finestra di conferma degli aggiornamenti software: “L’associazione bidirezionale richiede Path o XPath”.
+## Novità dalla 1.1.5
 
-Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
+- Runtime **.NET 10 Desktop** incluso e interfaccia WPF aggiornata, in italiano e inglese, con temi chiaro e scuro.
+- Scansione con fasi visibili, annullamento e risultati deduplicati. Gli aggiornamenti non selezionabili sono raccolti in una sezione espandibile con le motivazioni.
+- Preselezione degli aggiornamenti ordinari idonei, conferme specifiche per le operazioni che le richiedono e note di versione quando il provider le rende disponibili.
+- Stato per elemento, pausa dopo l’operazione in corso e riepilogo finale. L’app verifica l’esito dopo l’installazione e riprende le verifiche WinGet pendenti che può recuperare.
+- Controlli più rigorosi su identità, versione, ambito di installazione, dipendenze e consenso. Verifiche aggiuntive durante il self-update di Setup e Portable.
 
 ## Funzioni principali
 
-- Aggiornamento controllato dei software tramite WinGet, con verifica più affidabile dell’installazione completata.
-- Gestione sicura delle applicazioni aperte che bloccano un aggiornamento, con possibilità di chiuderle e riprovare.
-- Possibilità di continuare con l’installer normale quando serve un intervento dell’utente.
-- Ricerca di driver compatibili da fonti ufficiali e verificate.
-- Gestione più affidabile degli aggiornamenti di driver e chipset.
-- Diagnosi dei driver problematici segnalati da Gestione dispositivi.
-- Controllo e installazione dei runtime condivisi: DirectX, Visual C++, .NET, Vulkan, PhysX, WebView2 e altri.
-- Filtri per software, driver, runtime ed errori.
-- Riepilogo prima dell’installazione con spazio richiesto, alimentazione, riavvio e avvisi di sicurezza.
-- Classificazione precisa degli aggiornamenti WinGet: la conferma aggiuntiva viene richiesta solo quando l’installer compatibile dichiara la rimozione della versione precedente; errori temporanei e metadati non verificabili restano stati separati.
-- Pausa e ripresa di un gruppo di aggiornamenti, senza interrompere l’elemento già in installazione.
-- Inventario hardware con CPU, GPU, VRAM, RAM, Windows, driver principali e copia rapida delle informazioni.
-- Salute dello storage con unità fisiche, volumi associati, capacità, stato e temperatura quando disponibile.
-- Collegamento diretto a NVIDIA App o alla pagina ufficiale per i driver GPU NVIDIA.
-- Cronologia degli aggiornamenti, log locali e nessuna telemetria.
-- Messaggi più chiari e diagnostica più utile in caso di problemi.
-- Controllo automatico delle nuove versioni di Update Center con verifica SHA-256 e autosostituzione sicura anche della portable.
-- Gestione dei computer nella rete locale tramite modalità Controller e Agent, con autorizzazione dei dispositivi e revoca immediata dell’accesso.
-- Scansione e gestione remota degli aggiornamenti, con avanzamento e riepilogo separati per ciascun computer collegato.
+- Aggiornamenti software tramite WinGet e gestione dei runtime condivisi, tra cui .NET, Visual C++, DirectX, Vulkan, PhysX e WebView2 quando rilevabili e gestibili.
+- Ricerca di driver e chipset tramite Windows Update e fonti ufficiali, diagnostica dei dispositivi e collegamento alle risorse NVIDIA per le GPU compatibili.
+- Inventario hardware con CPU, GPU, VRAM, RAM, Windows e driver. Salute, capacità e temperatura delle unità quando disponibili.
+- Filtri, cronologia e log locali. Gestione delle applicazioni che bloccano un aggiornamento e possibilità di proseguire con l’installer interattivo nei casi previsti.
+- Riepilogo prima dell’installazione con spazio, alimentazione, riavvio e avvisi pertinenti. Controllo delle nuove versioni di UpdateCenter con verifica dei download.
 
-## Download
+La **gestione LAN** è un’anteprima tecnica. L’app desktop include il Controller, mentre il servizio Agent e gli strumenti di anteprima si compilano separatamente. [Guida di sviluppo](docs/SVILUPPO.md#preview-tecnica-network)
 
-Le [Release GitHub](https://github.com/Illidan0S/UpdateCenter/releases) includono due eseguibili:
+## Download e aggiornamento
 
-- **`UpdateCenter-Setup-vVERSIONE.exe`**: installer standard, crea la voce nel menu Start e gestisce gli aggiornamenti dell’installazione.
-- **`UpdateCenter-vVERSIONE-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB e aggiornabile automaticamente mantenendo il proprio nome.
+| Pacchetto | Checksum |
+|---|---|
+| `UpdateCenter-Setup-v2.0.0.exe` | `UpdateCenter-Setup-v2.0.0.exe.sha256` |
+| `UpdateCenter-v2.0.0-Portable.exe` | `UpdateCenter-v2.0.0-Portable.exe.sha256` |
 
-I file **`.sha256`** sono i checksum di sicurezza usati per verificare i download automatici: non sono versioni dell’app.
+Usa il **Setup** per installare l’app nel tuo profilo Windows oppure il **Portable** per eseguirla senza installazione. Scarica l’eseguibile e il checksum dalla stessa release ufficiale. [GitHub Releases](https://github.com/Illidan0S/UpdateCenter/releases)
+
+**Dalla 1.1.5.** Il manutentore ha confermato che l’aggiornamento manuale tramite Setup 2.0.0, nello stesso profilo su Windows 11 Insider x64 build 26320, ha conservato impostazioni e cronologia. La prova completa tramite il pulsante di aggiornamento integrato nella 1.1.5 resta da eseguire sulla release stabile, per Setup e Portable. Il self-update Portable richiede un nome dell’eseguibile ammesso e una cartella che consenta la sostituzione.
 
 ## Utilizzo
 
-1. Avvia l’eseguibile standard o portable.
-2. Premi **Avvia scansione**.
-3. Apri **Aggiornamenti** e controlla gli elementi trovati.
-4. Seleziona solo quelli desiderati.
-5. Premi **Aggiorna elementi selezionati** e conferma il riepilogo.
+1. Premi **Avvia scansione**.
+2. Apri **Aggiornamenti**. Espandi **Non gestibili automaticamente** per vedere i motivi di esclusione.
+3. Rivedi la preselezione o usa **Seleziona tutto**. L’app chiede le conferme specifiche necessarie.
+4. Premi **Aggiorna elementi selezionati**, leggi il riepilogo e conferma. Al termine, controlla gli esiti e le eventuali verifiche pendenti.
 
-L’app non riavvia il computer senza chiedere conferma.
+## Requisiti e compatibilità
+
+- **Windows client x64.** Setup e Portable includono .NET 10 Desktop. Setup e self-update controllano anche build ed edizione. Su Windows 11 le edizioni desktop ammesse partono dalla build 26200, con eccezioni specifiche per la 26100. Su Windows 10 sono ammesse specifiche edizioni LTSC delle build 17763 e 19044. Windows 10 Home/Pro è fuori matrice. [Matrice tecnica e verifiche precedenti (M8)](docs/M8-RELEASE-READINESS.md#compatibilità-attuale) · [Sistemi supportati da .NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)
+- **WinGet.** Per gli aggiornamenti software automatici serve App Installer con WinGet `v1.29.290` o `v1.30.300`. [Requisiti WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
+- **Connessione Internet** per le ricerche e i download. Alcune installazioni richiedono la conferma UAC.
+
+L’ammissione tecnica di build Insider come la 26320 lascia aperta la verifica sulle altre configurazioni. Restano da completare le prove native su Windows 11 stabile e Windows 10 LTSC, sul runner elevato via UAC e sull’installazione di un driver Windows Update non firmware.
 
 ## Sicurezza e privacy
 
-- I software vengono aggiornati tramite WinGet.
-- I driver vengono proposti solo quando la fonte e la compatibilità sono verificabili.
-- BIOS, UEFI e firmware non vengono installati automaticamente.
-- I pacchetti driver esterni devono superare controlli di compatibilità, hash e firma.
-- I runtime installabili usano la normale selezione, conferma e cronologia degli aggiornamenti.
-- Nessuna telemetria e nessun dato personale vengono trasmessi dall’app.
-- Log e cronologia restano sul PC in `%LOCALAPPDATA%\UpdateCenter`.
-
-## Requisiti
-
-- Per la linea 2.0.0 il target tecnico è Windows x64 dalla build 17763. Il Portable e l'eseguibile incluso nel Setup contengono il runtime .NET 10 Desktop.
-- Per gli aggiornamenti software automatici serve App Installer con WinGet `v1.29.290` o `v1.30.300`. [Requisiti WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
-- Connessione Internet.
-- Privilegi di amministratore solo per gli elementi che li richiedono.
-
-Avvio e scansione sono stati osservati su Windows 11 Pro Insider x64, build 26320. Le release stabili di Windows 11 in servizio e le edizioni Windows 10 LTSC elencate da Microsoft per .NET 10 sono piattaforme da validare sul candidato. Restano aperte anche le prove di UAC con runner elevato, installazione driver WUA e ciclo Setup/Portable. [Matrice di compatibilità](docs/M8-RELEASE-READINESS.md#compatibilità-attuale) · [Sistemi supportati da .NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)
-
-Setup e self-update Portable ammettono le edizioni desktop Windows 11 previste dalla policy dalla build 26200 in avanti, incluse le build Insider come 26320, senza richiedere un elenco di singole flight. Restano i controlli su client x64, edizione e le eccezioni specifiche LTSC/IoT; la sola build minima non basta. Questa ammissione indica compatibilità tecnica da validare per le Insider, non supporto stabile certificato. Il Setup corretto e la migrazione completa sulla build 26320 richiedono ancora la prova nativa della nuova RC.
+- Il consenso è legato al piano mostrato. L’app ricontrolla i dati prima dell’installazione e blocca le operazioni non verificabili. BIOS, UEFI e firmware sono esclusi dall’installazione automatica.
+- **La 2.0.0 è distribuita senza firma Authenticode.** I file `.sha256` verificano l’integrità del download. L’autenticazione del publisher richiede una firma, e Windows SmartScreen può mostrare un avviso. [Policy di firma e aggiornamento](docs/CODE-SIGNING.md)
+- Impostazioni, cronologia e log restano in `%LOCALAPPDATA%\UpdateCenter`. L’app non raccoglie telemetria.
 
 ## Licenza e sviluppo
 
-Il progetto è distribuito con licenza [MIT](LICENSE).
-
-Per compilare i sorgenti serve .NET SDK 10 stabile. Le istruzioni per compilazione, test, creazione del Setup e pubblicazione sono disponibili nella [guida di sviluppo](docs/SVILUPPO.md).
+Il progetto usa la licenza [MIT](LICENSE). Per compilare i sorgenti serve .NET SDK 10. [Guida a build, test e packaging](docs/SVILUPPO.md)
