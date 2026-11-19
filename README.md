@@ -1,10 +1,8 @@
 # Update Center
 
-Versione pubblica attuale: **1.1.5**.
+**Ultima release disponibile** · [Update Center v2.0.0](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0)
 
-Rafforzata la gestione degli esiti di installazione: verifica post-installazione per WinGet e driver, aggiornamento coerente degli elenchi e protezione dai refresh WPF durante transazioni di modifica.
-
-Risolto l’errore nella finestra di conferma degli aggiornamenti software: “L’associazione bidirezionale richiede Path o XPath”.
+**In preparazione · v2.0.1.** Corregge il ritaglio della tabella dopo la scansione, semplifica il riepilogo e mostra le nuove versioni dell’app nella Home. [Note in italiano e inglese](docs/RELEASE-2.0.1.md)
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
@@ -32,10 +30,10 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 
 ## Download
 
-Le [Release GitHub](https://github.com/Illidan0S/UpdateCenter/releases) includono due eseguibili:
+La [release v2.0.0](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0) include Setup e Portable.
 
-- **`UpdateCenter-Setup-vVERSIONE.exe`**: installer standard, crea la voce nel menu Start e gestisce gli aggiornamenti dell’installazione.
-- **`UpdateCenter-vVERSIONE-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB e aggiornabile automaticamente mantenendo il proprio nome.
+- **`UpdateCenter-Setup-v2.0.0.exe`**: installer standard, crea la voce nel menu Start e gestisce gli aggiornamenti dell’installazione.
+- **`UpdateCenter-v2.0.0-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB e aggiornabile automaticamente mantenendo il proprio nome.
 
 I file **`.sha256`** sono i checksum di sicurezza usati per verificare i download automatici: non sono versioni dell’app.
 
@@ -61,7 +59,7 @@ L’app non riavvia il computer senza chiedere conferma.
 
 ## Requisiti
 
-- Windows 10 x64 versione 1809 (build 17763) o successiva, oppure Windows 11 x64.
+- Windows x64. Consulta le edizioni e le build ammesse nelle [note della v2.0.0](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0).
 - WinGet/App Installer aggiornato.
 - Connessione Internet.
 - Privilegi di amministratore solo per gli elementi che li richiedono.
