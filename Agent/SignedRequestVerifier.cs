@@ -23,7 +23,9 @@ public sealed class SignedRequestVerifier(AgentNetworkSettingsStore settingsStor
             return false;
         if (!long.TryParse(timestampText, out var unixSeconds) || !Guid.TryParse(nonceText, out var nonce))
             return false;
-        var timestamp = DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+        DateTimeOffset timestamp;
+        try { timestamp = DateTimeOffset.FromUnixTimeSeconds(unixSeconds); }
+        catch (ArgumentOutOfRangeException) { return false; }
         if ((DateTimeOffset.UtcNow - timestamp).Duration() > AllowedClockSkew) return false;
 
         var expectedFingerprint = settingsStore.GetControllerCertificateSha256();
@@ -75,6 +77,7 @@ public sealed class SignedRequestVerifier(AgentNetworkSettingsStore settingsStor
 
     private static bool FixedHexEquals(string left, string right)
     {
+        if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right)) return false;
         try
         {
             return CryptographicOperations.FixedTimeEquals(

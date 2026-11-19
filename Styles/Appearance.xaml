@@ -1,0 +1,95 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Scoped to AppearanceCard. The rest of the application keeps its own templates. -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="pack://application:,,,/PresentationFramework.Fluent;component/Themes/Fluent.Light.xaml" />
+        <ResourceDictionary Source="Shared.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+
+    <!-- At least 4.5:1 on the light surface, selected tile and preview backgrounds. -->
+    <SolidColorBrush x:Key="AppearanceSecondaryBrush" Color="#5D6677" />
+
+    <Style TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style x:Key="AppearanceDescription" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="Foreground" Value="{DynamicResource AppearanceSecondaryBrush}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSize12}" />
+    </Style>
+    <Style x:Key="AppearanceChoice" TargetType="RadioButton" BasedOn="{StaticResource {x:Type RadioButton}}">
+        <!-- Retain the native Fluent template and radio semantics. -->
+        <Setter Property="FocusVisualStyle" Value="{StaticResource AppearanceKeyboardFocus}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="Padding" Value="10,4,0,4" />
+        <Setter Property="MinWidth" Value="0" />
+    </Style>
+    <Style x:Key="AppearanceChoiceCard" TargetType="Border">
+        <Setter Property="Width" Value="240" />
+        <Setter Property="Padding" Value="14" />
+        <Setter Property="Margin" Value="0,0,12,12" />
+        <Setter Property="CornerRadius" Value="12" />
+        <Setter Property="BorderThickness" Value="2" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
+            </Trigger>
+            <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource Self}}" Value="True">
+                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="AppearanceTextChoiceCard" TargetType="Border" BasedOn="{StaticResource AppearanceChoiceCard}">
+        <Setter Property="Width" Value="160" />
+        <Setter Property="Padding" Value="12,8" />
+    </Style>
+    <Style x:Key="AppearancePreview" TargetType="Image">
+        <Setter Property="Height" Value="72" />
+        <Setter Property="Stretch" Value="Fill" />
+        <Setter Property="Margin" Value="0,14,0,0" />
+        <Setter Property="IsHitTestVisible" Value="False" />
+    </Style>
+
+    <!-- Decorative theme previews, not screenshots or additional interactive controls. -->
+    <DrawingImage x:Key="AppearanceLightPreview">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#F3F5F9" Geometry="M0,0 H180 V72 H0 Z" />
+                <GeometryDrawing Brush="#FFFFFF" Geometry="M4,4 H48 V68 H4 Z M54,4 H176 V28 H54 Z M54,34 H112 V68 H54 Z M118,34 H176 V68 H118 Z" />
+                <GeometryDrawing Brush="#5F63F2" Geometry="M10,12 H38 V18 H10 Z" />
+                <GeometryDrawing Brush="#CBD3DF" Geometry="M10,26 H35 V30 H10 Z M10,38 H35 V42 H10 Z M62,12 H130 V17 H62 Z M62,42 H88 V46 H62 Z M126,42 H152 V46 H126 Z" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+    <DrawingImage x:Key="AppearanceDarkPreview">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#0D1320" Geometry="M0,0 H180 V72 H0 Z" />
+                <GeometryDrawing Brush="#1C2738" Geometry="M4,4 H48 V68 H4 Z M54,4 H176 V28 H54 Z M54,34 H112 V68 H54 Z M118,34 H176 V68 H118 Z" />
+                <GeometryDrawing Brush="#7B7FF7" Geometry="M10,12 H38 V18 H10 Z" />
+                <GeometryDrawing Brush="#71809A" Geometry="M10,26 H35 V30 H10 Z M10,38 H35 V42 H10 Z M62,12 H130 V17 H62 Z M62,42 H88 V46 H62 Z M126,42 H152 V46 H126 Z" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+    <DrawingImage x:Key="AppearanceSystemPreview">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Brush="#F3F5F9" Geometry="M0,0 H90 V72 H0 Z" />
+                <GeometryDrawing Brush="#0D1320" Geometry="M90,0 H180 V72 H90 Z" />
+                <GeometryDrawing Brush="#FFFFFF" Geometry="M4,4 H48 V68 H4 Z M54,4 H90 V28 H54 Z M54,34 H90 V68 H54 Z" />
+                <GeometryDrawing Brush="#1C2738" Geometry="M90,4 H176 V28 H90 Z M90,34 H112 V68 H90 Z M118,34 H176 V68 H118 Z" />
+                <GeometryDrawing Brush="#5F63F2" Geometry="M10,12 H38 V18 H10 Z" />
+                <GeometryDrawing Brush="#CBD3DF" Geometry="M10,26 H35 V30 H10 Z M10,38 H35 V42 H10 Z M62,12 H90 V17 H62 Z M62,42 H88 V46 H62 Z" />
+                <GeometryDrawing Brush="#71809A" Geometry="M90,12 H130 V17 H90 Z M126,42 H152 V46 H126 Z" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+</ResourceDictionary>

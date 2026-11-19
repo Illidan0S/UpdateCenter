@@ -15,7 +15,7 @@ internal static class ReleaseAuditTests
     public static async Task RunAsync()
     {
         var item = new PlanItem { Id = "CrystalDewWorld.CrystalDiskMark", Name = "CrystalDiskMark",
-            Kind = "Software", InstalledVersion = "9.0.1", AvailableVersion = "9.0.3" };
+            Kind = "Software", Source = "winget", InstalledVersion = "9.0.1", AvailableVersion = "9.0.3" };
         UpdateVerificationResult Verify(params string[] versions) => WinGetService.VerifyInstallation(item,
             (_, _) => (new ProcessResult(0, "", "", "fake list"), versions.Select(version =>
                 new WinGetPackageRow(item.Name, item.Id, version, "", "winget")).ToList()),
@@ -26,7 +26,7 @@ internal static class ReleaseAuditTests
             Check(!ambiguous.Verified && !ambiguous.IsDefinitive &&
                 ambiguous.Status == UpdateVerificationStatuses.Unavailable, "Duplicate order affects verification.");
         }
-        Check(Verify("9.0.3", "9.0.3").Verified, "Identical duplicate rows prevent verification.");
+        Check(!Verify("9.0.3", "9.0.3").Verified, "Identical versions concealed multiple installed copies.");
         Check(Verify("9.0.1").IsDefinitive && !Verify("9.0.1").Verified, "Old version passes verification.");
         Check(!Verify("Unknown").IsDefinitive && !Verify().IsDefinitive, "Unparseable output becomes a false failure.");
         item.AvailableVersion = "Unknown";

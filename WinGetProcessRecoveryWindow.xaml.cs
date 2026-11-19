@@ -14,12 +14,12 @@ public partial class WinGetProcessRecoveryWindow : Window
         string confirmText)
     {
         InitializeComponent();
+        DialogPresentation.Initialize(this, () => Cancel_Click(this, new RoutedEventArgs()), () => CancelButton);
         Title = title;
         TitleText.Text = title;
         MessageText.Text = message;
         ProcessText.Text = processText;
         ConfirmButton.Content = confirmText;
-        Loaded += (_, _) => LocalizationService.ApplyTo(this);
     }
 
     private void Confirm_Click(object sender, RoutedEventArgs e)

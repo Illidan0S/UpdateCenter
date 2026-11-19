@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace UpdateCenter.Models;
@@ -56,13 +56,31 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public string InstalledVersion { get; init; } = "—";
     public string AvailableVersion { get; init; } = "—";
     public string Source { get; init; } = "";
+    public Services.ReleaseNotesInfo ProviderReleaseNotes { get; init; } = new();
     public string PackageOperation { get; init; } = PackageOperations.Upgrade;
+    public string WinGetClientVersion { get; set; } = "";
+    public string RemovalManifestSha256 { get; set; } = "";
+    public WinGetScopeBinding? WinGetBinding { get; set; }
+    public WinGetVerificationBinding? WinGetVerification { get; set; }
     public string Size { get; set; } = "—";
     public long DownloadSizeBytes { get; set; }
     public bool RequiresRestart { get; init; }
     public bool IsImportant { get; init; }
     public bool IsOptional { get; init; }
-    public bool RequiresRiskConfirmation { get; set; }
+    private bool _requiresRiskConfirmation;
+    public bool RequiresRiskConfirmation
+    {
+        get => _requiresRiskConfirmation;
+        set
+        {
+            if (_requiresRiskConfirmation == value) return;
+            _requiresRiskConfirmation = value;
+            if (value) IsSelected = false;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PriorityLabel));
+            OnPropertyChanged(nameof(PriorityDescription));
+        }
+    }
     public bool HasUnverifiedInstallerMetadata { get; set; }
     public bool CanInstall
     {
@@ -84,6 +102,7 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public int WindowsUpdateServerSelection { get; init; }
     public string WindowsUpdateServiceId { get; init; } = "";
     public string DriverInstallMode { get; init; } = "";
+    public string DriverDeviceId { get; init; } = "";
     public string OfficialReleasePageUrl { get; init; } = "";
     public string OfficialDownloadUrl { get; init; } = "";
     public string ExpectedSha256 { get; init; } = "";
@@ -97,29 +116,29 @@ public sealed class UpdateItem : INotifyPropertyChanged
     public string SourceSummary => string.IsNullOrWhiteSpace(SourceConfidence)
         ? Source
         : $"{Source} · {SourceConfidence}";
-    public string PriorityLabel => RequiresRiskConfirmation
+    public string PriorityLabel => !CanInstall
+        ? UpdateCenter.Services.LocalizationService.Text("Solo verifica", "Review only")
+        : RequiresRiskConfirmation
         ? UpdateCenter.Services.LocalizationService.Text("Conferma", "Confirm")
         : HasUnverifiedInstallerMetadata
         ? UpdateCenter.Services.LocalizationService.Text("Verifica", "Review")
-        : !CanInstall
-        ? UpdateCenter.Services.LocalizationService.Text("Solo verifica", "Review only")
         : IsImportant
         ? UpdateCenter.Services.LocalizationService.Text("Importante", "Important")
         : IsOptional
             ? UpdateCenter.Services.LocalizationService.Text("Facoltativo", "Optional")
             : "Standard";
-    public string PriorityDescription => RequiresRiskConfirmation
+    public string PriorityDescription => !CanInstall
+        ? UpdateCenter.Services.LocalizationService.Text(
+            "Questo elemento non è selezionabile in UpdateCenter. Consulta la colonna Stato per i dettagli.",
+            "This item cannot be selected in UpdateCenter. See the Status column for details.")
+        : RequiresRiskConfirmation
         ? UpdateCenter.Services.LocalizationService.Text(
             "Questo installer può rimuovere la versione funzionante prima di installare quella nuova. È richiesta una conferma separata.",
             "This installer may remove the working version before installing the new one. Separate confirmation is required.")
         : HasUnverifiedInstallerMetadata
         ? UpdateCenter.Services.LocalizationService.Text(
-            "I metadati dell'installer non sono disponibili o non sono stati verificati. L'aggiornamento non è preselezionato, ma può essere selezionato senza conferma aggiuntiva.",
-            "Installer metadata is unavailable or could not be verified. The update is not preselected, but it can be selected without additional confirmation.")
-        : !CanInstall
-        ? UpdateCenter.Services.LocalizationService.Text(
-            "Questo elemento richiede un aggiornamento manuale dalla fonte ufficiale.",
-            "This item requires a manual update from its official source.")
+            "I metadati dell'installer non sono disponibili o non sono stati verificati. Questo avviso non richiede una conferma aggiuntiva; restano necessari i controlli prima dell'avvio.",
+            "Installer metadata is unavailable or could not be verified. This notice does not require additional confirmation; pre-launch checks remain necessary.")
         : IsImportant
         ? UpdateCenter.Services.LocalizationService.Text(
             "Aggiornamento obbligatorio o di sicurezza secondo la fonte ufficiale.",
@@ -143,7 +162,9 @@ public sealed class UpdateItem : INotifyPropertyChanged
         ? UpdateCenter.Services.LocalizationService.Text("Sì", "Yes")
         : "No";
     public bool CanRetry => CanInstall && (Status.Equals("Errore", StringComparison.OrdinalIgnoreCase) ||
-                            Status.Equals("Error", StringComparison.OrdinalIgnoreCase));
+                            Status.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+                            Status.Equals("Non riuscito", StringComparison.OrdinalIgnoreCase) ||
+                            Status.Equals("Failed", StringComparison.OrdinalIgnoreCase));
     public bool CanShowDetails => !string.IsNullOrWhiteSpace(ResultDetails) || !string.IsNullOrWhiteSpace(Diagnostics);
 
     public string Status

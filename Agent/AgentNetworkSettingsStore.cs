@@ -18,13 +18,22 @@ public sealed class AgentNetworkSettingsStore
         WriteIndented = true
     };
     private readonly object _sync = new();
+    private readonly string _rootDirectory;
+    private readonly string _networkSettingsFile;
     private NetworkSettingsData _settings;
     private IReadOnlyList<NetworkScopeData> _cachedActiveScopes = [];
     private DateTime _activeScopesCachedUtc;
 
-    public AgentNetworkSettingsStore()
+    public AgentNetworkSettingsStore() : this(AgentDataPaths.RootDirectory) { }
+
+    internal AgentNetworkSettingsStore(string rootDirectory)
     {
-        Directory.CreateDirectory(AgentDataPaths.RootDirectory);
+        if (!Path.IsPathFullyQualified(rootDirectory))
+            throw new ArgumentException("La directory dati Agent deve essere assoluta.", nameof(rootDirectory));
+        _rootDirectory = Path.GetFullPath(rootDirectory);
+        _networkSettingsFile = Path.Combine(_rootDirectory, "network-settings.json");
+        // DPAPI LocalMachine requires a private DACL before any persisted key is read.
+        AgentSecretDirectory.Secure(_rootDirectory);
         _settings = Load() ?? CreateDefault();
         if (!_settings.ConnectionRequestsConfigured)
         {
@@ -180,9 +189,9 @@ public sealed class AgentNetworkSettingsStore
             if (string.IsNullOrWhiteSpace(_settings.ControllerCertificateBase64)) return null;
             try
             {
-                return new X509Certificate2(Convert.FromBase64String(_settings.ControllerCertificateBase64));
+                return X509CertificateLoader.LoadCertificate(Convert.FromBase64String(_settings.ControllerCertificateBase64));
             }
-            catch (CryptographicException)
+            catch (Exception ex) when (ex is CryptographicException or FormatException)
             {
                 return null;
             }
@@ -207,7 +216,7 @@ public sealed class AgentNetworkSettingsStore
             var keyStorage = WindowsServiceHelpers.IsWindowsService()
                 ? X509KeyStorageFlags.MachineKeySet
                 : X509KeyStorageFlags.UserKeySet;
-            return new X509Certificate2(pfxBytes, (string?)null, keyStorage);
+            return X509CertificateLoader.LoadPkcs12(pfxBytes, (string?)null, keyStorage);
         }
     }
 
@@ -254,17 +263,10 @@ public sealed class AgentNetworkSettingsStore
 
     private NetworkSettingsData? Load()
     {
-        try
-        {
-            if (!File.Exists(AgentDataPaths.NetworkSettingsFile)) return null;
-            return JsonSerializer.Deserialize<NetworkSettingsData>(
-                File.ReadAllBytes(AgentDataPaths.NetworkSettingsFile),
-                JsonOptions);
-        }
-        catch
-        {
-            return null;
-        }
+        if (!File.Exists(_networkSettingsFile)) return null;
+        return JsonSerializer.Deserialize<NetworkSettingsData>(
+            File.ReadAllBytes(_networkSettingsFile), JsonOptions)
+            ?? throw new InvalidDataException("Configurazione Agent non valida: dati esistenti conservati.");
     }
 
     private static NetworkSettingsData CreateDefault() => new()
@@ -352,10 +354,11 @@ public sealed class AgentNetworkSettingsStore
 
     private void SaveLocked()
     {
-        Directory.CreateDirectory(AgentDataPaths.RootDirectory);
-        var temporary = AgentDataPaths.NetworkSettingsFile + ".tmp";
+        AgentSecretDirectory.AssertNoReparsePoint(_networkSettingsFile);
+        var temporary = _networkSettingsFile + ".tmp";
+        AgentSecretDirectory.AssertNoReparsePoint(temporary);
         File.WriteAllBytes(temporary, JsonSerializer.SerializeToUtf8Bytes(_settings, JsonOptions));
-        File.Move(temporary, AgentDataPaths.NetworkSettingsFile, overwrite: true);
+        File.Move(temporary, _networkSettingsFile, overwrite: true);
     }
 
     private static string Limit(string? value, int maximumLength)

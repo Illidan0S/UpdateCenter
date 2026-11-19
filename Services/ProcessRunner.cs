@@ -12,6 +12,7 @@ public sealed record ProcessResult(
     TimeSpan? Duration = null)
 {
     public bool Success => ExitCode == 0;
+    public bool PreflightRejected { get; init; }
 }
 
 public static class ProcessRunner
@@ -49,6 +50,11 @@ public static class ProcessRunner
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var timeoutCts = timeout.HasValue ? new CancellationTokenSource(timeout.Value) : null;
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, timeoutCts?.Token ?? CancellationToken.None);
+            linkedCts.Token.ThrowIfCancellationRequested();
             if (!process.Start())
                 throw new InvalidOperationException($"Impossibile avviare {fileName}.");
 
@@ -57,14 +63,9 @@ public static class ProcessRunner
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
-            using var timeoutCts = timeout.HasValue ? new CancellationTokenSource(timeout.Value) : null;
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken, timeoutCts?.Token ?? CancellationToken.None);
-
             try
             {
                 await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
-                process.WaitForExit();
             }
             catch (OperationCanceledException)
             {

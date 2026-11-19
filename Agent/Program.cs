@@ -38,6 +38,8 @@ if (!string.IsNullOrWhiteSpace(localNetworkCommand))
     }
     if (response.Network is not null)
         Console.WriteLine($"Rete: {(response.Network.Enabled ? "abilitata" : "disabilitata")}; Agent: {response.Network.AgentId}; Controller: {(response.Network.HasController ? response.Network.ControllerName : "nessuno")}; riavvio richiesto: {response.Network.RestartRequired}.");
+    if (!string.IsNullOrWhiteSpace(response.Network?.CertificateSha256))
+        Console.WriteLine($"SHA-256 Agent: {response.Network.CertificateSha256}");
     if (response.PairingCode is not null)
         Console.WriteLine($"Codice pairing: {response.PairingCode.Code} (scade alle {response.PairingCode.ExpiresUtc.ToLocalTime():HH:mm:ss}).");
     if (!string.IsNullOrWhiteSpace(response.Message)) Console.WriteLine(response.Message);

@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <ApplicationManifest>test-host.manifest</ApplicationManifest>
+    <AssemblyName>UpdateCenter.ConsentTestHost</AssemblyName>
+  </PropertyGroup>
+  <!-- No reference to UpdateCenter.exe or to any native provider assembly.
+       Compile the unmodified consent/runner sources against fail-closed test adapters. -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <Compile Include="Program.cs;NativeBlocks.cs;ConsentChannelBlocks.cs;SafetyGuard.cs;HostSafetyTests.cs;ScenarioSession.cs;ManualHostWindow.cs" />
+    <Compile Include="../../Services/WpfRunnerConsent.cs" Link="Production/WpfRunnerConsent.cs" />
+    <Compile Include="../../Services/RunnerPlanSnapshot.cs" Link="Production/RunnerPlanSnapshot.cs" />
+    <Compile Include="../../Services/RunnerExecutionBoundary.cs" Link="Production/RunnerExecutionBoundary.cs" />
+    <Compile Include="../../Services/RunnerReadOnlyWait.cs" Link="Production/RunnerReadOnlyWait.cs" />
+    <Compile Include="../../Services/ElevatedUpdateRunner.cs" Link="Production/ElevatedUpdateRunner.cs" />
+    <Compile Include="../../Services/AppPaths.cs" Link="Production/AppPaths.cs" />
+    <Compile Include="../../Services/JsonStorage.cs" Link="Production/JsonStorage.cs" />
+    <Compile Include="../../Services/LogService.cs" Link="Production/LogService.cs" />
+    <Compile Include="../../Services/LocalizationService.cs" Link="Production/LocalizationService.cs" />
+    <Compile Include="../../Models/UpdateItem.cs" Link="Production/UpdateItem.cs" />
+    <Compile Include="../../Models/UpdatePlan.cs" Link="Production/UpdatePlan.cs" />
+    <Compile Include="../../Models/WinGetScopeBinding.cs" Link="Production/WinGetScopeBinding.cs" />
+    <Compile Include="../../Models/AppSettings.cs" Link="Production/AppSettings.cs" />
+    <Compile Include="../../Models/HistoryEntry.cs" Link="Production/HistoryEntry.cs" />
+  </ItemGroup>
+</Project>

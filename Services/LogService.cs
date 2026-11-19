@@ -29,6 +29,7 @@ public static class LogService
 
     public static void Write(string message, Exception? exception = null)
     {
+        if (AppPaths.UpdateStartupPending) return;
         try
         {
             AppPaths.EnsureCreated();

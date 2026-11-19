@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -9,7 +9,7 @@
     <RootNamespace>UpdateCenter.RemoteClient</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
     <ProjectReference Include="..\Contracts\UpdateCenter.Contracts.csproj" />
   </ItemGroup>
 </Project>

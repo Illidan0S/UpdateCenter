@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows;
@@ -12,14 +12,90 @@ namespace UpdateCenter.Services;
 
 public static class LocalizationService
 {
+    internal const string NotApplicableMessage = "WinGet non ha applicato l'aggiornamento richiesto. Il codice indica una non applicabilità, senza specificarne la causa. Consulta i dettagli tecnici e il supporto ufficiale.";
+    internal const string TechnologyMismatchMessage = "WinGet segnala una tecnologia di installazione diversa tra la versione installata e quella proposta. L'aggiornamento automatico non è riuscito. Consulta le indicazioni del produttore per il passaggio alla nuova versione.";
+    internal const string UpgradeNotSupportedMessage = "L'installer non supporta l'aggiornamento della versione esistente. Consulta le indicazioni del produttore.";
+    internal const string ElevationRequiredMessage = "Windows richiede privilegi amministrativi per installare i servizi del pacchetto. L'aggiornamento non è riuscito. Segui le indicazioni ufficiali con un amministratore; il percorso automatico attuale non supporta questa elevazione.";
+    internal const string ApplicabilitySuppressionMessage = "La stessa coppia di versioni viene temporaneamente esclusa dalle scansioni successive; un cambio di versione consente una nuova valutazione.";
+    internal const string WinGetRequirementsUnavailableMessage = "Requisiti non verificabili: mancano i metadati della versione e dell'identità esatte. Esegui una nuova scansione o consulta la fonte ufficiale.";
+    internal const string WinGetPlatformUnsupportedMessage = "Il manifest non offre un installer compatibile con l'architettura e la versione di Windows per il percorso approvato. Consulta i requisiti ufficiali.";
+    internal const string WinGetElevationUnsupportedMessage = "Un installer possibile richiede privilegi amministrativi o dichiara servizi MSIX/AppX. Il percorso software attuale non autorizza questa elevazione: usa le indicazioni ufficiali con un amministratore. Non viene scelta automaticamente una tecnologia alternativa.";
+    internal const string WinGetElevationProhibitedMessage = "Un installer possibile vieta l'elevazione, ma il processo corrente ha privilegi amministrativi. Chiudi UpdateCenter e riaprilo normalmente prima di una nuova scansione.";
+    internal const string WinGetRequirementsUnknownMessage = "Requisiti non completamente determinabili: ambito, tecnologia o privilegi non sono tutti confermati. L'avvertenza non richiede una conferma specifica; i controlli prima dell'avvio e la verifica finale restano necessari.";
+    internal const string WinGetNativeElevationMessage = "L'installer approvato richiede privilegi amministrativi. Dopo la conferma del riepilogo, Windows richiederà l'autorizzazione UAC per questo installer quando necessaria; UpdateCenter resta nel tuo account. Il completamento sarà verificato.";
+    internal const string WinGetSelectionUnknownMessage = "Non è possibile confermare quale installer verrà usato e quali privilegi richiederà. L'aggiornamento resta manuale finché identità e installer non sono vincolabili; non viene scelta una tecnologia alternativa.";
+    internal const string WinGetNativeInterruptedMessage = "L'attesa dell'installer è stata interrotta. L'installer autorizzato tramite UAC potrebbe essere ancora in esecuzione: verificane l'esito prima di riprovare. Nessun nuovo tentativo automatico.";
+    internal const string WinGetUacCancelledMessage = "Autorizzazione o installazione annullata. Nessun nuovo tentativo automatico; puoi ripetere l'operazione con un nuovo riepilogo.";
+    internal const string WinGetSelfElevationMessage = "L'installer dichiara di gestire la propria elevazione e può richiedere un consenso UAC Windows. Il percorso approvato resta invariato; il completamento sarà verificato dopo l'esecuzione.";
+    internal const string WinGetRequirementsSupportedMessage = "I requisiti dichiarati sono compatibili con il percorso corrente. La scelta finale spetta a WinGet; il completamento sarà verificato dopo l'esecuzione.";
+    internal const string WinGetVerificationSourceMismatchMessage = "La risposta WinGet riporta un'origine diversa da quella approvata; la versione target non è verificata.";
+    internal const string InstallerRemovalRiskMessage = "L'installer compatibile con questo PC dichiara la rimozione della versione attuale prima di installare quella nuova. È richiesta una conferma aggiuntiva.";
+    internal const string InstallerBehaviorUnknownMessage = "I metadati sul comportamento dell'installer non sono disponibili o non sono stati verificati. Non risulta dichiarata una rimozione preventiva.";
+
+    private static readonly string[] WinGetRequirementMessages =
+    [
+        WinGetNativeElevationMessage, WinGetSelectionUnknownMessage,
+        WinGetRequirementsUnavailableMessage, WinGetPlatformUnsupportedMessage, WinGetElevationUnsupportedMessage,
+        WinGetElevationProhibitedMessage, WinGetRequirementsUnknownMessage, WinGetSelfElevationMessage, WinGetRequirementsSupportedMessage
+    ];
+    private static readonly string[] PersistentWinGetMessages =
+    [
+        .. WinGetRequirementMessages, WinGetNativeInterruptedMessage, WinGetUacCancelledMessage, WinGetVerificationSourceMismatchMessage, ElevationRequiredMessage,
+        InstallerRemovalRiskMessage, InstallerBehaviorUnknownMessage
+    ];
+
     private static readonly IReadOnlyDictionary<string, string> ItalianToEnglish =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
+            ["Nessun elemento da mostrare"] = "No items to display",
+            ["Avvia una scansione o modifica i filtri. Controlla lo stato della scansione indicato sopra."] = "Start a scan or change the filters. Check the scan status shown above.",
+            ["Nessun dispositivo da mostrare"] = "No devices to display",
+            ["Avvia una scansione o modifica i filtri dei dispositivi."] = "Start a scan or change the device filters.",
+            ["Nessun problema elencato. Consulta lo stato del controllo sopra."] = "No problems listed. Check the scan status above.",
+            ["Nessun controllo manuale disponibile."] = "No manual checks available.",
+            ["Nessuna operazione registrata"] = "No operations recorded",
+            ["Le operazioni eseguite compariranno qui con esito, versioni e dettagli."] = "Completed operations will appear here with results, versions and details.",
+            ["Dettagli: passa sul testo o premi Invio."] = "Details: hover over the text or press Enter.",
+            ["Installata"] = "Installed",
+            ["Filtra i dispositivi"] = "Filter devices",
+            ["Dispositivi visibili"] = "Visible devices",
+            ["Annullato"] = "Cancelled",
+            ["Elementi dell'operazione"] = "Operation items",
+            ["Dettagli dell'elemento selezionato"] = "Selected item details",
+            ["Dettagli tecnici"] = "Technical details",
+            ["Download della firma SHA-256…"] = "Downloading SHA-256 checksum…",
+            ["Download del checksum SHA-256…"] = "Downloading SHA-256 checksum…",
+            ["Verifica SHA-256…"] = "Verifying SHA-256…",
+            ["Download verificato · preparazione del riavvio…"] = "Download verified · preparing to restart…",
+            ["Verifica dispositivo"] = "Verify device",
+            ["Impronta SHA-256 Agent"] = "Agent SHA-256 fingerprint",
+            ["Inserisci l'impronta SHA-256 mostrata nelle impostazioni Agent sul PC da collegare o ricevuta tramite un canale attendibile."] = "Enter the SHA-256 fingerprint shown in Agent settings on the target PC or received through a trusted channel.",
             ["Completato · da verificare"] = "Completed · verify",
             ["Unità fisica"] = "Physical drive",
             ["Processore non rilevato"] = "Processor not detected",
             ["Riuscito"] = "Succeeded",
+            ["Non riuscito"] = "Failed",
             ["Fallito"] = "Failed",
+            ["Non eseguibile automaticamente"] = "Cannot run automatically",
+            [NotApplicableMessage] = "WinGet did not apply the requested update. The code indicates non-applicability without specifying the cause. Check the technical details and official support.",
+            [TechnologyMismatchMessage] = "WinGet reports different installation technology between the installed and proposed versions. The automatic update failed. Consult the publisher's guidance for moving to the new version.",
+            [UpgradeNotSupportedMessage] = "The installer does not support upgrading the existing version. Consult the publisher's guidance.",
+            [ElevationRequiredMessage] = "Windows requires administrator privileges to install the package services. The update failed. Follow the official guidance with an administrator; the current automatic path does not support this elevation.",
+            [ApplicabilitySuppressionMessage] = "The same version pair is temporarily excluded from subsequent scans; a version change allows a new assessment.",
+            [WinGetRequirementsUnavailableMessage] = "Requirements cannot be verified: metadata for the exact version and identity is missing. Scan again or consult the official source.",
+            [WinGetPlatformUnsupportedMessage] = "The manifest offers no installer compatible with the architecture and Windows version for the approved path. Consult the official requirements.",
+            [WinGetElevationUnsupportedMessage] = "A possible installer requires administrator privileges or declares MSIX/AppX services. The current software path does not authorize this elevation: follow the official guidance with an administrator. An alternative technology is not selected automatically.",
+            [WinGetElevationProhibitedMessage] = "A possible installer prohibits elevation, but the current process has administrator privileges. Close UpdateCenter and reopen it normally before scanning again.",
+            [WinGetRequirementsUnknownMessage] = "Requirements are not fully determined: scope, technology or privileges are not all confirmed. This notice does not require separate confirmation; pre-launch checks and final verification remain necessary.",
+            [WinGetNativeElevationMessage] = "The approved installer requires administrator privileges. After confirming the summary, Windows will request UAC authorization for this installer when needed; UpdateCenter stays in your account. Completion will be verified.",
+            [WinGetSelectionUnknownMessage] = "The installer that will be used and its privilege requirements cannot be confirmed. Updating remains manual until identity and installer can be bound; no alternative technology is selected.",
+            [WinGetNativeInterruptedMessage] = "Waiting for the installer was interrupted. The installer authorized through UAC might still be running: check its outcome before trying again. No automatic retry.",
+            [WinGetUacCancelledMessage] = "Authorization or installation cancelled. No automatic retry; you can try again with a new summary.",
+            [WinGetSelfElevationMessage] = "The installer declares that it handles its own elevation and may request Windows UAC consent. The approved path remains unchanged; completion will be verified after execution.",
+            [WinGetRequirementsSupportedMessage] = "The declared requirements are compatible with the current path. WinGet makes the final selection; completion will be verified after execution.",
+            [WinGetVerificationSourceMismatchMessage] = "The WinGet response reports a different source from the approved one; the target version is not verified.",
+            [InstallerRemovalRiskMessage] = "The installer compatible with this PC declares that it removes the current version before installing the new one. Additional confirmation is required.",
+            [InstallerBehaviorUnknownMessage] = "Installer behavior metadata is unavailable or could not be verified. No prior removal is declared.",
             ["Manuale"] = "Manual",
             ["Non applicabile"] = "Not applicable",
             ["Completato · verifica richiesta"] = "Completed · verification required",
@@ -48,6 +124,7 @@ public static class LocalizationService
             ["Elementi trovati"] = "Items found",
             ["Selezionati"] = "Selected",
             ["ULTIMA SCANSIONE"] = "LAST SCAN",
+            ["Ultima scansione"] = "Last scan",
             ["Vedi aggiornamenti"] = "View updates",
             ["Cerca aggiornamenti"] = "Search updates",
             ["Tutti"] = "All",
@@ -66,6 +143,13 @@ public static class LocalizationService
             ["Nome"] = "Name",
             ["Tipo"] = "Type",
             ["Priorità"] = "Priority",
+            ["Conferma"] = "Confirm",
+            ["Tutti i dispositivi"] = "All devices",
+            ["Collegalo nuovamente ed esegui una nuova scansione."] = "Connect it again and run a new scan.",
+            ["Novità"] = "What’s new",
+            ["Novità della versione"] = "Release notes",
+            ["Le preferenze si applicano e si salvano automaticamente. Le operazioni richiedono le conferme previste."] = "Preferences apply and save automatically. Operations still require the applicable confirmations.",
+            ["Riprova salvataggio"] = "Retry saving",
             ["Versione attuale"] = "Current version",
             ["Nuova versione"] = "New version",
             ["Stato"] = "Status",
@@ -80,6 +164,7 @@ public static class LocalizationService
             ["Seleziona tutto"] = "Select all",
             ["Deseleziona tutto"] = "Clear selection",
             ["Aggiorna elementi selezionati"] = "Update selected items",
+            ["Aggiorna selezionati"] = "Update selected",
             ["Panoramica hardware"] = "Hardware overview",
             ["Aggiorna dati"] = "Refresh data",
             ["Copia riepilogo"] = "Copy summary",
@@ -214,7 +299,6 @@ public static class LocalizationService
             ["Apri cartella log"] = "Open log folder",
             ["Dettaglio attività"] = "Activity details",
             ["Copia dettaglio"] = "Copy details",
-            ["Controlla il comportamento di scansione e installazione"] = "Control scanning and installation behavior",
             ["Sicurezza"] = "Security",
             ["Crea un punto di ripristino per driver e aggiornamenti importanti"] = "Create a restore point for drivers and important updates",
             ["Gestisci spazio in Windows"] = "Manage space in Windows",
@@ -224,7 +308,16 @@ public static class LocalizationService
             ["Controlla automaticamente gli aggiornamenti"] = "Automatically check for updates",
             ["ULTIMO CONTROLLO"] = "LAST CHECK",
             ["Controlla ora"] = "Check now",
+            ["Vedi novità"] = "See what’s new",
             ["Aspetto"] = "Appearance",
+            ["Personalizza il tema e la leggibilità di Update Center."] = "Personalize the theme and readability of Update Center.",
+            ["Tema dell'applicazione"] = "Application theme",
+            ["Scegli un tema o segui quello delle app di Windows."] = "Choose a theme or follow your Windows app theme.",
+            ["Segue Windows"] = "Follows Windows",
+            ["Superfici luminose"] = "Light surfaces",
+            ["Superfici scure"] = "Dark surfaces",
+            ["Regola tutti i testi dell'applicazione per una lettura più comoda."] = "Adjust all application text for more comfortable reading.",
+            ["Le modifiche all'aspetto vengono salvate automaticamente."] = "Appearance changes are saved automatically.",
             ["Chiaro"] = "Light",
             ["Scuro"] = "Dark",
             ["Dimensione del testo"] = "Text size",
@@ -240,9 +333,12 @@ public static class LocalizationService
             ["Notifiche"] = "Notifications",
             ["Avvisami quando vengono trovati aggiornamenti"] = "Notify me when updates are found",
             ["Lingua"] = "Language",
+            ["Usa Update Center nella lingua che preferisci."] = "Use Update Center in your preferred language.",
+            ["La lingua viene applicata e salvata subito, senza riavviare."] = "Your language is applied and saved immediately. No restart needed.",
             ["Italiano"] = "Italian",
             ["Inglese"] = "English",
-            ["Salva impostazioni"] = "Save settings",
+            ["Ultimo controllo"] = "Last check",
+            ["La frequenza viene salvata automaticamente."] = "The scan frequency is saved automatically.",
             ["Ideato e sviluppato da"] = "Designed and developed by",
             ["Repository del progetto"] = "Project repository",
             ["Apri GitHub"] = "Open GitHub",
@@ -253,6 +349,7 @@ public static class LocalizationService
             ["Informazioni sul progetto"] = "Project information",
             ["Chiudi"] = "Close",
             ["Aggiorna ora"] = "Update now",
+            ["Aggiorna e riapri"] = "Update and reopen",
             ["Aggiornamento di Update Center"] = "Update Center update",
             ["AGGIORNAMENTI VERIFICATI"] = "VERIFIED UPDATES",
             ["DRIVER DA AGGIORNARE"] = "DRIVERS TO UPDATE",
@@ -270,6 +367,9 @@ public static class LocalizationService
             ["Avvisi prima di continuare"] = "Warnings before continuing",
             ["Caratteristiche hardware"] = "Hardware specifications",
             ["Salute dello storage"] = "Storage health",
+            ["Nessuna unità da visualizzare. Consulta lo stato del rilevamento."] = "No drives to display. Check the detection status.",
+            ["Nessun PC rilevato. Usa Cerca PC per cercare nella rete locale."] = "No PCs detected. Use Find PCs to search the local network.",
+            ["Nessun aggiornamento da visualizzare. Consulta lo stato della scansione."] = "No updates to display. Check the scan status.",
             ["Unità fisica"] = "Physical drive",
             ["Volumi"] = "Volumes",
             ["Capacità"] = "Capacity",
@@ -305,7 +405,7 @@ public static class LocalizationService
             ["Esiti, versioni e spiegazioni delle operazioni eseguite"] = "Results, versions and explanations for completed operations",
             ["Esito"] = "Result",
             ["FREQUENZA"] = "REFRESH RATE",
-            ["Il controllo usa esclusivamente le Release stabili ufficiali su GitHub e viene eseguito al massimo una volta ogni 24 ore."] = "The check uses stable GitHub releases and runs at most once every 24 hours.",
+            ["Il controllo automatico usa le release stabili su GitHub. Dopo un esito riuscito attende 24 ore."] = "Automatic checks use stable releases on GitHub. After a successful check, the app waits 24 hours.",
             ["Il download proviene dalla Release stabile ufficiale e verrà verificato con SHA-256."] = "The download comes from the stable release and is verified with SHA-256.",
             ["IMPORTANTI"] = "IMPORTANT",
             ["Informazioni selezionabili e utilizzo aggiornato automaticamente."] = "Selectable information with automatically refreshed usage.",
@@ -317,6 +417,7 @@ public static class LocalizationService
             ["MEMORIA RAM"] = "RAM",
             ["Non sono richiesti privilegi amministrativi nell'installazione per utente."] = "Per-user installation does not require administrator privileges.",
             ["Note della Release"] = "Release notes",
+            ["Note su GitHub"] = "Release notes on GitHub",
             ["NUOVA"] = "NEW",
             ["Piccola corrisponde alla precedente Media; Media e Grande aumentano progressivamente tutti i testi."] = "Small matches the previous Medium; Medium and Large progressively enlarge all text.",
             ["Più tardi"] = "Later",
@@ -351,6 +452,7 @@ public static class LocalizationService
             ["DETTAGLIO MEMORIA PER GPU"] = "MEMORY DETAILS BY GPU",
             ["MEMORIA VIDEO IN USO"] = "VIDEO MEMORY IN USE",
             ["Ignora questa versione"] = "Ignore this version",
+            ["Ignora versione"] = "Skip version",
             ["Da verificare"] = "Needs verification",
             ["da verificare"] = "needs verification",
             ["Completato · da verificare"] = "Completed · verify",
@@ -654,6 +756,25 @@ public static class LocalizationService
 
     private static readonly (string Italian, string English)[] HistoryDetailReplacements =
     [
+        (NotApplicableMessage, ItalianToEnglish[NotApplicableMessage]),
+        (TechnologyMismatchMessage, ItalianToEnglish[TechnologyMismatchMessage]),
+        (UpgradeNotSupportedMessage, ItalianToEnglish[UpgradeNotSupportedMessage]),
+        (ElevationRequiredMessage, ItalianToEnglish[ElevationRequiredMessage]),
+        (ApplicabilitySuppressionMessage, ItalianToEnglish[ApplicabilitySuppressionMessage]),
+        (WinGetRequirementsUnavailableMessage, ItalianToEnglish[WinGetRequirementsUnavailableMessage]),
+        (WinGetPlatformUnsupportedMessage, ItalianToEnglish[WinGetPlatformUnsupportedMessage]),
+        (WinGetElevationUnsupportedMessage, ItalianToEnglish[WinGetElevationUnsupportedMessage]),
+        (WinGetElevationProhibitedMessage, ItalianToEnglish[WinGetElevationProhibitedMessage]),
+        (WinGetRequirementsUnknownMessage, ItalianToEnglish[WinGetRequirementsUnknownMessage]),
+        (WinGetNativeElevationMessage, ItalianToEnglish[WinGetNativeElevationMessage]),
+        (WinGetSelectionUnknownMessage, ItalianToEnglish[WinGetSelectionUnknownMessage]),
+        (WinGetNativeInterruptedMessage, ItalianToEnglish[WinGetNativeInterruptedMessage]),
+        (WinGetUacCancelledMessage, ItalianToEnglish[WinGetUacCancelledMessage]),
+        (WinGetSelfElevationMessage, ItalianToEnglish[WinGetSelfElevationMessage]),
+        (WinGetRequirementsSupportedMessage, ItalianToEnglish[WinGetRequirementsSupportedMessage]),
+        (WinGetVerificationSourceMismatchMessage, ItalianToEnglish[WinGetVerificationSourceMismatchMessage]),
+        (InstallerRemovalRiskMessage, ItalianToEnglish[InstallerRemovalRiskMessage]),
+        (InstallerBehaviorUnknownMessage, ItalianToEnglish[InstallerBehaviorUnknownMessage]),
         (" non è applicabile a questo PC secondo WinGet. La segnalazione da ", " is not applicable to this PC according to WinGet. Reporting from "),
         (" resterà esclusa finché una delle due versioni non cambia. Dettaglio: ", " will remain excluded until one of the two versions changes. Details: "),
         (" richiede un aggiornamento manuale perché il pacchetto installato e quello nuovo non supportano un upgrade automatico compatibile. Dettaglio: ", " requires a manual update because the installed and new packages do not support a compatible automatic upgrade. Details: "),
@@ -718,6 +839,21 @@ public static class LocalizationService
     public static string TranslateHistoryDetails(string details)
     {
         if (string.IsNullOrWhiteSpace(details)) return details;
+        // A persisted reason follows the history wrapper. Keep its complete
+        // translation out of the legacy word replacements below: " a " -> " to "
+        // must not corrupt an English sentence just produced (or already stored).
+        foreach (var message in PersistentWinGetMessages)
+        {
+            var english = ItalianToEnglish[message];
+            var translated = IsEnglish ? english : message;
+            if (details == message || details == english) return translated;
+            foreach (var original in new[] { message, english })
+            {
+                var suffix = " " + original;
+                if (details.EndsWith(suffix, StringComparison.Ordinal))
+                    return TranslateHistoryDetails(details[..^suffix.Length]) + " " + translated;
+            }
+        }
         var result = details;
         if (IsEnglish)
         {
@@ -764,12 +900,28 @@ public static class LocalizationService
     public static string Translate(string text)
     {
         if (string.IsNullOrEmpty(text)) return text;
+        // Applicability messages consist of a reason plus an optional suppression
+        // notice. Translate both persisted parts, including after restarting the UI.
+        var suppression = " " + (IsEnglish ? ApplicabilitySuppressionMessage
+            : ItalianToEnglish[ApplicabilitySuppressionMessage]);
+        if (text.EndsWith(suppression, StringComparison.Ordinal))
+            return Translate(text[..^suppression.Length]) + " " + Translate(suppression.TrimStart());
+        // Scan details may append a requirements assessment to a B2 risk warning.
+        // Translate the two known parts even in a new UI process with empty caches.
+        foreach (var message in WinGetRequirementMessages)
+        {
+            var suffix = " " + (IsEnglish ? message : ItalianToEnglish[message]);
+            if (text.EndsWith(suffix, StringComparison.Ordinal))
+                return Translate(text[..^suffix.Length]) + " " + Translate(suffix.TrimStart());
+        }
         if (IsEnglish)
         {
             if (DynamicItalianToEnglish.TryGetValue(text, out var dynamicEnglish)) return dynamicEnglish;
             if (ItalianToEnglish.TryGetValue(text, out var english)) return english;
             if (text.StartsWith("Aggiornamento: ", StringComparison.Ordinal))
                 return "Updating: " + text["Aggiornamento: ".Length..];
+            if (text.StartsWith("Download in corso · ", StringComparison.Ordinal))
+                return "Downloading · " + text["Download in corso · ".Length..];
             if (text.StartsWith("Aggiornamento di ", StringComparison.Ordinal) && text.EndsWith("…", StringComparison.Ordinal))
                 return "Updating " + text["Aggiornamento di ".Length..^1] + "…";
             if (text.StartsWith("Scansione di ", StringComparison.Ordinal) && text.EndsWith("…", StringComparison.Ordinal))
@@ -926,9 +1078,11 @@ public static class LocalizationService
         if (element is Window window && !string.IsNullOrEmpty(window.Title))
             targets.Add(new StaticLocalizationTarget(window.Title, value => window.Title = value));
 
-        if (element is TextBlock textBlock)
+        // A bound TextBlock may expose a generated Run. Writing that Run replaces the
+        // parent Text binding, freezing live status after a language switch.
+        if (element is TextBlock textBlock && !BindingOperations.IsDataBound(textBlock, TextBlock.TextProperty))
         {
-            if (!BindingOperations.IsDataBound(textBlock, TextBlock.TextProperty) && !string.IsNullOrEmpty(textBlock.Text))
+            if (!string.IsNullOrEmpty(textBlock.Text))
                 targets.Add(new StaticLocalizationTarget(textBlock.Text, value => textBlock.Text = value));
 
             foreach (var run in textBlock.Inlines.OfType<Run>()

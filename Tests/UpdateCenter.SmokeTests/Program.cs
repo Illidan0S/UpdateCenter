@@ -11,6 +11,389 @@ using UpdateCenter.Contracts;
 using UpdateCenter.RemoteClient;
 using UpdateCenter.ViewModels;
 
+if (args.Length == 3 && args[0] == "--self-update-startup-child")
+{
+    await SelfUpdateMigrationTests.ChildAsync(args[1], args[2]);
+    return;
+}
+
+if (args.Length == 8 && args[0] == "--unified-consent-child")
+{
+    UnifiedConsentTests.Child(args);
+    return;
+}
+
+// The restart QA child may only reuse a validated temporary GUID test root.
+if (args.Length == 2 && args[0] == "--title-settings-reopen")
+{
+    TitleSettingsUiTests.Reopen(args[1]);
+    return;
+}
+
+// Initialize once, before any branch can log or trigger application-data cleanup.
+var isolatedDataRoot = Path.GetFullPath(Path.Combine(
+    Path.GetTempPath(), "UpdateCenter.SmokeTests", Guid.NewGuid().ToString("N")));
+AppPaths.InitializeRoot(isolatedDataRoot);
+
+if (args is ["--app-update-detection"])
+{
+    await AppUpdateDetectionTests.RunAsync();
+    return;
+}
+
+if (args.Length == 3 && args[0] == "--unsigned-release-200")
+{
+    await UnsignedReleaseTests.RunAsync(args[1], args[2]);
+    return;
+}
+
+if (args.Length == 2 && args[0] == "--unsigned-release-201")
+{
+    await UnsignedReleaseTests.Unsigned201Async(args[1]);
+    return;
+}
+
+if (args.Length == 2 && args[0] == "--self-update-migration")
+{
+    SelfUpdateMigrationTests.Run(args[1]);
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--scope-recipe")
+{
+    await ScopeRecipeTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--scope-recipe-native-readonly")
+{
+    await ScopeRecipeTests.NativeAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--obs-native-readonly")
+{
+    await ScopeRecipeTests.NativeAsync(obsOnly: true);
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--msi-native-readonly")
+{
+    MsiIdentityTests.NativeReadOnly();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--msi-identity")
+{
+    await MsiIdentityTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--dependency-coverage")
+{
+    await DependencyCoverageTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--dependency-native-readonly")
+{
+    await DependencyCoverageTests.RunNativeReadOnlyAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--incident-native-readonly")
+{
+    await IncidentReadOnlyTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--incident-engine")
+{
+    await IncidentEngineTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--automatic-verification")
+{
+    await AutomaticVerificationTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--winget-client-compatibility")
+{
+    await WinGetClientCompatibilityTests.RunAsync();
+    return;
+}
+if (args.Length == 1 && args[0] == "--winget130-native-readonly")
+{
+    await ScopeRecipeTests.NativeAsync(microsoftOnly: true);
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r3-b1-replay")
+{
+    await R3BurnTests.RunScanAsync(expectRecovered: true);
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r3-b1")
+{
+    await R3BurnTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r3-b1-preflight")
+{
+    await R3BurnTests.RunNativePreflightAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r3-versions")
+{
+    await R3VersionTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r3-scope")
+{
+    R3VersionTests.RunScope();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r3-drivers")
+{
+    R3DriverTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r2-engine")
+{
+    R2EngineTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r2-dialogs")
+{
+    R2DialogTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r1-engine")
+{
+    R1EngineTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--r1-dialog-scroll")
+{
+    R1DialogScrollTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--installation-outcomes")
+{
+    InstallationOutcomeTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--runner-output-helper")
+{
+    Console.WriteLine("OUTPUT-END"); Console.Error.WriteLine("ERROR-END"); return;
+}
+if (args.Length == 1 && args[0] == "--runner-delay-helper")
+{
+    await Task.Delay(10000); return;
+}
+
+if (args.Length == 1 && args[0] == "--runner-waits")
+{
+    RunnerWaitTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--runner-waits-ui")
+{
+    RunnerWaitUiTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--unified-consent-idle")
+{
+    await Task.Delay(3000);
+    return;
+}
+
+if (args.Length == 1 && args[0] is "--unified-consent-ui" or "--removal-consent-labels")
+{
+    UnifiedConsentUiTests.Run(labelsOnly: args[0] == "--removal-consent-labels");
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--unified-consent")
+{
+    await UnifiedConsentTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--title-settings-ui")
+{
+    TitleSettingsUiTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--update-experience-ui")
+{
+    UpdateExperienceUiTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--update-experience")
+{
+    UpdateExperienceTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--scan-m7-head")
+{
+    await ScanM7Tests.RunHeadOnlyAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] is "--scan-m7-native" or "--scan-m7-offline" or "--scan-m7-cancel")
+{
+    await ScanM7Tests.RunAsync(args[0] != "--scan-m7-offline", args[0] == "--scan-m7-cancel");
+    return;
+}
+
+if (args.Length == 2 && args[0] == "--m7-wait-helper")
+{
+    File.WriteAllText(args[1], Environment.ProcessId.ToString());
+    await Task.Delay(Timeout.Infinite);
+    return;
+}
+
+if (args.Length == 1 && args[0] is "--driver-page-ui" or "--history-details-ui")
+{
+    DriverHistoryUiTests.Run(args[0] == "--driver-page-ui");
+    return;
+}
+
+if (args.Length == 1 && args[0] is "--update-status-ui" or "--update-status-ui-preview")
+{
+    UpdateStatusFlyoutTests.Run(args[0] == "--update-status-ui-preview");
+    return;
+}
+
+if (args.Length == 1 && args[0] is "--updates-grid" or "--updates-grid-preview")
+{
+    UpdatesGridTests.Run(args[0] == "--updates-grid-preview");
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--initial-selection")
+{
+    await InitialSelectionTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--update-eligibility")
+{
+    UpdateEligibilityTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--scan-progress")
+{
+    await ScanProgressTests.RunAsync();
+    await ScanHardeningTests.RunAsync();
+    Console.WriteLine("PASS existing scan orchestration regressions (simulated providers).");
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--runner-consent")
+{
+    RunnerConsentTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--consent-integrity")
+{
+    ConsentIntegrityEvidenceTests.Run();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--install-safety")
+{
+    await InstallationSafetyTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] is "--wua-coverage" or "--wua-coverage-measure")
+{
+    WindowsUpdateCoverageTests.Run(args[0] == "--wua-coverage-measure");
+    if (args[0] == "--wua-coverage")
+    {
+        await ScanHardeningTests.RunAsync();
+        Console.WriteLine("PASS scan orchestration regressions: fake providers, isolated persistence and cancellation.");
+    }
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--scan-aggregation")
+{
+    await ScanAggregationTests.RunAsync();
+    return;
+}
+
+if (args.Length == 1 && args[0] == "--scan-baseline")
+{
+    await ScanBaselineTests.RunAsync();
+    return;
+}
+
+if (args is ["--app-updater-ui"])
+{
+    DialogUiTests.Run(appOnly: true);
+    return;
+}
+
+if (args.Contains("--dialogs-ui", StringComparer.Ordinal))
+{
+    DialogUiTests.Run();
+    return;
+}
+
+if (args.Contains("--hardware-network-ui", StringComparer.Ordinal))
+{
+    await QuickHardwareHardeningTests.RunAsync();
+    HardwareNetworkUiTests.Run();
+    return;
+}
+
+if (args.Contains("--operations-ui", StringComparer.Ordinal))
+{
+    OperationsUiTests.Run();
+    return;
+}
+
+if (args.Contains("--home-shell-ui", StringComparer.Ordinal))
+{
+    LanguageUiTests.Run(verifySettings: true, verifyHomeShell: true);
+    return;
+}
+
+if (args.Contains("--settings-ui", StringComparer.Ordinal))
+{
+    LanguageUiTests.Run(verifySettings: true);
+    return;
+}
+
+if (args.Contains("--language-ui", StringComparer.Ordinal))
+{
+    LanguageUiTests.Run();
+    return;
+}
+
 if (args.Contains("--release-audit", StringComparer.Ordinal))
 {
     await ReleaseAuditTests.RunAsync();
@@ -25,6 +408,73 @@ if (args.Length == 2 && args[0].Equals("--hold-restart-manager-file", StringComp
     await Console.In.ReadLineAsync();
     return;
 }
+
+async Task RunQualityHardeningAsync()
+{
+    AppPathsHardeningTests.Run(isolatedDataRoot);
+    JsonStorageHardeningTests.Run();
+    StatusWatchdogHardeningTests.Run();
+    await ScanHardeningTests.RunAsync();
+    await QuickHardwareHardeningTests.RunAsync();
+    Console.WriteLine("PASS quality hardening: isolated data, JSON, watchdog, fresh scans and cancellation.");
+}
+
+if (args.Contains("--quality-hardening", StringComparer.Ordinal))
+{
+    await RunQualityHardeningAsync();
+    return;
+}
+if (args.Contains("--firmware-hardening", StringComparer.Ordinal))
+{
+    WindowsUpdateSafetyTests.Run();
+    Console.WriteLine("PASS firmware safety boundaries.");
+    return;
+}
+if (args.Contains("--release-authenticity", StringComparer.Ordinal))
+{
+    ReleaseAuthenticityTests.Run();
+    return;
+}
+if (args.Contains("--winget-hardening", StringComparer.Ordinal))
+{
+    WinGetExecutionTests.Run();
+    Console.WriteLine("PASS WinGet identity, exact target and bounded execution paths.");
+    return;
+}
+if (args.Contains("--lan-authorization", StringComparer.Ordinal))
+{
+    try { await AgentAuthorizationTests.RunAsync(isolatedDataRoot); }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine("FAIL LAN authorization: " + ex.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+if (args.Contains("--lan-hardening", StringComparer.Ordinal))
+{
+    await LanSecurityHardeningTests.RunAsync(isolatedDataRoot);
+    await AgentAuthorizationTests.RunAsync(isolatedDataRoot);
+    Console.WriteLine("PASS LAN hardening.");
+    return;
+}
+
+// A mistyped/new QA flag must never fall through into hardware or socket smoke tests.
+if (args.Length > 0 && !(args.Length == 1 && args[0] == "--hardening"))
+{
+    Console.Error.WriteLine("Unknown smoke mode; no tests or operations were started.");
+    Environment.ExitCode = 2;
+    return;
+}
+
+await RunQualityHardeningAsync();
+RunnerWaitTests.Run();
+WindowsUpdateSafetyTests.Run();
+WinGetExecutionTests.Run();
+await LanSecurityHardeningTests.RunAsync(isolatedDataRoot);
+await AgentAuthorizationTests.RunAsync(isolatedDataRoot);
+ReleaseAuthenticityTests.Run();
+if (args.Contains("--hardening", StringComparer.Ordinal)) return;
 
 var parsingCases = new Dictionary<string, SemanticVersion>
 {
@@ -50,11 +500,11 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "1.1.5")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla release 1.1.5.");
+if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "2.0.1")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla release 2.0.1.");
 var applicationVersionInfo = FileVersionInfo.GetVersionInfo(typeof(AppSettings).Assembly.Location);
-if (applicationVersionInfo.FileVersion != "1.1.5.0" || applicationVersionInfo.ProductVersion != "1.1.5")
-    throw new InvalidOperationException("FileVersion/ProductVersion non corrispondono alla release 1.1.5.");
+if (applicationVersionInfo.FileVersion != "2.0.1.0" || applicationVersionInfo.ProductVersion != "2.0.1")
+    throw new InvalidOperationException("FileVersion/ProductVersion non corrispondono alla release 2.0.1.");
 
 var defaultVerification = new UpdateVerificationResult();
 if (defaultVerification.Verified || defaultVerification.IsDefinitive ||
@@ -208,10 +658,13 @@ finally
 AppPaths.EnsureCreated();
 var localAppData = Path.GetFullPath(
     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)) + Path.DirectorySeparatorChar;
-var statusRoot = Path.GetFullPath(AppPaths.DataDirectory) + Path.DirectorySeparatorChar;
+// Assert the default production path independently of the isolated active fixture.
+var statusRoot = Path.GetFullPath(AppPaths.ResolveDefaultRoot()) + Path.DirectorySeparatorChar;
 if (!statusRoot.StartsWith(localAppData, StringComparison.OrdinalIgnoreCase) ||
     statusRoot.StartsWith(Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase))
     throw new InvalidOperationException("Il canale status usa una directory world-writable o fuori dal profilo chiamante.");
+if (!string.Equals(Path.GetFullPath(AppPaths.DataDirectory), isolatedDataRoot, StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException("Lo smoke test ha abbandonato la directory dati isolata.");
 
 var unavailableDecision = UpdateResultPolicy.Resolve(
     installerSucceeded: true,
@@ -394,6 +847,7 @@ var delayedWinGetVerification = WinGetService.VerifyInstallation(
     {
         Id = "Example.DelayedInventory",
         Name = "Delayed Inventory",
+        Source = "winget",
         InstalledVersion = "1.0.0",
         AvailableVersion = "2.0.0"
     },
@@ -481,6 +935,7 @@ var blockedItem = new UpdateItem
     Id = "OBSProject.OBSStudio",
     Name = "OBS Studio",
     Kind = UpdateKind.Software,
+    Source = "winget", // M5 requires an explicit source; no implicit source fallback.
     InstalledVersion = "31.0",
     AvailableVersion = "31.1"
 };
@@ -1147,7 +1602,7 @@ var terminalFailed = failedStateMachine.Complete(new ItemRunResult
 var failedSummary = UpdateSessionSummary.From([terminalFailed]);
 if (failedSummary.ProcessedTerminalCount != 1 || failedSummary.FailedCount != 1 ||
     failedSummary.SucceededCount != 0 ||
-    MainViewModel.GetHistoryResultLabel(terminalFailed) != "Fallito" ||
+    MainViewModel.GetHistoryResultLabel(terminalFailed) != "Non riuscito" ||
     MainViewModel.ShouldRemoveCompletedUpdate(terminalFailed))
     throw new InvalidOperationException("Un installer fallito non produce un unico terminal Failed coerente con History e summary.");
 
@@ -1246,7 +1701,8 @@ var futureHytaleUpdate = new UpdateItem
 if (!WinGetApplicabilityStore.Matches(suppressedHytale, sameHytaleUpdate) ||
     WinGetApplicabilityStore.Matches(suppressedHytale, futureHytaleUpdate))
     throw new InvalidOperationException("La quarantena WinGet non distingue correttamente una nuova versione futura.");
-if (WinGetManifestSafetyService.ParseInstallerScope("InstallerType: nullsoft\nScope: user\n") != "user")
+var userScopeManifest = "InstallerType: nullsoft\nScope: user\nInstallers:\n- Architecture: x64\n";
+if (WinGetManifestSafetyService.ParseInstallerScope(userScopeManifest) != "user")
     throw new InvalidOperationException("L'ambito dell'installer WinGet non viene letto correttamente.");
 WinGetManifestSafetyService.ApplyScopeCompatibility(sameHytaleUpdate, "machine", "user");
 if (sameHytaleUpdate.CanInstall || sameHytaleUpdate.IsSelected ||
@@ -1263,7 +1719,7 @@ var mixedArchitectureManifest = "PackageIdentifier: Example.Mixed\nInstallers:\n
 if (WinGetManifestSafetyService.ParseUpgradeSafety(safeManifest, "x64") != WinGetUpgradeSafety.Safe ||
     WinGetManifestSafetyService.ParseUpgradeSafety(destructiveManifest, "x64") != WinGetUpgradeSafety.RemovesPreviousVersion ||
     WinGetManifestSafetyService.ParseUpgradeSafety(deniedManifest, "x64") != WinGetUpgradeSafety.UpgradeUnsupported ||
-    WinGetManifestSafetyService.ParseUpgradeSafety(mixedArchitectureManifest, "x64") != WinGetUpgradeSafety.Safe ||
+    WinGetManifestSafetyService.ParseUpgradeSafety(mixedArchitectureManifest, "x64") != WinGetUpgradeSafety.RemovesPreviousVersion ||
     WinGetManifestSafetyService.ParseUpgradeSafety(unknownManifest) != WinGetUpgradeSafety.Unknown)
     throw new InvalidOperationException("Classificazione di sicurezza dei manifest WinGet non valida.");
 var installerUris = WinGetManifestSafetyService.ParseInstallerUrls(
@@ -1769,7 +2225,19 @@ static async Task VerifyRestartManagerIntegrationAsync()
             }
             helper.Dispose();
         }
-        try { Directory.Delete(testDirectory, recursive: true); } catch { }
+        try
+        {
+            var fixture = new DirectoryInfo(Path.GetFullPath(testDirectory));
+            var tempRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+            if (string.Equals(fixture.Parent?.FullName, tempRoot, StringComparison.OrdinalIgnoreCase) &&
+                fixture.Name.StartsWith("updatecenter-restart-manager-", StringComparison.Ordinal) &&
+                (fixture.Attributes & FileAttributes.ReparsePoint) == 0)
+            {
+                File.Delete(lockedFile);
+                Directory.Delete(fixture.FullName, recursive: false);
+            }
+        }
+        catch { }
     }
 }
 

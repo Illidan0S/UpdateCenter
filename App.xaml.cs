@@ -17,13 +17,18 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        if (e.Args.Length == 2 &&
+        if (e.Args.Length > 0 &&
             (e.Args[0].Equals("--update-runner-admin", StringComparison.OrdinalIgnoreCase) ||
              e.Args[0].Equals("--update-runner-user", StringComparison.OrdinalIgnoreCase)))
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             var requireAdministrator = e.Args[0].Equals("--update-runner-admin", StringComparison.OrdinalIgnoreCase);
-            var exitCode = ElevatedUpdateRunner.Run(e.Args[1], requireAdministrator);
+            var exitCode = e.Args.Length == 2
+                ? ElevatedUpdateRunner.Run(e.Args[1], requireAdministrator)
+                : e.Args.Length == 6 && e.Args[2] == "--consent-channel" && int.TryParse(e.Args[4], out var ownerId) &&
+                  long.TryParse(e.Args[5], out var ownerCreated)
+                    ? ElevatedUpdateRunner.RunWithConsentChannel(e.Args[1], requireAdministrator, e.Args[3], ownerId, ownerCreated)
+                    : 2;
             Shutdown(exitCode);
             return;
         }
@@ -37,11 +42,30 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        TaskCompletionSource? updateStartup = null;
+        var supervisorId = 0;
+        if (e.Args.Length > 0 && e.Args[0].Equals("--update-complete", StringComparison.OrdinalIgnoreCase))
+        {
+            // The legacy four-argument notification can still start the UI,
+            // but it does not authorize removing a backup.
+            if (e.Args.Length != 4)
+            {
+                if (e.Args.Length != 6 || !int.TryParse(e.Args[5], out supervisorId) || supervisorId <= 0 ||
+                    !SelfUpdateCompatibility.IsSupported() || !AppUpdateService.IsValidStartupConfirmation(e.Args))
+                {
+                    Shutdown(1);
+                    return;
+                }
+                AppPaths.UpdateStartupPending = true;
+                updateStartup = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
         base.OnStartup(e);
         DispatcherUnhandledException += (_, args) =>
         {
             LogService.Write("Errore non gestito nell'interfaccia.", args.Exception);
-            ShowStartupError(args.Exception);
+            if (!AppPaths.UpdateStartupPending) ShowStartupError(args.Exception);
             args.Handled = true;
             Shutdown(1);
         };
@@ -73,16 +97,32 @@ public partial class App : System.Windows.Application
                 setupWindow.Show();
                 return;
             }
-            var mainWindow = new MainWindow();
+            var mainWindow = new MainWindow(updateStartup?.Task);
+            if (updateStartup is not null)
+            {
+                mainWindow.IsEnabled = false;
+                mainWindow.ContentRendered += ConfirmUpdateStartup;
+            }
             MainWindow = mainWindow;
             mainWindow.Show();
-            if (e.Args.Length == 4 && e.Args[0].Equals("--update-complete", StringComparison.OrdinalIgnoreCase))
-                AppUpdateService.ScheduleSuccessfulUpdateCleanup(e.Args[1], e.Args[2], e.Args[3]);
+
+            async void ConfirmUpdateStartup(object? sender, EventArgs args)
+            {
+                mainWindow.ContentRendered -= ConfirmUpdateStartup;
+                try
+                {
+                    await PortableUpdateStartup.SignalWindowRenderedAsync(e.Args[4], supervisorId);
+                    AppPaths.UpdateStartupPending = false;
+                    mainWindow.IsEnabled = true;
+                    updateStartup!.SetResult();
+                }
+                catch { Shutdown(1); }
+            }
         }
         catch (Exception ex)
         {
             LogService.Write("Avvio dell'applicazione non riuscito.", ex);
-            ShowStartupError(ex);
+            if (!AppPaths.UpdateStartupPending) ShowStartupError(ex);
             Shutdown(1);
         }
     }

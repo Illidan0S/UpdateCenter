@@ -13,8 +13,15 @@ public sealed class HistoryEntry : INotifyPropertyChanged
     public string Result { get; set; } = "";
     public string DisplayResult => UpdateCenter.Services.LocalizationService.Translate(Result);
     public string Details { get; set; } = "";
-    public string DisplayDetails => UpdateCenter.Services.LocalizationService.TranslateHistoryDetails(Details);
+    public string DisplayDetails => UpdateCenter.Services.LocalizationService.TranslateHistoryDetails(Details) +
+        (LastVerificationMessage.Length == 0 ? "" : Environment.NewLine + LastVerificationMessage);
     public string Diagnostics { get; set; } = "";
+    // Optional since the incident fix. Old history is never reconstructed from text.
+    public PlanItem? PendingVerificationPlan { get; set; }
+    public DateTime? VerifiedLaterUtc { get; set; }
+    public DateTime? LastVerificationAttemptUtc { get; set; }
+    public string LastVerificationMessage { get; set; } = "";
+    public string LastVerificationDiagnostics { get; set; } = "";
     public string DisplayDate => Timestamp.ToLocalTime().ToString("dd/MM/yyyy HH:mm");
 
     public void NotifyLanguageChanged()

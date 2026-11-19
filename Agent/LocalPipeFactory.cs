@@ -34,11 +34,14 @@ internal static class LocalPipeFactory
         return Create(pipeName, 1, security);
     }
 
-    public static NamedPipeServerStream CreateApprovalPipe(int maximumInstances)
+    public static NamedPipeServerStream CreateApprovalPipe(
+        int maximumInstances, string pipeName = AgentProtocol.ApprovalPipeName)
     {
         var security = CreateBaseSecurity();
-        AddReadWriteRule(security, new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null));
-        return Create(AgentProtocol.ApprovalPipeName, maximumInstances, security);
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
+            PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        return Create(pipeName, maximumInstances, security);
     }
 
     private static PipeSecurity CreateBaseSecurity()
@@ -46,6 +49,9 @@ internal static class LocalPipeFactory
         var security = new PipeSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         AddReadWriteRule(security, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null));
+        using var identity = WindowsIdentity.GetCurrent();
+        if (identity.User is { } serverSid && !identity.IsSystem)
+            AddReadWriteRule(security, serverSid);
         return security;
     }
 

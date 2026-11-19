@@ -1,49 +1,47 @@
-<Window x:Class="UpdateCenter.WinGetProcessRecoveryWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="590" Height="330" WindowStartupLocation="CenterOwner"
-        WindowStyle="None" AllowsTransparency="True" ResizeMode="NoResize"
-        Background="Transparent" ShowInTaskbar="False">
-    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
-            BorderThickness="1" CornerRadius="20">
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="UpdateCenter.WinGetProcessRecoveryWindow" Width="680" Height="400" WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True" ResizeMode="CanResizeWithGrip" Background="Transparent" ShowInTaskbar="False" MinWidth="480" MinHeight="320" UseLayoutRounding="True">
+    <Window.Resources>
+        <ResourceDictionary Source="Styles/Dialogs.xaml" />
+    </Window.Resources>
+    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="14">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="54" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
-                <RowDefinition Height="76" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-
-            <Grid Margin="22,0,12,0" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                <TextBlock x:Name="TitleText" FontSize="{DynamicResource FontSize16}"
-                           FontWeight="SemiBold" VerticalAlignment="Center" />
-                <Button Content="×" Style="{StaticResource SecondaryButton}" Width="36" Height="34"
-                        Padding="0" HorizontalAlignment="Right" VerticalAlignment="Center"
-                        Click="Cancel_Click" />
+            <Grid Margin="18,10,12,10" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown" MinHeight="34">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="TitleText" FontSize="{DynamicResource FontSize16}" FontWeight="SemiBold" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,14,0" />
+                <Button Content="×" Style="{DynamicResource DialogButton}" Width="36" Height="34" Padding="0" HorizontalAlignment="Right" VerticalAlignment="Center" Click="Cancel_Click" Grid.Column="1" AutomationProperties.Name="{DynamicResource DialogCloseText}" ToolTip="{DynamicResource DialogCloseText}" />
             </Grid>
-
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="28,18,28,18">
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="20,12,20,16" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
-                    <Border Width="52" Height="52" CornerRadius="16" HorizontalAlignment="Left"
-                            Background="{DynamicResource WarningSoftBrush}" Margin="0,0,0,16">
-                        <TextBlock Text="!" Foreground="{DynamicResource WarningBrush}"
-                                   FontSize="{DynamicResource FontSize23}" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <Border Width="52" Height="52" CornerRadius="16" HorizontalAlignment="Left" Background="{DynamicResource WarningSoftBrush}" Margin="0,0,0,16">
+                        <TextBlock Text="!" Foreground="{DynamicResource WarningBrush}" FontSize="{DynamicResource FontSize20}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" />
                     </Border>
-                    <TextBlock x:Name="MessageText" FontSize="{DynamicResource FontSize16}"
-                               TextWrapping="Wrap" />
-                    <TextBlock x:Name="ProcessText" Foreground="{DynamicResource MutedTextBrush}"
-                               Margin="0,12,0,0" TextWrapping="Wrap" />
+                    <TextBlock x:Name="MessageText" FontSize="{DynamicResource FontSize16}" TextWrapping="Wrap" />
+                    <Expander Header="Dettagli tecnici" Margin="0,12,0,0">
+                        <Expander.Style>
+                            <Style TargetType="Expander" BasedOn="{StaticResource DialogExpander}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=ProcessText}" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Expander.Style>
+                        <TextBox x:Name="ProcessText" Foreground="{DynamicResource MutedTextBrush}" Margin="0,12,0,0" Style="{DynamicResource DialogDetails}" />
+                    </Expander>
                 </StackPanel>
             </ScrollViewer>
-
-            <Border Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="0,0,20,20"
-                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="24,14">
-                    <Button x:Name="CancelButton" Content="Annulla" Style="{StaticResource SecondaryButton}"
-                            Click="Cancel_Click" />
-                    <Button x:Name="ConfirmButton" Style="{StaticResource RoundedButton}"
-                            Margin="10,0,0,0" Click="Confirm_Click" />
-                </StackPanel>
+            <Border Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="0,0,14,14" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="20,12" x:Name="DialogActions">
+                    <Button x:Name="CancelButton" Content="Annulla" Style="{DynamicResource DialogButton}" Click="Cancel_Click" />
+                    <Button x:Name="ConfirmButton" Style="{DynamicResource DialogPrimaryButton}" Margin="10,0,0,0" Click="Confirm_Click" />
+                </WrapPanel>
             </Border>
         </Grid>
     </Border>

@@ -80,7 +80,8 @@ internal sealed record WinGetRecoveryPreparation(
     string Diagnostics,
     WinGetRecoveryContext? Context = null,
     bool ShouldRunInteractive = false,
-    IWinGetRecoveryLease? Lease = null);
+    IWinGetRecoveryLease? Lease = null,
+    bool ConsentCancelled = false);
 
 internal sealed record WinGetPostRetryDiagnosis(
     string Diagnostics,
@@ -892,6 +893,10 @@ internal static class WinGetSingleRetryPolicy
         if (!initialResult.FailureReason.Equals(UpdateFailureReasons.FilesInUse, StringComparison.Ordinal))
             return initialResult;
         var preparation = prepareRetry();
+        if (preparation.ConsentCancelled)
+            return new ItemRunResult { Id = item.Id, Name = item.Name, Kind = item.Kind.ToString(),
+                Outcome = UpdateOutcomes.Cancelled, Phase = "consent", Message = preparation.Diagnostics,
+                RestartRequired = initialResult.RestartRequired, Diagnostics = initialResult.Diagnostics };
         ItemRunResult? outcome = null;
         try
         {

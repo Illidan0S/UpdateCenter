@@ -484,7 +484,8 @@
             </Style.Triggers>
         </Style>
 
-        <Style TargetType="ProgressBar">
+        <Style x:Key="UpdateCenterProgressBar" TargetType="ProgressBar">
+            <Setter Property="Tag" Value="{DynamicResource {x:Static SystemParameters.ClientAreaAnimationKey}}" />
             <Setter Property="Height" Value="8" />
             <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
             <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
@@ -492,14 +493,90 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ProgressBar">
-                        <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="4" ClipToBounds="True">
-                            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4"
-                                    HorizontalAlignment="Left" />
-                        </Border>
+                        <Grid x:Name="PART_Track" ClipToBounds="True">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4" />
+                            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left" />
+                            <Rectangle x:Name="IndeterminateIndicator" Fill="{TemplateBinding Foreground}"
+                                       Width="56" HorizontalAlignment="Center"
+                                       RadiusX="4" RadiusY="4" Visibility="Collapsed" Opacity="0.6" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsIndeterminate" Value="True">
+                                <Setter TargetName="PART_Indicator" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="IndeterminateIndicator" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="Tag"><Condition.Value><sys:Boolean>True</sys:Boolean></Condition.Value></Condition>
+                                    <Condition Property="IsIndeterminate" Value="True" />
+                                    <Condition Property="IsVisible" Value="True" />
+                                    <Condition Property="IsEnabled" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <MultiTrigger.EnterActions>
+                                    <BeginStoryboard Name="ActivityPulse">
+                                        <Storyboard Timeline.DesiredFrameRate="30">
+                                            <DoubleAnimation Storyboard.TargetName="IndeterminateIndicator" Storyboard.TargetProperty="Opacity"
+                                                             From="0.3" To="0.85" Duration="0:0:0.8" AutoReverse="True" RepeatBehavior="Forever" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiTrigger.EnterActions>
+                                <MultiTrigger.ExitActions>
+                                    <RemoveStoryboard BeginStoryboardName="ActivityPulse" />
+                                </MultiTrigger.ExitActions>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="ScanProgressBar" TargetType="ProgressBar">
+            <Setter Property="Tag" Value="{DynamicResource {x:Static SystemParameters.ClientAreaAnimationKey}}" />
+            <Setter Property="Height" Value="8" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+            <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ProgressBar">
+                        <Grid x:Name="PART_Track" ClipToBounds="True">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="4" />
+                            <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="4" HorizontalAlignment="Left" />
+                            <Rectangle x:Name="IndeterminateIndicator" Fill="{TemplateBinding Foreground}"
+
+                                       RadiusX="4" RadiusY="4" Visibility="Collapsed" Opacity="0.6" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsIndeterminate" Value="True">
+                                <Setter TargetName="PART_Indicator" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="IndeterminateIndicator" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="Tag"><Condition.Value><sys:Boolean>True</sys:Boolean></Condition.Value></Condition>
+                                    <Condition Property="IsIndeterminate" Value="True" />
+                                    <Condition Property="IsVisible" Value="True" />
+                                    <Condition Property="IsEnabled" Value="True" />
+                                </MultiTrigger.Conditions>
+                                <MultiTrigger.EnterActions>
+                                    <BeginStoryboard Name="ActivityPulse">
+                                        <Storyboard Timeline.DesiredFrameRate="30">
+                                            <DoubleAnimation Storyboard.TargetName="IndeterminateIndicator" Storyboard.TargetProperty="Opacity"
+                                                             From="0.3" To="0.85" Duration="0:0:0.8" AutoReverse="True" RepeatBehavior="Forever" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiTrigger.EnterActions>
+                                <MultiTrigger.ExitActions>
+                                    <RemoveStoryboard BeginStoryboardName="ActivityPulse" />
+                                </MultiTrigger.ExitActions>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ProgressBar" BasedOn="{StaticResource UpdateCenterProgressBar}" />
 
         <Style TargetType="DataGrid">
             <Setter Property="Background" Value="Transparent" />

@@ -1,85 +1,79 @@
-<Window x:Class="UpdateCenter.AppUpdateWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Aggiornamento Update Center" Width="700" Height="620"
+        x:Class="UpdateCenter.AppUpdateWindow"
+        Title="Aggiornamento di Update Center"
+        Width="640" Height="500" MinWidth="480" MinHeight="360"
         WindowStartupLocation="CenterOwner" WindowStyle="None" AllowsTransparency="True"
-        ResizeMode="NoResize" Background="Transparent" ShowInTaskbar="False">
-    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}"
-            BorderThickness="1" CornerRadius="20">
+        ResizeMode="CanResizeWithGrip" Background="Transparent" ShowInTaskbar="False" UseLayoutRounding="True">
+    <Window.Resources>
+        <ResourceDictionary Source="Styles/Dialogs.xaml" />
+    </Window.Resources>
+    <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="14">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="54" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
-                <RowDefinition Height="82" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Grid Margin="22,0,12,0" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                <TextBlock Text="Aggiornamento di Update Center" FontSize="{DynamicResource FontSize16}"
-                           FontWeight="SemiBold" VerticalAlignment="Center" />
-                <Button x:Name="CloseButton" Content="×" Style="{StaticResource SecondaryButton}"
-                        Width="36" Height="34" Padding="0" HorizontalAlignment="Right"
-                        VerticalAlignment="Center" Click="Later_Click" />
-            </Grid>
+            <DockPanel Margin="24,10,12,8" MinHeight="36" MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Button x:Name="CloseButton" DockPanel.Dock="Right" Content="×" Style="{DynamicResource DialogButton}"
+                        Width="36" Height="34" Padding="0" VerticalAlignment="Center" Click="Later_Click"
+                        AutomationProperties.Name="{DynamicResource DialogCloseText}" ToolTip="{DynamicResource DialogCloseText}" />
+                <TextBlock Text="Aggiornamento di Update Center" FontSize="{DynamicResource FontSize14}" FontWeight="SemiBold"
+                           VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0" />
+            </DockPanel>
 
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="26,10,26,18">
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="24,12,24,20">
                 <StackPanel>
-                    <TextBlock Text="È disponibile una nuova versione" FontSize="{DynamicResource FontSize24}"
-                               FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBlock Text="Il download proviene dalla Release stabile ufficiale e verrà verificato con SHA-256."
-                               Foreground="{DynamicResource MutedTextBrush}" Margin="0,7,0,20" TextWrapping="Wrap" />
+                    <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="3,0,0,0" Padding="14,0,0,2" Margin="0,0,0,20">
+                        <StackPanel>
+                            <TextBlock x:Name="AppVersionHeadline" Text="{Binding AvailableVersionLabel}" FontSize="{DynamicResource FontSize30}"
+                                       FontWeight="SemiBold" TextWrapping="Wrap" AutomationProperties.HeadingLevel="Level1" />
+                            <TextBlock x:Name="AppVersionDetails" Foreground="{DynamicResource MutedTextBrush}"
+                                       FontSize="{DynamicResource FontSize13}" Margin="0,5,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
 
-                    <UniformGrid Columns="3" Margin="0,0,0,18">
-                        <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,0,6,0">
-                            <StackPanel>
-                                <TextBlock Text="INSTALLATA" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
-                                <TextBlock Text="{Binding InstalledVersionLabel}" FontSize="{DynamicResource FontSize18}"
-                                           FontWeight="SemiBold" Margin="0,5,0,0" />
-                            </StackPanel>
-                        </Border>
-                        <Border Background="{DynamicResource AccentSoftBrush}" BorderBrush="{DynamicResource AccentSoftBorderBrush}"
-                                BorderThickness="1" CornerRadius="12" Padding="14" Margin="3,0">
-                            <StackPanel>
-                                <TextBlock Text="NUOVA" Foreground="{DynamicResource AccentBrush}" FontSize="{DynamicResource FontSize10}" />
-                                <TextBlock Text="{Binding AvailableVersionLabel}" Foreground="{DynamicResource AccentBrush}"
-                                           FontSize="{DynamicResource FontSize18}" FontWeight="SemiBold" Margin="0,5,0,0" />
-                            </StackPanel>
-                        </Border>
-                        <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="6,0,0,0">
-                            <StackPanel>
-                                <TextBlock Text="DOWNLOAD" Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}" />
-                                <TextBlock Text="{Binding DownloadSizeLabel}" FontSize="{DynamicResource FontSize18}"
-                                           FontWeight="SemiBold" Margin="0,5,0,0" />
-                            </StackPanel>
-                        </Border>
-                    </UniformGrid>
-
-                    <TextBlock Text="Note della Release" FontSize="{DynamicResource FontSize15}" FontWeight="SemiBold" Margin="0,0,0,8" />
-                    <TextBox Text="{Binding ReleaseNotes, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
-                             MinHeight="150" MaxHeight="230" VerticalScrollBarVisibility="Auto"
-                             VerticalContentAlignment="Top" SelectionBrush="{DynamicResource SelectionBrush}" />
+                    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Padding="0,16,0,0">
+                        <StackPanel>
+                            <TextBlock x:Name="AppReleaseNotesHeading" Text="Novità" FontSize="{DynamicResource FontSize16}"
+                                       FontWeight="SemiBold" Margin="0,0,0,9" AutomationProperties.HeadingLevel="Level2" />
+                            <TextBox x:Name="AppReleaseNotes" Style="{DynamicResource ManagementValue}" AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Disabled" HorizontalScrollBarVisibility="Disabled"
+                                     VerticalContentAlignment="Top" AutomationProperties.LabeledBy="{Binding ElementName=AppReleaseNotesHeading}" />
+                            <Button x:Name="ReleasePageButton" Content="Note su GitHub" Style="{DynamicResource DialogButton}"
+                                    HorizontalAlignment="Left" Margin="0,14,0,0" Padding="10,6" Click="OpenRelease_Click" />
+                        </StackPanel>
+                    </Border>
 
                     <StackPanel x:Name="ProgressPanel" Visibility="Collapsed" Margin="0,18,0,0">
-                        <ProgressBar x:Name="DownloadProgress" Minimum="0" Maximum="100" />
-                        <TextBlock x:Name="DownloadStatus" Foreground="{DynamicResource MutedTextBrush}"
-                                   Margin="0,8,0,0" TextWrapping="Wrap" />
+                        <ProgressBar x:Name="DownloadProgress" Minimum="0" Maximum="100" Style="{DynamicResource DialogProgress}"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=DownloadStatus}" />
+                        <TextBox x:Name="DownloadStatus" Foreground="{DynamicResource MutedTextBrush}" Margin="0,8,0,0"
+                                 Style="{DynamicResource ManagementValue}" AutomationProperties.LiveSetting="Polite" />
                     </StackPanel>
+                    <Expander x:Name="ErrorDetailsPanel" Header="Dettagli tecnici" Visibility="Collapsed"
+                              Margin="0,12,0,0" Style="{DynamicResource DialogExpander}">
+                        <TextBox x:Name="ErrorDetailsText" Style="{DynamicResource DialogDetails}"
+                                 AutomationProperties.Name="{DynamicResource DialogDetailsText}" Margin="0,8,0,0" />
+                    </Expander>
                 </StackPanel>
             </ScrollViewer>
 
-            <Border Grid.Row="2" Background="{DynamicResource SurfaceAltBrush}" CornerRadius="0,0,20,20"
-                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
-                <Grid Margin="24,16">
-                    <TextBlock Text="Non sono richiesti privilegi amministrativi nell'installazione per utente."
-                               Foreground="{DynamicResource MutedTextBrush}" FontSize="{DynamicResource FontSize10}"
-                               VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="270" HorizontalAlignment="Left" />
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button x:Name="IgnoreButton" Content="Ignora questa versione" Style="{StaticResource SecondaryButton}"
-                                Padding="13,9" Click="Ignore_Click" />
-                        <Button x:Name="LaterButton" Content="Più tardi" Style="{StaticResource SecondaryButton}"
-                                Margin="8,0,0,0" Padding="13,9" Click="Later_Click" />
-                        <Button x:Name="UpdateButton" Content="Aggiorna ora" Style="{StaticResource RoundedButton}"
-                                Margin="8,0,0,0" Padding="15,9" Click="Update_Click" />
-                    </StackPanel>
+            <Border Grid.Row="2" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                <Grid Margin="24,12" x:Name="DialogFooter">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="IgnoreButton" Content="Ignora versione" Style="{DynamicResource DialogButton}"
+                            HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0,0,8,0" Padding="10,8" Click="Ignore_Click" />
+                    <WrapPanel Grid.Column="1" HorizontalAlignment="Right" x:Name="DialogActions">
+                        <Button x:Name="LaterButton" Content="Più tardi" Style="{DynamicResource DialogButton}" Padding="12,8" Click="Later_Click" />
+                        <Button x:Name="UpdateButton" Content="Aggiorna e riapri" Style="{DynamicResource DialogPrimaryButton}"
+                                Margin="8,0,0,0" Padding="13,8" Click="Update_Click" />
+                    </WrapPanel>
                 </Grid>
             </Border>
         </Grid>

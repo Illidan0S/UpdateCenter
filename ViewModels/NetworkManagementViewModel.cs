@@ -372,7 +372,7 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         }
     }
 
-    public async Task PairAsync()
+    public async Task PairAsync(string trustedAgentSha256)
     {
         if (!CanPair || !TryGetPort(out var port)) return;
         NetworkAgentItem? pairedItem = null;
@@ -381,7 +381,7 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         try
         {
             var record = await _remoteClient.PairAsync(
-                Address, port, PairingCode, SelectedAgent?.DisplayName ?? Address, _lifetime.Token);
+                Address, port, PairingCode, trustedAgentSha256, SelectedAgent?.DisplayName ?? Address, _lifetime.Token);
             var item = FindAgent(record.AgentId, record.Address);
             if (item is null)
             {
@@ -424,21 +424,31 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         }
     }
 
-    public async Task RequestConnectionsAsync(NetworkAgentItem? explicitAgent = null)
+    public async Task RequestConnectionsAsync(Func<string, string?> requestFingerprint, NetworkAgentItem? explicitAgent = null)
     {
         var targets = explicitAgent is null
             ? GetConnectionRequestTargets()
             : explicitAgent.CanRequestConnection ? [explicitAgent] : [];
         if (targets.Count == 0) return;
 
+        var confirmed = new List<(NetworkAgentItem Agent, string Address, int Port, string Pin)>();
+        foreach (var agent in targets)
+        {
+            var address = agent.Address;
+            var port = agent.ApiPort;
+            var pin = requestFingerprint($"{address}:{port}");
+            if (pin is null) return;
+            confirmed.Add((agent, address, port, pin));
+        }
+
         StatusText = targets.Count == 1
             ? $"Invio richiesta di collegamento a {targets[0].DisplayName}..."
             : $"Invio richieste di collegamento a {targets.Count} PC...";
         using var concurrency = new SemaphoreSlim(MaximumConcurrentComputers, MaximumConcurrentComputers);
-        var startTasks = targets.Select(async agent =>
+        var startTasks = confirmed.Select(async target =>
         {
             await concurrency.WaitAsync(_lifetime.Token);
-            try { return (Agent: agent, Pending: await BeginConnectionRequestAsync(agent)); }
+            try { return (target.Agent, Pending: await BeginConnectionRequestAsync(target.Agent, target.Address, target.Port, target.Pin)); }
             finally
             {
                 concurrency.Release();
@@ -460,14 +470,14 @@ public sealed class NetworkManagementViewModel : INotifyPropertyChanged, IDispos
         OnActionStateChanged();
     }
 
-    private async Task<PendingRemoteConnectionRequest?> BeginConnectionRequestAsync(NetworkAgentItem agent)
+    private async Task<PendingRemoteConnectionRequest?> BeginConnectionRequestAsync(NetworkAgentItem agent, string address, int port, string pin)
     {
         agent.ConnectionRequestInProgress = true;
         agent.ConnectionRequestStatus = "Invio richiesta";
         try
         {
             var pending = await _remoteClient.RequestConnectionAsync(
-                agent.Address, agent.ApiPort, agent.DisplayName, _lifetime.Token);
+                address, port, pin, agent.DisplayName, _lifetime.Token);
             agent.ConnectionRequestStatus = "In attesa di approvazione";
             return pending;
         }

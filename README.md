@@ -1,8 +1,6 @@
 # Update Center
 
-**Ultima release disponibile** · [Update Center v2.0.0](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0)
-
-**In preparazione · v2.0.1.** Corregge il ritaglio della tabella dopo la scansione, semplifica il riepilogo e mostra le nuove versioni dell’app nella Home. [Note in italiano e inglese](docs/RELEASE-2.0.1.md)
+**Update Center v2.0.1** mostra le nuove versioni dell’app nella Home e riassume i risultati della scansione in una sola riga. Le tabelle si adattano ai risultati senza dover ridimensionare la finestra. [Note in italiano e inglese](docs/RELEASE-2.0.1.md)
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
@@ -30,12 +28,20 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 
 ## Download
 
-La [release v2.0.0](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0) include Setup e Portable.
+Scarica [Update Center v2.0.1](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.1) dalla release ufficiale su GitHub.
 
-- **`UpdateCenter-Setup-v2.0.0.exe`**: installer standard, crea la voce nel menu Start e gestisce gli aggiornamenti dell’installazione.
-- **`UpdateCenter-v2.0.0-Portable.exe`**: versione senza installazione, utilizzabile anche da una chiavetta USB e aggiornabile automaticamente mantenendo il proprio nome.
+- **`UpdateCenter-Setup-v2.0.1.exe`** aggiorna o installa l’app nel profilo Windows e aggiunge una voce nel menu Start.
+- **`UpdateCenter-v2.0.1-Portable.exe`** si avvia direttamente, anche da una chiavetta USB.
 
-I file **`.sha256`** sono i checksum di sicurezza usati per verificare i download automatici: non sono versioni dell’app.
+Gli eseguibili v2.0.1 sono distribuiti senza firma Authenticode. Usa il file **`.sha256`** di ciascun eseguibile per verificarne l’integrità.
+
+### Passaggio diretto da una versione precedente
+
+- **Setup.** Chiudi Update Center e avvia il nuovo Setup con lo stesso account Windows. Mantieni la directory dell’installazione esistente.
+- **Portable.** Chiudi Update Center e sostituisci il precedente eseguibile con il nuovo Portable. Puoi mantenere il nome del file e la sua cartella.
+- **Dalla 2.0.0.** Usa il Setup interattivo o sostituisci il Portable seguendo i passaggi sopra. Verifica il file con il relativo `.sha256` della release ufficiale. L’aggiornamento integrato della 2.0.0 richiede una firma Authenticode sul nuovo file. [Verifiche e compatibilità del self-update](docs/CODE-SIGNING.md#aggiornamento-dallapp)
+
+Impostazioni e cronologia rimangono in `%LOCALAPPDATA%\UpdateCenter` per lo stesso profilo Windows.
 
 ## Utilizzo
 
@@ -43,7 +49,7 @@ I file **`.sha256`** sono i checksum di sicurezza usati per verificare i downloa
 2. Premi **Avvia scansione**.
 3. Apri **Aggiornamenti** e controlla gli elementi trovati.
 4. Seleziona solo quelli desiderati.
-5. Premi **Aggiorna elementi selezionati** e conferma il riepilogo.
+5. Premi **Aggiorna selezionati** e conferma il riepilogo.
 
 L’app non riavvia il computer senza chiedere conferma.
 
@@ -59,13 +65,15 @@ L’app non riavvia il computer senza chiedere conferma.
 
 ## Requisiti
 
-- Windows x64. Consulta le edizioni e le build ammesse nelle [note della v2.0.0](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0).
-- WinGet/App Installer aggiornato.
+- Per la linea 2.0 il target tecnico è Windows x64 dalla build 17763. Il Portable e l'eseguibile incluso nel Setup contengono il runtime .NET 10 Desktop. [Edizioni e build ammesse](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0)
+- Per gli aggiornamenti software automatici la v2.0.1 ammette WinGet `v1.29.290`, `v1.30.300` e `v1.30.310`. Se il client cambia dopo la scansione, occorre ripetere scansione e consenso. [Requisiti WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
 - Connessione Internet.
 - Privilegi di amministratore solo per gli elementi che li richiedono.
+
+Avvio e scansione sono stati osservati su Windows 11 Pro Insider x64, build 26320. Le release stabili di Windows 11 in servizio e le edizioni Windows 10 LTSC elencate da Microsoft per .NET 10 sono piattaforme da validare sul candidato. Restano aperte anche le prove di UAC con runner elevato, installazione driver WUA e ciclo Setup/Portable. [Matrice di compatibilità](docs/M8-RELEASE-READINESS.md#compatibilità-attuale) · [Sistemi supportati da .NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md)
 
 ## Licenza e sviluppo
 
 Il progetto è distribuito con licenza [MIT](LICENSE).
 
-Le istruzioni per compilazione, struttura del progetto, creazione del Setup locale e pubblicazione delle versioni sono disponibili in [docs/SVILUPPO.md](docs/SVILUPPO.md).
+Per compilare i sorgenti serve .NET SDK 10 stabile. Le istruzioni per compilazione, test, creazione del Setup e pubblicazione sono disponibili nella [guida di sviluppo](docs/SVILUPPO.md).

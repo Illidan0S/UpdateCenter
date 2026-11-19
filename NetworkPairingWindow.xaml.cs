@@ -12,6 +12,7 @@ public partial class NetworkPairingWindow : Window
     public NetworkPairingWindow(NetworkManagementViewModel viewModel, NetworkAgentItem agent)
     {
         InitializeComponent();
+        MainWindow.UpdateSettingsCardTheme(this, "HardwareNetwork");
         _viewModel = viewModel;
         _viewModel.SelectedAgent = agent;
         DataContext = _viewModel;
@@ -31,7 +32,9 @@ public partial class NetworkPairingWindow : Window
     private async Task ConnectAsync()
     {
         if (!_viewModel.CanPair) return;
-        await _viewModel.PairAsync();
+        var pin = AgentFingerprintWindow.Prompt(this, $"{_viewModel.Address}:{_viewModel.Port}");
+        if (pin is null) return;
+        await _viewModel.PairAsync(pin);
         if (_viewModel.SelectedAgent?.IsPaired == true) DialogResult = true;
     }
 }

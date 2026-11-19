@@ -3,18 +3,37 @@ namespace UpdateCenter.Services;
 public static class AppPaths
 {
     private static int _cleanupCompleted;
+    internal static bool UpdateStartupPending { get; set; }
 
-    public static string DataDirectory { get; } = Path.Combine(
+    private static readonly object RootGate = new();
+    private static string? _dataDirectory;
+
+    internal static string ResolveDefaultRoot() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "UpdateCenter");
 
-    public static string LogsDirectory { get; } = Path.Combine(DataDirectory, "Logs");
-    public static string UpdatesDirectory { get; } = Path.Combine(DataDirectory, "Updates");
-    public static string SettingsFile { get; } = Path.Combine(DataDirectory, "settings.json");
-    public static string HistoryFile { get; } = Path.Combine(DataDirectory, "history.json");
-    public static string WinGetApplicabilityFile { get; } = Path.Combine(DataDirectory, "winget-not-applicable.json");
+    internal static string InitializeRoot(string? root = null)
+    {
+        lock (RootGate)
+        {
+            if (root is null) return _dataDirectory ??= ResolveDefaultRoot();
+            if (_dataDirectory is not null)
+                throw new InvalidOperationException("The application data root has already been initialized.");
+            if (!Path.IsPathFullyQualified(root))
+                throw new ArgumentException("The application data root must be absolute.", nameof(root));
+            return _dataDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        }
+    }
+
+    public static string DataDirectory => InitializeRoot();
+    public static string LogsDirectory => Path.Combine(DataDirectory, "Logs");
+    public static string UpdatesDirectory => Path.Combine(DataDirectory, "Updates");
+    public static string SettingsFile => Path.Combine(DataDirectory, "settings.json");
+    public static string HistoryFile => Path.Combine(DataDirectory, "history.json");
+    public static string WinGetApplicabilityFile => Path.Combine(DataDirectory, "winget-not-applicable.json");
 
     public static void EnsureCreated()
     {
+        if (UpdateStartupPending) return;
         Directory.CreateDirectory(DataDirectory);
         Directory.CreateDirectory(LogsDirectory);
         Directory.CreateDirectory(UpdatesDirectory);

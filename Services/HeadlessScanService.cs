@@ -128,43 +128,53 @@ public sealed class HeadlessScanService
         };
     }
 
-    private static RemoteUpdateItem Map(UpdateItem item) => new()
+    internal static RemoteUpdateItem Map(UpdateItem item)
     {
-        Id = Limit(item.Id, 512),
-        Name = Limit(item.Name, 512),
-        Kind = item.Kind.ToString(),
-        Publisher = Limit(item.Publisher, 512),
-        InstalledVersion = Limit(item.InstalledVersion, 128),
-        AvailableVersion = Limit(item.AvailableVersion, 128),
-        Source = Limit(item.Source, 1_024),
-        Status = Limit(item.Status, 256),
-        ResultDetails = Limit(item.ResultDetails, 2_048),
-        PackageOperation = Limit(item.PackageOperation, 64),
-        CanInstall = item.CanInstall,
-        RequiresRestart = item.RequiresRestart,
-        IsImportant = item.IsImportant,
-        IsOptional = item.IsOptional,
-        RequiresRiskConfirmation = item.RequiresRiskConfirmation,
-        DownloadSizeBytes = Math.Clamp(item.DownloadSizeBytes, 0, 1024L * 1024 * 1024 * 1024),
-        HasUnverifiedInstallerMetadata = item.HasUnverifiedInstallerMetadata,
-        WindowsUpdateId = item.WindowsUpdateId,
-        WindowsUpdateRevision = item.WindowsUpdateRevision,
-        WindowsUpdateServerSelection = item.WindowsUpdateServerSelection,
-        WindowsUpdateServiceId = Limit(item.WindowsUpdateServiceId, 128),
-        DriverInstallMode = Limit(item.DriverInstallMode, 64),
-        OfficialReleasePageUrl = Limit(item.OfficialReleasePageUrl, 2_048),
-        OfficialDownloadUrl = Limit(item.OfficialDownloadUrl, 2_048),
-        ExpectedSha256 = Limit(item.ExpectedSha256, 128),
-        ExpectedSignerSubjects = item.ExpectedSignerSubjects
-            .Take(AgentProtocol.MaximumCollectionItemsPerUpdate)
-            .Select(x => Limit(x, 512))
-            .ToList(),
-        DriverPackageType = Limit(item.DriverPackageType, 64),
-        CompatibleHardwareIds = item.CompatibleHardwareIds
-            .Take(AgentProtocol.MaximumCollectionItemsPerUpdate)
-            .Select(x => Limit(x, 512))
-            .ToList()
-    };
+        // The LAN scan contract cannot bind the destination's local registration evidence.
+        var localRemoval = item.CanInstall && (item.RemovalManifestSha256.Length > 0 ||
+            item.WinGetBinding?.Safety == "RemovesPreviousVersion");
+        return new RemoteUpdateItem
+        {
+            Id = Limit(item.Id, 512),
+            Name = Limit(item.Name, 512),
+            Kind = item.Kind.ToString(),
+            Publisher = Limit(item.Publisher, 512),
+            InstalledVersion = Limit(item.InstalledVersion, 128),
+            AvailableVersion = Limit(item.AvailableVersion, 128),
+            Source = Limit(item.Source, 1_024),
+            Status = localRemoval ? LocalizationService.Text("Aggiornamento manuale", "Manual update") : Limit(item.Status, 256),
+            ResultDetails = localRemoval ? LocalizationService.Text(
+                "L'aggiornamento rimuove la versione attuale. Apri Update Center sul PC interessato per verificare la copia installata e confermare la rimozione.",
+                "This update removes the current version. Open Update Center on the affected PC to verify the installation and confirm removal.")
+                : Limit(item.ResultDetails, 2_048),
+            PackageOperation = Limit(item.PackageOperation, 64),
+            WinGetClientVersion = Limit(item.WinGetClientVersion, 64),
+            CanInstall = item.CanInstall && !localRemoval,
+            RequiresRestart = item.RequiresRestart,
+            IsImportant = item.IsImportant,
+            IsOptional = item.IsOptional,
+            RequiresRiskConfirmation = item.RequiresRiskConfirmation,
+            DownloadSizeBytes = Math.Clamp(item.DownloadSizeBytes, 0, 1024L * 1024 * 1024 * 1024),
+            HasUnverifiedInstallerMetadata = item.HasUnverifiedInstallerMetadata,
+            WindowsUpdateId = item.WindowsUpdateId,
+            WindowsUpdateRevision = item.WindowsUpdateRevision,
+            WindowsUpdateServerSelection = item.WindowsUpdateServerSelection,
+            WindowsUpdateServiceId = Limit(item.WindowsUpdateServiceId, 128),
+            DriverInstallMode = Limit(item.DriverInstallMode, 64),
+            OfficialReleasePageUrl = Limit(item.OfficialReleasePageUrl, 2_048),
+            OfficialDownloadUrl = Limit(item.OfficialDownloadUrl, 2_048),
+            ExpectedSha256 = Limit(item.ExpectedSha256, 128),
+            ExpectedSignerSubjects = item.ExpectedSignerSubjects
+                .Take(AgentProtocol.MaximumCollectionItemsPerUpdate)
+                .Select(x => Limit(x, 512))
+                .ToList(),
+            DriverPackageType = Limit(item.DriverPackageType, 64),
+            CompatibleHardwareIds = item.CompatibleHardwareIds
+                .Take(AgentProtocol.MaximumCollectionItemsPerUpdate)
+                .Select(x => Limit(x, 512))
+                .ToList()
+        };
+    }
 
     private static string Limit(string? value, int maximumLength)
     {

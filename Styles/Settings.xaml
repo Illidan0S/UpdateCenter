@@ -1,0 +1,52 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Settings-only resources; reuse the pilot's Fluent controls, typography and focus. -->
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Appearance.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+
+    <Style x:Key="SettingsCard" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="18" />
+        <Setter Property="Padding" Value="24" />
+        <Setter Property="Margin" Value="0,0,0,14" />
+    </Style>
+    <Style x:Key="SettingsHeading" TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+        <Setter Property="FontSize" Value="{DynamicResource FontSize20}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,0,0,16" />
+    </Style>
+    <Style x:Key="SettingsCheckBox" TargetType="CheckBox" BasedOn="{StaticResource {x:Type CheckBox}}">
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource AppearanceKeyboardFocus}" />
+    </Style>
+    <Style x:Key="SettingsComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource AppearanceKeyboardFocus}" />
+    </Style>
+    <Style x:Key="SettingsButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="Padding" Value="16,9" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource AppearanceKeyboardFocus}" />
+    </Style>
+    <!-- Preserve the application's primary action while adding the pilot's keyboard focus. -->
+    <Style x:Key="SettingsSaveButton" TargetType="Button" BasedOn="{StaticResource RoundedButton}">
+        <Setter Property="FontSize" Value="{DynamicResource FontSize13}" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource AppearanceKeyboardFocus}" />
+    </Style>
+    <Style x:Key="SettingsMetadata" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource SurfaceAltBrush}" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Width" Value="160" />
+        <Setter Property="Padding" Value="12" />
+        <Setter Property="Margin" Value="0,0,12,12" />
+    </Style>
+</ResourceDictionary>

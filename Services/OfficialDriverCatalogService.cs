@@ -83,6 +83,9 @@ public sealed class OfficialDriverCatalogService
                 IsOptional = true,
                 IsSelected = false,
                 DriverInstallMode = DriverInstallModes.OfficialInfPackage,
+                DriverDeviceId = installed.DeviceId,
+                CanInstall = installed.Quantity == 1 && !string.IsNullOrWhiteSpace(installed.DeviceId) &&
+                    installedDrivers.Count(x => !string.IsNullOrWhiteSpace(FindMatchedId(x, entry))) == 1,
                 OfficialReleasePageUrl = entry.ReleasePageUrl,
                 OfficialDownloadUrl = entry.DownloadUrl,
                 ExpectedSha256 = entry.Sha256,
