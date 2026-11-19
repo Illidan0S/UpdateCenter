@@ -12,7 +12,7 @@ using UpdateCenter.Models;
 
 namespace UpdateCenter.Services;
 
-public sealed class AppUpdateService
+public sealed partial class AppUpdateService
 {
     private const string LatestReleaseUrl = "https://api.github.com/repos/Illidan0S/UpdateCenter/releases/latest";
     private const string ReleaseApi = "https://api.github.com/repos/Illidan0S/UpdateCenter/releases/tags/";
@@ -66,7 +66,7 @@ public sealed class AppUpdateService
         if (release.HtmlUrl != expectedPage.AbsoluteUri)
             throw new InvalidDataException("La Release contiene un collegamento non valido.");
 
-        if (availableVersion <= installedVersion)
+        if (availableVersion <= installedVersion || availableVersion == ReleasePublisherVerifier.WithdrawnVersion)
             return null;
 
         var executableName = AssetName(availableVersion.ToString(), isInstalledSetup);
@@ -101,7 +101,8 @@ public sealed class AppUpdateService
     {
         var tag = $"v{update.AvailableVersion}";
         var name = AssetName(update.AvailableVersion.ToString(), update.IsInstallerPackage);
-        if (update.AvailableVersion <= GetInstalledVersion() || update.AssetName != name ||
+        if (update.AvailableVersion <= GetInstalledVersion() || update.AvailableVersion == ReleasePublisherVerifier.WithdrawnVersion ||
+            update.AssetName != name ||
             update.DownloadUri.AbsoluteUri != AssetUrl(tag, name) || update.Sha256Uri.AbsoluteUri != AssetUrl(tag, name + ".sha256"))
             throw new InvalidDataException("Asset di aggiornamento inatteso.");
 
@@ -155,7 +156,8 @@ public sealed class AppUpdateService
 
             var targetPath = Environment.ProcessPath
                 ?? throw new InvalidOperationException("Il percorso dell'eseguibile in uso non è disponibile.");
-            await ReleasePublisherVerifier.VerifyDownloadAsync(targetPath, finalPath, candidate, update, this, cancellationToken).ConfigureAwait(false);
+            var explicitlyUnsigned = await ReleasePublisherVerifier.VerifyDownloadAsync(targetPath, finalPath, candidate,
+                update, this, cancellationToken).ConfigureAwait(false);
             progress?.Report(new AppUpdateDownloadProgress(100, "Download verificato · preparazione del riavvio…"));
             if (update.IsInstallerPackage)
             {
@@ -168,6 +170,12 @@ public sealed class AppUpdateService
 
             if (!IsSupportedUpdateTargetName(Path.GetFileName(targetPath)))
                 throw new InvalidOperationException("Il nome dell'eseguibile non consente un aggiornamento automatico sicuro.");
+
+            if (explicitlyUnsigned)
+            {
+                await PortableSourceUpdate.StartAsync(targetPath, update.AvailableVersion, this, cancellationToken).ConfigureAwait(false);
+                return;
+            }
 
             var startInfo = new ProcessStartInfo
             {
@@ -199,10 +207,7 @@ public sealed class AppUpdateService
         if (!SelfUpdateCompatibility.IsSupported()) return 1;
 
         string? targetPath = null;
-        string? backupPath = null;
-        string? stagedPath = null;
         byte[]? originalHash = null;
-        bool stagedCreated = false;
         try
         {
             var updaterPath = Path.GetFullPath(Environment.ProcessPath
@@ -232,11 +237,47 @@ public sealed class AppUpdateService
                 originalHash = SHA256.HashData(installed);
             }
 
-            backupPath = targetPath + ".update-backup";
-            stagedPath = targetPath + ".update-new-" + Guid.NewGuid().ToString("N");
+            ReplacePortable(targetPath, updaterPath, updater, originalHash, version, PortableUpdateStartup.WaitForWindow);
+            LogService.Write($"Aggiornamento dell'app v{version} applicato correttamente.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            LogService.Write($"Applicazione dell'aggiornamento app v{version} non riuscita.", ex);
+            if (originalHash is not null && targetPath is not null)
+                RestartVerifiedOriginal(targetPath, originalHash);
+            return 1;
+        }
+    }
+
+    internal static void RestartVerifiedOriginal(string targetPath, byte[] hash, Action<string>? launch = null)
+    {
+        if (File.Exists(targetPath + ".update-backup")) return;
+        try
+        {
+            using var restored = File.OpenRead(targetPath);
+            if ((File.GetAttributes(targetPath) & FileAttributes.ReparsePoint) != 0 ||
+                !CryptographicOperations.FixedTimeEquals(hash, SHA256.HashData(restored))) return;
+            if (launch is not null) launch(targetPath);
+            else Process.Start(new ProcessStartInfo(targetPath)
+            {
+                WorkingDirectory = Path.GetDirectoryName(targetPath)!, UseShellExecute = false
+            })?.Dispose();
+        }
+        catch { }
+    }
+
+    internal static void ReplacePortable(string targetPath, string updaterPath, Stream updater, byte[] originalHash,
+        string version, Action<string, string, string, string> confirm)
+    {
+        var backupPath = targetPath + ".update-backup";
+        var stagedPath = targetPath + ".update-new-" + Guid.NewGuid().ToString("N");
+        var created = false;
+        try
+        {
             using (var staged = new FileStream(stagedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                stagedCreated = true;
+                created = true;
                 updater.Position = 0;
                 updater.CopyTo(staged);
             }
@@ -247,30 +288,13 @@ public sealed class AppUpdateService
                 using var installed = File.OpenRead(targetPath);
                 if (!expected.AsSpan().SequenceEqual(SHA256.HashData(installed)))
                     throw new InvalidDataException("Verifica dell'eseguibile sostituito non riuscita.");
-                PortableUpdateStartup.WaitForWindow(targetPath, backupPath, updaterPath, version);
+                confirm(targetPath, backupPath, updaterPath, version);
             });
-            LogService.Write($"Aggiornamento dell'app v{version} applicato correttamente.");
-            return 0;
         }
-        catch (Exception ex)
+        catch
         {
-            LogService.Write($"Applicazione dell'aggiornamento app v{version} non riuscita.", ex);
-            if (stagedCreated && stagedPath is not null) TryDelete(stagedPath);
-            if (originalHash is not null && targetPath is not null && !File.Exists(backupPath) && File.Exists(targetPath))
-            {
-                try
-                {
-                    using var restartTarget = File.OpenRead(targetPath);
-                    if (!originalHash.AsSpan().SequenceEqual(SHA256.HashData(restartTarget))) return 1;
-                    Process.Start(new ProcessStartInfo(targetPath)
-                    {
-                        WorkingDirectory = Path.GetDirectoryName(targetPath)!,
-                        UseShellExecute = false
-                    })?.Dispose();
-                }
-                catch { }
-            }
-            return 1;
+            if (created) TryDelete(stagedPath);
+            throw;
         }
     }
 
@@ -284,12 +308,19 @@ public sealed class AppUpdateService
             PortableUpdateStartup.IsValidName(args[4]);
     }
 
+    internal static bool MatchesAssetVersion(string version, string? productText, string? fileText,
+        Version fixedProduct, Version fixedFile) =>
+        productText?.Trim() == version && fileText?.Trim() == version + ".0" &&
+        fixedFile.ToString() == version + ".0" && fixedFile == fixedProduct;
+
     internal async Task VerifyOfficialAssetAsync(string version, bool setup, string path, Stream file, CancellationToken cancellationToken)
     {
         if (!SemanticVersion.TryParse(version, out var parsed) || parsed.ToString() != version)
             throw new InvalidDataException("Versione dell'asset non valida.");
         var info = FileVersionInfo.GetVersionInfo(path);
-        if (info.ProductVersion?.Trim() != version || info.FileVersion?.Trim() != version + ".0")
+        var fixedProduct = new Version(info.ProductMajorPart, info.ProductMinorPart, info.ProductBuildPart, info.ProductPrivatePart);
+        var fixedFile = new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart, info.FilePrivatePart);
+        if (!MatchesAssetVersion(version, info.ProductVersion, info.FileVersion, fixedProduct, fixedFile))
             throw new InvalidDataException("Versione del file di aggiornamento inattesa.");
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -424,7 +455,7 @@ public sealed class AppUpdateService
         return Sha256Pattern.IsMatch(value) && value.Length == 64 ? value.ToUpperInvariant() : null;
     }
 
-    private static bool IsSupportedUpdateTargetName(string fileName) =>
+    internal static bool IsSupportedUpdateTargetName(string fileName) =>
         !string.IsNullOrWhiteSpace(fileName) && SupportedExecutableNamePattern.IsMatch(fileName);
 
     private static bool IsInstalledSetup()

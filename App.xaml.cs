@@ -7,6 +7,21 @@ public partial class App : System.Windows.Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
+        if (e.Args.Length > 0 && e.Args[0] == PortableSourceUpdate.Mode)
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            try
+            {
+                if (e.Args.Length != 3 || !Guid.TryParseExact(e.Args[1], "N", out var session) ||
+                    !int.TryParse(e.Args[2], out var owner))
+                    throw new InvalidDataException("Richiesta di recupero non valida.");
+                PortableSourceUpdate.ApplyAsync(session, owner).GetAwaiter().GetResult();
+                Shutdown(0);
+            }
+            catch (Exception ex) { LogService.Write("Aggiornamento Portable non completato.", ex); Shutdown(1); }
+            return;
+        }
+
         if (e.Args.Length == 4 &&
             e.Args[0].Equals("--apply-update", StringComparison.OrdinalIgnoreCase) &&
             int.TryParse(e.Args[2], out var parentProcessId))

@@ -1,0 +1,164 @@
+name: Verify corrected UpdateCenter 2.0.0
+
+on:
+  push:
+    branches: [qa/rc-200-self-update]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Configure SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Check corrected 2.0.0 project and restore solution
+        run: |
+          . .\scripts\ReleaseArtifactPolicy.ps1
+          [xml]$project = Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw
+          if ($project.SelectSingleNode('/Project/PropertyGroup/Version').InnerText -cne '2.0.0' -or
+              (Get-UnsignedReleaseMode $project '' '' $env:GITHUB_REPOSITORY) -cne 'historical') {
+            throw 'Expected the corrected 2.0.0 unsigned project.'
+          }
+          dotnet restore .\UpdateCenter.sln -p:Configuration=Release
+
+      - name: Build Release solution
+        run: dotnet build .\UpdateCenter.sln -c Release --no-restore
+
+      - name: Build single-file Portable
+        run: .\build.ps1 -NoRestore
+
+      - name: Prepare verified Inno Setup 7.1.1 portable
+        id: inno
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $toolRoot = Join-Path $env:RUNNER_TEMP ('inno-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $toolRoot | Out-Null
+          $package = Join-Path $toolRoot 'innosetup-7.1.1-x64.exe'
+          $compilerDirectory = Join-Path $toolRoot 'compiler'
+          # Digest and publisher verified against the official immutable is-7_1_1 release.
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $package
+          if ((Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash -cne '8A5A6711C3766A6E5FB74F280BA0E3551E719CE94538D901FDBD1F8F9920B3F0') {
+            throw 'SHA-256 del distributivo Inno Setup inatteso.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $package
+          if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate -or
+              $signature.SignerCertificate.Subject -cne 'CN=Pyrsys B.V., O=Pyrsys B.V., S=Noord-Holland, C=NL') {
+            throw 'Firma o timestamp del distributivo Inno Setup non attendibile.'
+          }
+          $arguments = @('/PORTABLE=1', '/CURRENTUSER', '/VERYSILENT', '/SUPPRESSMSGBOXES',
+            '/NORESTART', '/NOICONS', '/NOCLOSEAPPLICATIONS', '/NORESTARTAPPLICATIONS',
+            ('/DIR="' + $compilerDirectory + '"'))
+          $process = Start-Process -FilePath $package -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Preparazione Inno Setup fallita ($($process.ExitCode))." }
+          $compiler = Join-Path $compilerDirectory 'ISCC.exe'
+          if ((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash -cne 'E0F9F1DC32032650C6629F6DEE41EB6D20BA140E4E3C07C25D8A24F9BA781644') {
+            throw 'SHA-256 del compilatore Inno Setup inatteso.'
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $compiler
+          if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate -or
+              $signature.SignerCertificate.Subject -cne 'CN=Pyrsys B.V., O=Pyrsys B.V., S=Noord-Holland, C=NL') {
+            throw 'Firma o timestamp del compilatore Inno Setup non attendibile.'
+          }
+          # ISCC retains its built-in signature verification of compiler components.
+          "compiler=$compiler" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Compile Setup from the same Portable
+        env:
+          INNO_COMPILER: ${{ steps.inno.outputs.compiler }}
+        run: .\build-installer.ps1 -NoAppBuild -SkipChecksum -InnoCompilerPath $env:INNO_COMPILER
+
+      - name: Prepare the four candidate assets
+        run: |
+          . .\scripts\ReleaseArtifactPolicy.ps1
+          $directory = New-Item -ItemType Directory -Path '_output\rc-200-artifacts'
+          $portable = 'UpdateCenter-v2.0.0-Portable.exe'
+          $setup = 'UpdateCenter-Setup-v2.0.0.exe'
+          Copy-Item -LiteralPath '.\dist\UpdateCenter.exe' -Destination (Join-Path $directory $portable)
+          Copy-Item -LiteralPath (Join-Path '.\installer-dist' $setup) -Destination (Join-Path $directory $setup)
+          foreach ($name in $portable, $setup) {
+            $path = Join-Path $directory $name
+            $version = (Get-Item -LiteralPath $path).VersionInfo
+            $fileParts = $version.FileMajorPart, $version.FileMinorPart, $version.FileBuildPart, $version.FilePrivatePart
+            $productParts = $version.ProductMajorPart, $version.ProductMinorPart, $version.ProductBuildPart, $version.ProductPrivatePart
+            if ($version.ProductVersion.Trim() -cne '2.0.0' -or $version.FileVersion.Trim() -cne '2.0.0.0' -or
+                ($fileParts -join '.') -cne '2.0.0.0' -or ($productParts -join '.') -cne '2.0.0.0' -or
+                (Get-AuthenticodeSignature -LiteralPath $path).Status -ne 'NotSigned') {
+              throw "Unexpected version or signature for $name."
+            }
+            $sha = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            Set-Content -LiteralPath "$path.sha256" -Value "$sha  $name" -Encoding ascii
+          }
+          Confirm-ReleaseAssets $directory '2.0.0' 'historical'
+
+      - name: Fetch the pinned public 1.1.5 Portable as test data
+        run: |
+          $name = 'UpdateCenter-v1.1.5-Portable.exe'
+          $path = Join-Path $env:RUNNER_TEMP $name
+          Invoke-WebRequest -Uri ('https://github.com/Illidan0S/UpdateCenter/releases/download/v1.1.5/' + $name) -OutFile $path
+          if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne '00912E56944F84B243ECF0F126CA2E67055F9BD3D1EAC98567E42636A198F826') {
+            throw 'Unexpected published Portable 1.1.5 digest.'
+          }
+
+      - name: Verify detection, authorization and legacy migration
+        run: |
+          $smoke = '.\Tests\UpdateCenter.SmokeTests\bin\Release\net10.0-windows10.0.17763.0\win-x64\UpdateCenter.SmokeTests.exe'
+          $previous = Join-Path $env:RUNNER_TEMP 'UpdateCenter-v1.1.5-Portable.exe'
+          $candidate = (Resolve-Path -LiteralPath '_output\rc-200-artifacts\UpdateCenter-v2.0.0-Portable.exe').Path
+          & $smoke --app-update-detection
+          if ($LASTEXITCODE -ne 0) { throw 'Update detection failed.' }
+          & $smoke --unsigned-update-authorization
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest authorization failed.' }
+          & $smoke --unsigned-release-200 $previous $candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy release admission failed.' }
+          & $smoke --self-update-migration $previous
+          if ($LASTEXITCODE -ne 0) { throw 'Migration, profile preservation or rollback failed.' }
+
+      - name: Test Setup verification offline with Windows PowerShell 5.1
+        shell: powershell
+        run: .\Tests\UnsignedSetupRelease.Tests.ps1
+
+      - name: Test workflow approval and generated manifest offline
+        run: .\Tests\UnsignedWorkflow.Tests.ps1
+
+      - name: Test future updates against the packaged RC and SDK-built data fixtures
+        run: |
+          $env:UPDATECENTER_FUTURE_FIXTURES = Join-Path $env:RUNNER_TEMP 'UpdateCenter.FutureFixtures'
+          .\Tests\Build-FutureUnsignedFixtures.ps1 -OutputDirectory $env:UPDATECENTER_FUTURE_FIXTURES
+          if ($LASTEXITCODE -ne 0) { throw 'SDK fixture build failed.' }
+          $smoke = '.\Tests\UpdateCenter.SmokeTests\bin\Release\net10.0-windows10.0.17763.0\win-x64\UpdateCenter.SmokeTests.exe'
+          $candidate = (Resolve-Path -LiteralPath '_output\rc-200-artifacts\UpdateCenter-v2.0.0-Portable.exe').Path
+          & $smoke --future-unsigned-update $candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged future update verification failed.' }
+
+      - name: Recheck final candidate checksums
+        run: |
+          . .\scripts\ReleaseArtifactPolicy.ps1
+          Confirm-ReleaseAssets '_output\rc-200-artifacts' '2.0.0' 'historical'
+
+      - name: Upload verified RC binaries and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: UpdateCenter-v2.0.0-rc-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            _output/rc-200-artifacts/UpdateCenter-v2.0.0-Portable.exe
+            _output/rc-200-artifacts/UpdateCenter-v2.0.0-Portable.exe.sha256
+            _output/rc-200-artifacts/UpdateCenter-Setup-v2.0.0.exe
+            _output/rc-200-artifacts/UpdateCenter-Setup-v2.0.0.exe.sha256

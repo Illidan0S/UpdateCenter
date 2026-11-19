@@ -4,9 +4,26 @@
 #ifndef AppPayloadDir
   #define AppPayloadDir "dist"
 #endif
+#ifdef ApprovedUnsignedUpdateTag
+  #ifndef UnsignedReleaseVersion
+    #error Explicit update approval requires an unsigned build
+  #endif
+#endif
 #ifdef UnsignedReleaseVersion
-  #if (UnsignedReleaseVersion != "2.0.0" && UnsignedReleaseVersion != "2.0.1") || UnsignedReleaseVersion != MyAppVersion
+  #if UnsignedReleaseVersion != MyAppVersion || UnsignedReleaseVersion == "2.0.1"
     #error Mismatched or unsupported unsigned release policy
+  #endif
+  #ifdef ApprovedUnsignedUpdateTag
+    #if VersionToStr(StrToVersion(MyAppVersion + ".0")) != (MyAppVersion + ".0")
+      #error Explicit update approval requires canonical PE version components
+    #endif
+    #if Copy(MyAppVersion, 1, 2) == "0." || Copy(MyAppVersion, 1, 2) == "1." || UnsignedReleaseVersion == "2.0.0" || ApprovedUnsignedUpdateTag != ("v" + MyAppVersion)
+      #error Invalid explicit unsigned update approval
+    #endif
+  #else
+    #if UnsignedReleaseVersion != "2.0.0"
+      #error Future unsigned Setup requires approval for the exact update tag
+    #endif
   #endif
 #endif
 
@@ -91,10 +108,8 @@ english.UnverifiedUpdateOwner=Setup could not verify the owner and directory of 
 #ifdef UnsignedReleaseVersion
 italian.UnverifiedUpdateChecksum=Impossibile verificare l'installer con il checksum della release ufficiale. L'installazione esistente viene conservata.
 english.UnverifiedUpdateChecksum=Setup could not verify this installer against the official release checksum. The existing installation is preserved.
-#if UnsignedReleaseVersion == "2.0.1"
 italian.ManualUpdateRequired=Questa versione richiede l'aggiornamento verificato dall'app oppure l'avvio interattivo del Setup.
 english.ManualUpdateRequired=This version requires a verified update from the app or an interactive Setup.
-#endif
 #endif
 
 [Code]
@@ -116,7 +131,7 @@ type
   end;
 
 var
-  SelfUpdateDirectory: String;
+  SelfUpdateDirectory, SelfUpdateFileVersion: String;
 
 function ReadProductInfo(Major, Minor, SpMajor, SpMinor: Cardinal; var Sku: Cardinal): Boolean;
   external 'GetProductInfo@kernel32.dll stdcall';
@@ -227,9 +242,9 @@ begin
   end;
 end;
 
-function ReadRegisteredDirectory(var Directory: String): Boolean;
+function ReadRegisteredDirectory(var Directory, FileVersion: String): Boolean;
 var
-  AppPath, UninstallCommand, Uninstaller, UninstallName, Exe, FileVersion, DisplayVersion: String;
+  AppPath, UninstallCommand, Uninstaller, UninstallName, Exe, DisplayVersion: String;
 begin
   Result := False;
   if not RegQueryStringValue(HKCU32, AppUninstallKey, 'Inno Setup: App Path', AppPath) or
@@ -253,7 +268,7 @@ begin
     IsLocalPathWithoutReparse(ChangeFileExt(Uninstaller, '.dat'));
 end;
 
-function VerifySelfUpdate(var Directory: String): Boolean;
+function VerifySelfUpdate(var Directory, FileVersion: String): Boolean;
 var
   SourceExe, ExpectedSource: String;
   Token: UINT_PTR;
@@ -267,7 +282,7 @@ begin
   // The original updater passes only /SELFUPDATE. Bind its staged file to this
   // token's profile and owner SID before accepting the per-user registration.
   if (CompareText(SourceExe, ExpectedSource) <> 0) or not FileExists(SourceExe) or
-     not IsLocalPathWithoutReparse(SourceExe) or not ReadRegisteredDirectory(Directory) then Exit;
+     not IsLocalPathWithoutReparse(SourceExe) or not ReadRegisteredDirectory(Directory, FileVersion) then Exit;
   if not OpenProcessToken(CurrentProcessHandle, TokenQuery, Token) then Exit;
   try
     if not ReadTokenUser(Token, TokenUserInformation, User, SizeOf(User), ReturnedSize) then Exit;
@@ -283,7 +298,6 @@ function InitializeSetup: Boolean;
 begin
   Result := False;
 #ifdef UnsignedReleaseVersion
-#if UnsignedReleaseVersion == "2.0.1"
   if WizardSilent and not IsSelfUpdate then
   begin
     Log(CustomMessage('ManualUpdateRequired'));
@@ -291,19 +305,18 @@ begin
     Exit;
   end;
 #endif
-#endif
   if not IsSupportedWindows then
   begin
     SuppressibleMsgBox(CustomMessage('UnsupportedUpdateWindows'), mbCriticalError, MB_OK, IDOK);
     Exit;
   end;
-  if IsSelfUpdate and not VerifySelfUpdate(SelfUpdateDirectory) then
+  if IsSelfUpdate and not VerifySelfUpdate(SelfUpdateDirectory, SelfUpdateFileVersion) then
   begin
     SuppressibleMsgBox(CustomMessage('UnverifiedUpdateOwner'), mbCriticalError, MB_OK, IDOK);
     Exit;
   end;
 #ifdef UnsignedReleaseVersion
-  if IsSelfUpdate and not VerifyOfficialSetupChecksum(ExpandConstant('{srcexe}')) then
+  if IsSelfUpdate and not VerifyOfficialSetupChecksum(ExpandConstant('{srcexe}'), SelfUpdateFileVersion) then
   begin
     SuppressibleMsgBox(CustomMessage('UnverifiedUpdateChecksum'), mbCriticalError, MB_OK, IDOK);
     Exit;
@@ -325,11 +338,12 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  Directory: String;
+  Directory, FileVersion: String;
 begin
   Result := '';
   if not IsSelfUpdate then Exit;
-  if not VerifySelfUpdate(Directory) or (CompareText(Directory, SelfUpdateDirectory) <> 0) or
+  if not VerifySelfUpdate(Directory, FileVersion) or (FileVersion <> SelfUpdateFileVersion) or
+     (CompareText(Directory, SelfUpdateDirectory) <> 0) or
      (CompareText(RemoveBackslashUnlessRoot(ExpandFileName(WizardDirValue)), Directory) <> 0) then
     Result := CustomMessage('UnverifiedUpdateOwner');
 end;

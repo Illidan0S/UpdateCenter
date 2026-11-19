@@ -11,7 +11,7 @@ internal static class SelfUpdateMigrationTests
         using (var original = File.OpenRead(officialPortable))
         {
             Check(ReleasePublisherVerifier.IsOfficialLegacyTarget(original, "2.0.0"), "OfficialPortable115Recognized");
-            Check(ReleasePublisherVerifier.IsOfficialLegacyTarget(original, "2.0.1"), "OfficialPortable115RecognizedForSigned201");
+            Check(!ReleasePublisherVerifier.IsOfficialLegacyTarget(original, "2.0.1"), "Withdrawn201IsNeverALegacyDestination");
             Check(!ReleasePublisherVerifier.IsOfficialLegacyTarget(original, "2.0.2"), "NoOpenEndedLegacyMigration");
         }
         // Change one byte in a copy, including if the input is a signed artifact.
@@ -23,7 +23,6 @@ internal static class SelfUpdateMigrationTests
         }
 
         CheckWindowsAdmission();
-        UnsignedReleaseTests.SignedSuccessorAsync(officialPortable).GetAwaiter().GetResult();
 
         try
         {

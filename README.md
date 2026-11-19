@@ -1,6 +1,6 @@
 # Update Center
 
-**Update Center v2.0.1** mostra le nuove versioni dell’app nella Home e riassume i risultati della scansione in una sola riga. Le tabelle si adattano ai risultati senza dover ridimensionare la finestra. [Note in italiano e inglese](docs/RELEASE-2.0.1.md)
+**Update Center v2.0.0 corretta (candidato locale)** mostra le nuove versioni dell’app nella Home e riassume i risultati della scansione in una sola riga. Le tabelle si adattano ai risultati senza dover ridimensionare la finestra. [Note in italiano e inglese](docs/RELEASE-2.0.0.md)
 
 Update Center è un’app desktop per Windows che riunisce aggiornamenti software, driver, runtime e informazioni hardware in un’unica interfaccia chiara. L’utente decide sempre cosa installare: nessun aggiornamento parte automaticamente.
 
@@ -28,18 +28,11 @@ Update Center è un’app desktop per Windows che riunisce aggiornamenti softwar
 
 ## Download
 
-Scarica [Update Center v2.0.1](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.1) dalla release ufficiale su GitHub.
+Il candidato locale comprende `UpdateCenter-Setup-v2.0.0.exe`, `UpdateCenter-v2.0.0-Portable.exe` e i due checksum SHA-256. La sostituzione della precedente release pubblica richiede una promozione separata.
 
-- **`UpdateCenter-Setup-v2.0.1.exe`** aggiorna o installa l’app nel profilo Windows e aggiunge una voce nel menu Start.
-- **`UpdateCenter-v2.0.1-Portable.exe`** si avvia direttamente, anche da una chiavetta USB.
+### Migrazione
 
-Gli eseguibili v2.0.1 sono distribuiti senza firma Authenticode. Usa il file **`.sha256`** di ciascun eseguibile per verificarne l’integrità.
-
-### Passaggio diretto da una versione precedente
-
-- **Setup.** Chiudi Update Center e avvia il nuovo Setup con lo stesso account Windows. Mantieni la directory dell’installazione esistente.
-- **Portable.** Chiudi Update Center e sostituisci il precedente eseguibile con il nuovo Portable. Puoi mantenere il nome del file e la sua cartella.
-- **Dalla 2.0.0.** Usa il Setup interattivo o sostituisci il Portable seguendo i passaggi sopra. Verifica il file con il relativo `.sha256` della release ufficiale. L’aggiornamento integrato della 2.0.0 richiede una firma Authenticode sul nuovo file. [Verifiche e compatibilità del self-update](docs/CODE-SIGNING.md#aggiornamento-dallapp)
+La 1.1.5 può rilevare la 2.0.0 corretta quando diventa la release Latest ufficiale. Per una copia già installata della 2.0.0 originaria o della 2.0.1 serve il recupero manuale. Dopo aver salvato il profilo e verificato il checksum, chiudi l’app e avvia il Setup nello stesso account e nella stessa directory, oppure sostituisci il Portable a programma chiuso.
 
 Impostazioni e cronologia rimangono in `%LOCALAPPDATA%\UpdateCenter` per lo stesso profilo Windows.
 
@@ -66,7 +59,7 @@ L’app non riavvia il computer senza chiedere conferma.
 ## Requisiti
 
 - Per la linea 2.0 il target tecnico è Windows x64 dalla build 17763. Il Portable e l'eseguibile incluso nel Setup contengono il runtime .NET 10 Desktop. [Edizioni e build ammesse](https://github.com/Illidan0S/UpdateCenter/releases/tag/v2.0.0)
-- Per gli aggiornamenti software automatici la v2.0.1 ammette WinGet `v1.29.290`, `v1.30.300` e `v1.30.310`. Se il client cambia dopo la scansione, occorre ripetere scansione e consenso. [Requisiti WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
+- Per gli aggiornamenti software automatici la 2.0.0 corretta ammette WinGet `v1.29.290`, `v1.30.300` e `v1.30.310`. Se il client cambia dopo la scansione, occorre ripetere scansione e consenso. [Requisiti WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/)
 - Connessione Internet.
 - Privilegi di amministratore solo per gli elementi che li richiedono.
 

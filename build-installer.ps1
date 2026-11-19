@@ -13,6 +13,7 @@ $project = Join-Path $projectRoot 'UpdateCenter.csproj'
 $appBuildScript = Join-Path $projectRoot 'build.ps1'
 $installerScript = Join-Path $projectRoot 'installer.iss'
 . (Join-Path $projectRoot 'scripts\BuildPaths.ps1')
+. (Join-Path $projectRoot 'scripts\ReleaseArtifactPolicy.ps1')
 $appSource = Resolve-BuildDirectory $projectRoot $AppSourceDirectory 'Portable'
 $appExecutable = Join-Path $appSource 'UpdateCenter.exe'
 $installerOutput = Resolve-BuildDirectory $projectRoot $OutputDirectory 'Setup'
@@ -23,11 +24,15 @@ $packageVersion = if ($null -ne $versionNode) { $versionNode.InnerText.Trim() } 
 if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
     throw 'La versione del progetto deve usare il formato MAJOR.MINOR.PATCH.'
 }
-$unsignedPolicy = $projectXml.SelectSingleNode('/Project/PropertyGroup/UnsignedReleaseVersion')
+$mode = Get-UnsignedReleaseMode $projectXml $env:RELEASE_TAG $env:UNSIGNED_UPDATE_APPROVED_TAG $env:GITHUB_REPOSITORY
 $compilerOptions = @()
-if ($packageVersion -cin @('2.0.0', '2.0.1') -and $unsignedPolicy -and $unsignedPolicy.InnerText -ceq $packageVersion -and
-    [string]::IsNullOrEmpty($env:WINDOWS_SIGNING_CERT_SHA256)) {
+if ($mode -ne 'signed' -and [string]::IsNullOrEmpty($env:WINDOWS_SIGNING_CERT_SHA256)) {
     $compilerOptions += "/DUnsignedReleaseVersion=$packageVersion"
+    if ($mode -ceq 'approved') {
+        $compilerOptions += "/DApprovedUnsignedUpdateTag=$env:UNSIGNED_UPDATE_APPROVED_TAG"
+    }
+} elseif ($mode -ceq 'approved') {
+    throw 'La release approvata unsigned non può usare contemporaneamente una policy di firma.'
 }
 
 if (-not $NoAppBuild) {

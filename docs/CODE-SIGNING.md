@@ -18,6 +18,12 @@ SmartScreen valuta anche la reputazione del programma e del publisher.
 
 ## Aggiornamento dall'app
 
+La 2.0.0 corretta ammette un successore senza Authenticode solo se la release stabile ufficiale contiene il manifesto del tag autorizzato. Per una futura versione, il manutentore imposta `UnsignedReleaseVersion` uguale a `Version` e autorizza il tag letterale con `UNSIGNED_UPDATE_APPROVED_TAG`. Il workflow controlla il repository, la ref e il commit e crea il manifesto con gli SHA-256 dei due EXE definitivi. Il client verifica il digest GitHub del manifesto, il suo contenuto, il digest dell’asset, il file di checksum, l’origine dell’installazione e i byte scaricati. La 2.0.1 ritirata viene esclusa. La fiducia per le release senza firma dipende dal controllo del repository ufficiale.
+
+Il Portable conserva una copia della versione precedente fino alla conferma del nuovo avvio. Per il Setup il recupero dopo un avvio applicativo fallito richiede la reinstallazione verificata del pacchetto precedente nello stesso profilo.
+
+### Comportamento delle release precedentemente distribuite
+
 Il client controlla il checksum del download e usa il provider Authenticode di Windows per verificare le firme incorporate dell'app in esecuzione e del nuovo Portable o Setup. Entrambe devono essere attendibili, con timestamp e con lo stesso certificato del publisher. Nel percorso Portable la verifica viene ripetuta prima della sostituzione.
 
 Per il solo passaggio Portable ufficiale 1.1.5 → 2.0.0, il candidato riconosce l'EXE precedente tramite SHA-256 `00912E56944F84B243ECF0F126CA2E67055F9BD3D1EAC98567E42636A198F826`. Il digest coincide con quello dell'asset GitHub 550111885 e con il relativo sidecar. Prima di sostituire l'EXE, la 2.0.0 senza firma richiede tag stabile e asset esatto del repository ufficiale, digest API, checksum con nome esatto e hash dei byte concordanti. Il Setup 2.0.0 scaricato in modalità `/SELFUPDATE` verifica nuovamente il sidecar ufficiale e il proprio hash prima dell'installazione. Entrambi limitano le richieste a HTTPS e i redirect ai CDN GitHub previsti. [Asset e checksum della 1.1.5](https://github.com/Illidan0S/UpdateCenter/releases/tag/v1.1.5)

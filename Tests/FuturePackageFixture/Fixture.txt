@@ -1,0 +1,1 @@
+Inert resource used by the Update Center update verification tests.

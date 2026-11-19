@@ -41,15 +41,22 @@ if (args is ["--app-update-detection"])
     return;
 }
 
-if (args.Length == 3 && args[0] == "--unsigned-release-200")
+if (args.Length is 1 or 2 && args[0] == "--unsigned-update-authorization")
 {
-    await UnsignedReleaseTests.RunAsync(args[1], args[2]);
+    if (args.Length == 2) await UnsignedUpdateAuthorizationTests.RunGeneratedAsync(args[1]);
+    else await UnsignedUpdateAuthorizationTests.RunAsync();
     return;
 }
 
-if (args.Length == 2 && args[0] == "--unsigned-release-201")
+if (args.Length is 1 or 2 && args[0] == "--future-unsigned-update")
 {
-    await UnsignedReleaseTests.Unsigned201Async(args[1]);
+    await FutureUnsignedUpdateTests.RunAsync(args.Length == 2 ? args[1] : null);
+    return;
+}
+
+if (args.Length == 3 && args[0] == "--unsigned-release-200")
+{
+    await UnsignedReleaseTests.RunAsync(args[1], args[2]);
     return;
 }
 
@@ -500,11 +507,14 @@ var v101 = new SemanticVersion(1, 0, 1);
 var v110 = new SemanticVersion(1, 1, 0);
 if (!(v100 < v101 && v101 < v110 && v110 > v100))
     throw new InvalidOperationException("Ordinamento semantico non valido.");
-if (typeof(AppSettings).Assembly.GetName().Version?.ToString(3) != "2.0.1")
-    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla release 2.0.1.");
+var projectXml = System.Xml.Linq.XDocument.Load(Path.Combine(Directory.GetCurrentDirectory(), "UpdateCenter.csproj"));
+var projectVersion = projectXml.Root!.Elements("PropertyGroup").SelectMany(group => group.Elements("Version")).Single().Value;
+if (!SemanticVersion.TryParse(projectVersion, out var intendedVersion) || intendedVersion.ToString() != projectVersion ||
+    typeof(AppSettings).Assembly.GetName().Version?.ToString() != projectVersion + ".0")
+    throw new InvalidOperationException("La versione dell'assembly non corrisponde alla versione del progetto.");
 var applicationVersionInfo = FileVersionInfo.GetVersionInfo(typeof(AppSettings).Assembly.Location);
-if (applicationVersionInfo.FileVersion != "2.0.1.0" || applicationVersionInfo.ProductVersion != "2.0.1")
-    throw new InvalidOperationException("FileVersion/ProductVersion non corrispondono alla release 2.0.1.");
+if (applicationVersionInfo.FileVersion != projectVersion + ".0" || applicationVersionInfo.ProductVersion != projectVersion)
+    throw new InvalidOperationException("FileVersion/ProductVersion non corrispondono alla versione del progetto.");
 
 var defaultVerification = new UpdateVerificationResult();
 if (defaultVerification.Verified || defaultVerification.IsDefinitive ||

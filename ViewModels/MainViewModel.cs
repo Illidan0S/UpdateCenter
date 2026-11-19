@@ -260,7 +260,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     internal AppUpdateInfo? AppUpdateOffer { get; private set; }
     internal SemanticVersion? PendingAppUpdate =>
         SemanticVersion.TryParse(Settings.PendingAppUpdateVersion, out var pending) &&
-        pending > AppUpdateService.GetInstalledVersion() &&
+        pending != ReleasePublisherVerifier.WithdrawnVersion && pending > AppUpdateService.GetInstalledVersion() &&
         !string.Equals(Settings.IgnoredAppVersion, pending.ToString(), StringComparison.OrdinalIgnoreCase)
             ? pending : null;
     public bool HasAppUpdateNotice => PendingAppUpdate.HasValue;

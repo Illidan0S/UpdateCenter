@@ -41,7 +41,9 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          UNSIGNED_UPDATE_APPROVED_TAG: ${{ vars.UNSIGNED_UPDATE_APPROVED_TAG }}
         run: |
+          . .\scripts\ReleaseArtifactPolicy.ps1
           [xml]$project = Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw
           $node = $project.SelectSingleNode('/Project/PropertyGroup/Version')
           if ($null -eq $node -or $node.InnerText -notmatch '^\d+\.\d+\.\d+$') {
@@ -51,18 +53,18 @@ jobs:
           $releaseTag = if ($env:GITHUB_REF_TYPE -eq 'tag') {
             $env:GITHUB_REF_NAME
           } elseif (-not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG_INPUT)) {
-            $env:RELEASE_TAG_INPUT.Trim()
+            $env:RELEASE_TAG_INPUT
           } else {
             ''
           }
           if (-not [string]::IsNullOrWhiteSpace($releaseTag)) {
-            if ($releaseTag -notmatch '^v\d+\.\d+\.\d+$') {
+            if ($releaseTag -cnotmatch '\Av(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\z') {
               throw "Tag stabile non valido: $releaseTag"
             }
             if ($releaseTag.Substring(1) -ne $version) {
               throw "Il tag $releaseTag non coincide con la versione $version del progetto."
             }
-            if ($env:RELEASE_TAG_INPUT -and $releaseTag -cne $env:RELEASE_TAG_INPUT.Trim()) {
+            if ($env:RELEASE_TAG_INPUT -and $releaseTag -cne $env:RELEASE_TAG_INPUT) {
               throw 'Il tag richiesto differisce dal tag selezionato.'
             }
             $tagCommit = git rev-parse --verify "refs/tags/$releaseTag^{commit}"
@@ -72,8 +74,8 @@ jobs:
           }
           "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          $policy = $project.SelectSingleNode('/Project/PropertyGroup/UnsignedReleaseVersion')
-          $unsigned = $version -cin @('2.0.0', '2.0.1') -and $policy -and $policy.InnerText -ceq $version
+          $mode = Get-UnsignedReleaseMode $project $releaseTag $env:UNSIGNED_UPDATE_APPROVED_TAG $env:GITHUB_REPOSITORY
+          $unsigned = $mode -ne 'signed'
           "unsigned_release=$($unsigned.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Restore dependencies
@@ -82,6 +84,10 @@ jobs:
 
       - name: Build Release
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          UNSIGNED_UPDATE_APPROVED_TAG: ${{ vars.UNSIGNED_UPDATE_APPROVED_TAG }}
+          WINDOWS_SIGNING_CERT_SHA256: ${{ steps.version.outputs.release_tag != '' && steps.version.outputs.unsigned_release != 'true' && vars.WINDOWS_SIGNING_CERT_SHA256 || '' }}
         run: dotnet build .\UpdateCenter.sln --configuration Release --no-restore
 
       - name: Run Network Core tests
@@ -108,9 +114,15 @@ jobs:
         shell: powershell
         run: .\Tests\UnsignedSetupRelease.Tests.ps1
 
+      - name: Check release approval and assets offline
+        shell: pwsh
+        run: .\Tests\UnsignedWorkflow.Tests.ps1
+
       - name: Publish self-contained single-file
         shell: pwsh
         env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          UNSIGNED_UPDATE_APPROVED_TAG: ${{ vars.UNSIGNED_UPDATE_APPROVED_TAG }}
           WINDOWS_SIGNING_CERT_SHA256: ${{ steps.version.outputs.release_tag != '' && steps.version.outputs.unsigned_release != 'true' && vars.WINDOWS_SIGNING_CERT_SHA256 || '' }}
         run: .\build.ps1
 
@@ -164,6 +176,8 @@ jobs:
         shell: pwsh
         env:
           INNO_COMPILER: ${{ steps.inno.outputs.compiler }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          UNSIGNED_UPDATE_APPROVED_TAG: ${{ vars.UNSIGNED_UPDATE_APPROVED_TAG }}
           WINDOWS_SIGNING_CERT_SHA256: ${{ steps.version.outputs.release_tag != '' && steps.version.outputs.unsigned_release != 'true' && vars.WINDOWS_SIGNING_CERT_SHA256 || '' }}
         run: .\build-installer.ps1 -NoAppBuild -SkipChecksum -InnoCompilerPath $env:INNO_COMPILER
 
@@ -186,7 +200,10 @@ jobs:
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
           WINDOWS_SIGNING_CERT_SHA256: ${{ vars.WINDOWS_SIGNING_CERT_SHA256 }}
           UNSIGNED_RELEASE: ${{ steps.version.outputs.unsigned_release }}
+          UNSIGNED_UPDATE_APPROVED_TAG: ${{ vars.UNSIGNED_UPDATE_APPROVED_TAG }}
         run: |
+          . .\scripts\ReleaseArtifactPolicy.ps1
+          $mode = Get-VerifiedArtifactMode ([xml](Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw))
           $artifacts = Join-Path $env:RUNNER_TEMP ("update-center-release-" + [guid]::NewGuid().ToString('N'))
           New-Item -Path $artifacts -ItemType Directory | Out-Null
 
@@ -206,8 +223,8 @@ jobs:
             [pscustomobject]@{ Path = $portablePath; Name = $portableName; ChecksumPath = $portableChecksumPath; ChecksumName = $portableChecksumName }
           )
           foreach ($asset in $releaseAssets) {
-            if ($env:UNSIGNED_RELEASE -eq 'true') {
-              if ($env:RELEASE_VERSION -cnotin @('2.0.0', '2.0.1') -or (Get-AuthenticodeSignature -LiteralPath $asset.Path).Status -ne 'NotSigned') {
+            if ($mode -ne 'signed') {
+              if ((Get-AuthenticodeSignature -LiteralPath $asset.Path).Status -ne 'NotSigned') {
                 throw "Artefatto inatteso per la policy unsigned $env:RELEASE_VERSION ($($asset.Name))."
               }
             } elseif ($env:RELEASE_TAG) { .\sign-windows-artifact.ps1 -Path $asset.Path -VerifyOnly }
@@ -215,19 +232,10 @@ jobs:
             Set-Content -LiteralPath $asset.ChecksumPath -Value "$hash  $($asset.Name)" -Encoding ascii
           }
 
-          foreach ($asset in $releaseAssets) {
-            $checksumLines = @(Get-Content -LiteralPath $asset.ChecksumPath)
-            if ($checksumLines.Count -ne 1 -or $checksumLines[0] -notmatch '^(?<hash>[0-9A-Fa-f]{64})  (?<name>.+)$') {
-              throw "Formato SHA-256 non valido: $($asset.ChecksumName)"
-            }
-            if ($Matches.name -ne $asset.Name) {
-              throw "Nome artefatto inatteso in $($asset.ChecksumName)."
-            }
-            $hash = (Get-FileHash -LiteralPath $asset.Path -Algorithm SHA256).Hash
-            if ($Matches.hash -ne $hash) {
-              throw "Verifica SHA-256 non riuscita per $($asset.Name)."
-            }
+          if ($mode -ceq 'approved') {
+            New-UnsignedUpdateManifest $artifacts $env:RELEASE_VERSION
           }
+          Confirm-ReleaseAssets $artifacts $env:RELEASE_VERSION $mode
 
           $portableVersionInfo = (Get-Item -LiteralPath $portablePath).VersionInfo
           if ($portableVersionInfo.ProductVersion.Trim() -ne $env:RELEASE_VERSION) {
@@ -284,54 +292,46 @@ jobs:
           ASSET_DIRECTORY: artifacts
           WINDOWS_SIGNING_CERT_SHA256: ${{ vars.WINDOWS_SIGNING_CERT_SHA256 }}
           UNSIGNED_RELEASE: ${{ needs.build.outputs.unsigned_release }}
+          UNSIGNED_UPDATE_APPROVED_TAG: ${{ vars.UNSIGNED_UPDATE_APPROVED_TAG }}
         run: |
+          . .\scripts\ReleaseArtifactPolicy.ps1
+          $mode = Get-VerifiedArtifactMode ([xml](Get-Content -LiteralPath '.\UpdateCenter.csproj' -Raw))
+          Confirm-ReleaseAssets $env:ASSET_DIRECTORY $env:RELEASE_VERSION $mode
           $assets = @(Get-ChildItem -LiteralPath $env:ASSET_DIRECTORY -File | ForEach-Object { $_.FullName })
-          $expectedAssets = @(
-            "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe",
-            "UpdateCenter-Setup-v$env:RELEASE_VERSION.exe.sha256",
-            "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe",
-            "UpdateCenter-v$env:RELEASE_VERSION-Portable.exe.sha256"
-          )
-          if ($assets.Count -ne $expectedAssets.Count -or
-              @($expectedAssets | Where-Object { -not (Test-Path -LiteralPath (Join-Path $env:ASSET_DIRECTORY $_)) }).Count -ne 0) {
-            throw "Asset di Release inattesi o mancanti per la versione $env:RELEASE_VERSION."
-          }
-          foreach ($exe in ($expectedAssets | Where-Object { $_ -like '*.exe' })) {
-            $path = Join-Path $env:ASSET_DIRECTORY $exe
-            if ($env:UNSIGNED_RELEASE -eq 'true') {
-              if ($env:RELEASE_VERSION -cnotin @('2.0.0', '2.0.1') -or $env:RELEASE_TAG -cne "v$env:RELEASE_VERSION" -or
-                  (Get-AuthenticodeSignature -LiteralPath $path).Status -ne 'NotSigned') {
-                throw "Artefatto inatteso per la policy unsigned $env:RELEASE_VERSION ($exe)."
+          foreach ($path in ($assets | Where-Object { $_ -like '*.exe' })) {
+            if ($mode -ne 'signed') {
+              if ((Get-AuthenticodeSignature -LiteralPath $path).Status -ne 'NotSigned') {
+                throw "Artefatto inatteso per la policy unsigned $env:RELEASE_VERSION ($path)."
               }
             } else { .\sign-windows-artifact.ps1 -Path $path -VerifyOnly }
-            $sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
-            $checksum = @(Get-Content -LiteralPath "$path.sha256")
-            if ($checksum.Count -ne 1 -or $checksum[0] -cne "$sha256  $exe") {
-              throw "Checksum scaricato non valido per $exe."
-            }
           }
-          if (gh release view $env:RELEASE_TAG --repo "$env:GITHUB_REPOSITORY" 2>$null) {
-            if ($env:RELEASE_TAG -cin @('v2.0.0', 'v2.0.1')) {
-              throw 'Gli asset di questa release già pubblicata sono vincolati al digest.'
+          $tagRef = "refs/tags/$env:RELEASE_TAG"
+          $remote = @(git ls-remote --exit-code --tags origin $tagRef ($tagRef + '^{}'))
+          if ($LASTEXITCODE -ne 0) { throw 'Tag pubblico non verificabile prima della pubblicazione.' }
+          $direct = @($remote | Where-Object { $_ -clike "*$([char]9)$tagRef" })
+          $peeled = @($remote | Where-Object { $_ -clike "*$([char]9)$tagRef^{}" })
+          if ($direct.Count -ne 1 -or $peeled.Count -gt 1 -or $remote.Count -ne ($direct.Count + $peeled.Count)) {
+            throw 'Risposta ambigua per il riferimento del tag pubblico.'
+          }
+          $tagCommit = if ($peeled.Count) { $peeled[0].Split([char]9)[0] } else { $direct[0].Split([char]9)[0] }
+          if ($tagCommit -cne $env:GITHUB_SHA) {
+            throw 'Il tag pubblico deve ancora puntare al commit verificato dalla build.'
+          }
+          $notesPath = Join-Path 'docs' "RELEASE-$env:RELEASE_VERSION.md"
+          if (Test-Path -LiteralPath $notesPath -PathType Leaf) {
+            if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notesPath -Raw))) {
+              throw "Il file delle note è vuoto: $notesPath"
             }
-            gh release upload $env:RELEASE_TAG $assets --repo "$env:GITHUB_REPOSITORY" --clobber
-            if ($LASTEXITCODE -ne 0) { throw "Caricamento degli asset di Release non riuscito (exit code $LASTEXITCODE)." }
+            $notesArgs = @('--notes-file', $notesPath)
+          } elseif ($env:RELEASE_TAG -cin @('v2.0.0', 'v2.0.1')) {
+            throw "Mancano le note di rilascio: $notesPath"
           } else {
-            $notesPath = Join-Path 'docs' "RELEASE-$env:RELEASE_VERSION.md"
-            if (Test-Path -LiteralPath $notesPath -PathType Leaf) {
-              if ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $notesPath -Raw))) {
-                throw "Il file delle note è vuoto: $notesPath"
-              }
-              $notesArgs = @('--notes-file', $notesPath)
-            } elseif ($env:RELEASE_TAG -cin @('v2.0.0', 'v2.0.1')) {
-              throw "Mancano le note di rilascio: $notesPath"
-            } else {
-              $notesArgs = @('--generate-notes')
-            }
-            gh release create $env:RELEASE_TAG $assets `
-              --repo "$env:GITHUB_REPOSITORY" `
-              --title "UpdateCenter $env:RELEASE_VERSION" `
-              @notesArgs `
-              --verify-tag
-            if ($LASTEXITCODE -ne 0) { throw "Creazione della Release GitHub non riuscita (exit code $LASTEXITCODE)." }
+            $notesArgs = @('--generate-notes')
           }
+          # Create once. Concurrent or repeated release attempts cannot replace uploaded assets.
+          gh release create $env:RELEASE_TAG $assets `
+            --repo "$env:GITHUB_REPOSITORY" `
+            --title "UpdateCenter $env:RELEASE_VERSION" `
+            @notesArgs `
+            --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw "Creazione della Release GitHub non riuscita (exit code $LASTEXITCODE)." }

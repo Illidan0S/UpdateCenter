@@ -2,6 +2,7 @@
 const
   ReleaseSetupName = 'UpdateCenter-Setup-v{#UnsignedReleaseVersion}.exe';
   ReleaseChecksumPath = '/Illidan0S/UpdateCenter/releases/download/v{#UnsignedReleaseVersion}/UpdateCenter-Setup-v{#UnsignedReleaseVersion}.exe.sha256';
+  HexDigits = '0123456789ABCDEF';
   NoProxy = 1;
   SecureRequest = $00800000;
   DisableFeatures = 63;
@@ -79,7 +80,7 @@ begin
   Result := Length(Path) > 1;
 end;
 
-function ReadChecksumResponse(Request: UINT_PTR; var Body: String): Boolean;
+function ReadTextResponse(Request: UINT_PTR; MaxBytes: Integer; var Body: String): Boolean;
 var
   Buffer: TChecksumBuffer;
   Count, Started: Cardinal;
@@ -91,10 +92,10 @@ begin
   repeat
     if ReadTickCount - Started > 10000 then Exit;
     if not HttpRead(Request, Buffer, SizeOf(Buffer), Count) then Exit;
-    if (Count > SizeOf(Buffer)) or (Length(Body) + Count > 68 + Length(ReleaseSetupName)) then Exit;
+    if (Count > SizeOf(Buffer)) or (Length(Body) + Count > MaxBytes) then Exit;
     for Index := 0 to Integer(Count) - 1 do
     begin
-      if (Buffer[Index] <> 10) and (Buffer[Index] <> 13) and
+      if (Buffer[Index] <> 9) and (Buffer[Index] <> 10) and (Buffer[Index] <> 13) and
          ((Buffer[Index] < 32) or (Buffer[Index] > 126)) then Exit;
       Body := Body + Chr(Buffer[Index]);
     end;
@@ -102,16 +103,17 @@ begin
   Result := True;
 end;
 
-function ReadOfficialChecksum(var Checksum, SidecarHash: String; var SidecarSize: Integer): Boolean;
+function ReadOfficialText(const AssetPath: String; MaxBytes: Integer; var Body: String): Boolean;
 var
   Session, Connection, Request: UINT_PTR;
   Disabled, Size, Status: Cardinal;
-  Host, Path, Body: String;
-  Hop, Index: Integer;
+  Host, Path: String;
+  Hop: Integer;
 begin
   Result := False;
   Host := 'github.com';
-  Path := ReleaseChecksumPath;
+  Body := '';
+  Path := AssetPath;
   Session := HttpOpen('UpdateCenter-Setup/{#UnsignedReleaseVersion}', NoProxy, 0, 0, 0);
   if Session = 0 then Exit;
   try
@@ -132,7 +134,7 @@ begin
              not HttpStatus(Request, QueryNumericStatus, 0, Status, Size, 0) then Exit;
           if Status = 200 then
           begin
-            if not ReadChecksumResponse(Request, Body) then Exit;
+            if not ReadTextResponse(Request, MaxBytes, Body) then Exit;
             Break;
           end;
           if (Hop <> 0) or (Status <> 302) or not ReadAllowedRedirect(Request, Host, Path) then Exit;
@@ -146,6 +148,17 @@ begin
   finally
     HttpClose(Session);
   end;
+
+  Result := Body <> '';
+end;
+
+function ReadOfficialChecksum(var Checksum, SidecarHash: String; var SidecarSize: Integer): Boolean;
+var
+  Body: String;
+  Index: Integer;
+begin
+  Result := False;
+  if not ReadOfficialText(ReleaseChecksumPath, 68 + Length(ReleaseSetupName), Body) then Exit;
 
   // Match a single GitHub workflow checksum line and its exact asset name.
   SidecarSize := Length(Body);
@@ -162,7 +175,6 @@ begin
   Result := True;
 end;
 
-#if UnsignedReleaseVersion == "2.0.1"
 // Pure PowerShell predicate, exercised without HTTP by the Setup release fixtures.
 function ReleaseMetadataPolicy: String;
 begin
@@ -170,36 +182,80 @@ begin
     'if (-not $json.TrimStart().StartsWith(''{'')) { return $false }; ' +
     '$release = Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $json; ' +
     '$root = ''https://github.com/Illidan0S/UpdateCenter/releases/''; ' +
-    'if ($release -is [array] -or $release.tag_name -isnot [string] -or $release.tag_name -cne ''v2.0.1'' -or ' +
+    '$tag = ''v'' + $targetVersion; ' +
+    'if ($release -is [array] -or $release.tag_name -isnot [string] -or $release.tag_name -cne $tag -or ' +
     '$release.draft -isnot [bool] -or $release.draft -or $release.prerelease -isnot [bool] -or $release.prerelease -or ' +
-    '$release.html_url -isnot [string] -or $release.html_url -cne ($root + ''tag/v2.0.1'') -or $release.assets -isnot [array]) { return $false }; ' +
-    '$name = ''UpdateCenter-Setup-v2.0.1.exe''; ' +
-    'foreach ($expected in @(@($name, $setupHash, $setupSize), @(($name + ''.sha256''), $sidecarHash, $sidecarSize))) { ' +
+    '$release.html_url -isnot [string] -or $release.html_url -cne ($root + ''tag/'' + $tag) -or $release.assets -isnot [array]) { return $false }; ' +
+    '$name = ''UpdateCenter-Setup-'' + $tag + ''.exe''; ' +
+    '$expectedAssets = @(@($name, $setupHash, $setupSize), @(($name + ''.sha256''), $sidecarHash, $sidecarSize)); ' +
+    'if ($targetVersion -ceq ''2.0.0'') { ' +
+    'if ($installedVersion -cnotin @(''1.1.4.0'', ''1.1.5.0'')) { return $false } ' +
+    '} else { ' +
+    'if ($targetVersion -cnotmatch ''\A(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){2}\z'' -or ' +
+    '$installedVersion -cnotmatch ''\A(?:0|[1-9][0-9]{0,4})(?:\.(?:0|[1-9][0-9]{0,4})){2}\.0\z'' -or $installedVersion -ceq ''2.0.1.0'' -or ' +
+    '[version]$installedVersion -lt [version]''2.0.0.0'' -or [version]($targetVersion + ''.0'') -le [version]''2.0.1.0'' -or ' +
+    '[version]$installedVersion -ge [version]($targetVersion + ''.0'')) { return $false }; ' +
+    'if ($markerSize -le 0 -or $markerSize -gt 4096 -or $markerJson.Length -ne $markerSize -or ' +
+    '-not $markerJson.TrimStart().StartsWith(''{'') -or $markerJson.Contains(''\'') -or $markerJson.Split([char]34).Length -ne 19) { return $false }; ' +
+    '$marker = Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $markerJson; ' +
+    '$keys = @($marker.psobject.Properties.Name); ' +
+    'if ($keys.Count -ne 5) { return $false }; ' +
+    'foreach ($key in @(''schema'',''repository'',''tag'',''portableSha256'',''setupSha256'')) { if ($keys -cnotcontains $key) { return $false } }; ' +
+    'if (($marker.schema -isnot [int] -and $marker.schema -isnot [long]) -or $marker.schema -ne 1 -or $marker.repository -isnot [string] -or ' +
+    '$marker.repository -cne ''Illidan0S/UpdateCenter'' -or $marker.tag -isnot [string] -or $marker.tag -cne $tag -or ' +
+    '$marker.setupSha256 -isnot [string] -or $marker.setupSha256 -cne $setupHash.ToUpperInvariant() -or ' +
+    '$marker.portableSha256 -isnot [string] -or $marker.portableSha256 -cnotmatch ''\A[A-F0-9]{64}\z'') { return $false }; ' +
+    '$expectedAssets += ,@((''UpdateCenter-'' + $tag + ''-update.json''), $markerHash, $markerSize); ' +
+    '$expectedAssets += ,@((''UpdateCenter-'' + $tag + ''-Portable.exe''), $marker.portableSha256.ToLowerInvariant(), $null); ' +
+    '}; ' +
+    'foreach ($expected in $expectedAssets) { ' +
     '$matchesFound = 0; foreach ($asset in $release.assets) { ' +
     'if ($asset.name -isnot [string] -or $asset.name -cne $expected[0]) { continue }; $matchesFound++; ' +
     'if ($asset.state -isnot [string] -or $asset.state -cne ''uploaded'' -or ' +
-    '$asset.browser_download_url -isnot [string] -or $asset.browser_download_url -cne ($root + ''download/v2.0.1/'' + $expected[0]) -or ' +
+    '$asset.browser_download_url -isnot [string] -or $asset.browser_download_url -cne ($root + ''download/'' + $tag + ''/'' + $expected[0]) -or ' +
     '$asset.digest -isnot [string] -or $asset.digest -cne (''sha256:'' + $expected[1]) -or ' +
-    '($asset.size -isnot [long] -and $asset.size -isnot [int]) -or $asset.size -ne $expected[2]) { return $false } }; ' +
+    '($asset.size -isnot [long] -and $asset.size -isnot [int]) -or $asset.size -le 0 -or $asset.size -gt 536870912 -or ' +
+    '($null -ne $expected[2] -and $asset.size -ne $expected[2])) { return $false } }; ' +
     'if ($matchesFound -ne 1) { return $false } }; return $true';
 end;
 
-function VerifyReleaseMetadata(const SetupHash, SidecarHash: String; SetupSize: Int64; SidecarSize: Integer): Boolean;
+function VerifyReleaseMetadata(const SetupHash, SidecarHash, InstalledVersion: String; SetupSize: Int64; SidecarSize: Integer): Boolean;
 var
-  Script: String;
-  ExitCode: Integer;
+  Script, MarkerBody, MarkerHash, MarkerHex, MarkerArgs: String;
+  ExitCode, Index: Integer;
 begin
-  // Only locally calculated or validated hex hashes and integer lengths enter
-  // this command. The release body is read as JSON by the system parser.
+  Result := False;
+  // The version was read from the PE fixed version and checked against ARP.
+  // Admit only digits and dots into the static command's quoted argument.
+  if (Length(InstalledVersion) = 0) or (Length(InstalledVersion) > 23) then Exit;
+  for Index := 1 to Length(InstalledVersion) do
+    if Pos(InstalledVersion[Index], '0123456789.') = 0 then Exit;
+  MarkerArgs := '';
+#ifdef ApprovedUnsignedUpdateTag
+  if not ReadOfficialText('/Illidan0S/UpdateCenter/releases/download/v{#UnsignedReleaseVersion}/UpdateCenter-v{#UnsignedReleaseVersion}-update.json',
+    4096, MarkerBody) then Exit;
+  MarkerHash := GetSHA256OfString(AnsiString(MarkerBody));
+  // Only hex digits reach the process command line, including for untrusted JSON.
+  MarkerHex := '';
+  for Index := 1 to Length(MarkerBody) do
+    MarkerHex := MarkerHex + HexDigits[(Ord(MarkerBody[Index]) div 16) + 1] + HexDigits[(Ord(MarkerBody[Index]) mod 16) + 1];
+  MarkerArgs :=
+    '$markerHash = ''' + LowerCase(MarkerHash) + '''; $markerSize = ' + IntToStr(Length(MarkerBody)) + '; ' +
+    '$hex = ''' + MarkerHex + '''; $chars = [char[]]::new($markerSize); ' +
+    'for ($i = 0; $i -lt $markerSize; $i++) { $chars[$i] = [char][Convert]::ToByte($hex.Substring($i*2,2),16) }; ' +
+    '$markerJson = [string]::new($chars); ';
+#endif
   Script :=
     '$ErrorActionPreference = ''Stop''; $env:PSModulePath = $PSHOME + ''\Modules''; ' +
     '$setupHash = ''' + LowerCase(SetupHash) + '''; $sidecarHash = ''' + LowerCase(SidecarHash) + '''; ' +
+    '$targetVersion = ''{#UnsignedReleaseVersion}''; ' + MarkerArgs +
+    '$installedVersion = ''' + InstalledVersion + '''; ' +
     '$setupSize = ' + IntToStr(SetupSize) + '; $sidecarSize = ' + IntToStr(SidecarSize) + '; ' +
     'try { ' +
     '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
-    '$request = [Net.WebRequest]::CreateHttp(''https://api.github.com/repos/Illidan0S/UpdateCenter/releases/tags/v2.0.1''); ' +
+    '$request = [Net.WebRequest]::CreateHttp(''https://api.github.com/repos/Illidan0S/UpdateCenter/releases/tags/v{#UnsignedReleaseVersion}''); ' +
     '$request.Proxy = $null; $request.AllowAutoRedirect = $false; $request.Timeout = 10000; $request.ReadWriteTimeout = 4000; ' +
-    '$request.UserAgent = ''UpdateCenter-Setup/2.0.1''; $request.Accept = ''application/vnd.github+json''; ' +
+    '$request.UserAgent = ''UpdateCenter-Setup/{#UnsignedReleaseVersion}''; $request.Accept = ''application/vnd.github+json''; ' +
     '$response = $request.GetResponse(); if ([int]$response.StatusCode -ne 200 -or $response.ContentLength -gt 1048576) { exit 1 }; ' +
     '$stream = $response.GetResponseStream(); $bytes = [IO.MemoryStream]::new(); $buffer = [byte[]]::new(4096); ' +
     '$timer = [Diagnostics.Stopwatch]::StartNew(); ' +
@@ -211,9 +267,8 @@ begin
     '-NoLogo -NoProfile -NonInteractive -Command "' + Script + '"',
     ExpandConstant('{sys}'), SW_HIDE, ewWaitUntilTerminated, ExitCode) and (ExitCode = 0);
 end;
-#endif
 
-function VerifyOfficialSetupChecksum(const FileName: String): Boolean;
+function VerifyOfficialSetupChecksum(const FileName, InstalledVersion: String): Boolean;
 var
   ExpectedHash, SidecarHash, FileVersion: String;
   SidecarSize: Integer;
@@ -230,9 +285,7 @@ begin
          (FileVersion <> '{#UnsignedReleaseVersion}.0') or
          not ReadOfficialChecksum(ExpectedHash, SidecarHash, SidecarSize) or
          (CompareText(GetSHA256OfFile(FileName), ExpectedHash) <> 0) then Exit;
-#if UnsignedReleaseVersion == "2.0.1"
-      if not VerifyReleaseMetadata(ExpectedHash, SidecarHash, Source.Size, SidecarSize) then Exit;
-#endif
+      if not VerifyReleaseMetadata(ExpectedHash, SidecarHash, InstalledVersion, Source.Size, SidecarSize) then Exit;
       VerifiedSetupSource := Source;
       Source := nil;
       Result := True;

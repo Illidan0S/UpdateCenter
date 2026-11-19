@@ -14,11 +14,11 @@
     <RootNamespace>UpdateCenter</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\UpdateCenter.ico</ApplicationIcon>
-    <Version>2.0.1</Version>
-    <AssemblyVersion>2.0.1.0</AssemblyVersion>
-    <FileVersion>2.0.1.0</FileVersion>
-    <InformationalVersion>2.0.1</InformationalVersion>
-    <UnsignedReleaseVersion>2.0.1</UnsignedReleaseVersion>
+    <Version>2.0.0</Version>
+    <AssemblyVersion>2.0.0.0</AssemblyVersion>
+    <FileVersion>2.0.0.0</FileVersion>
+    <InformationalVersion>2.0.0</InformationalVersion>
+    <UnsignedReleaseVersion>2.0.0</UnsignedReleaseVersion>
     <!-- WPF owns startup and reads PerMonitorV2 from the manifest. WinForms supplies
          the tray NotifyIcon. See https://github.com/dotnet/wpf/issues/6811. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
@@ -56,7 +56,7 @@
 
   <ItemGroup>
     <AssemblyMetadata Include="UnsignedReleaseVersion" Value="$(UnsignedReleaseVersion)"
-                      Condition="('$(Version)' == '2.0.0' Or '$(Version)' == '2.0.1') And '$(UnsignedReleaseVersion)' == '$(Version)' And '$(WINDOWS_SIGNING_CERT_SHA256)' == ''" />
+                      Condition="'$(UnsignedReleaseVersion)' == '$(Version)' And '$(WINDOWS_SIGNING_CERT_SHA256)' == '' And ('$(Version)' == '2.0.0' Or ($([System.Text.RegularExpressions.Regex]::IsMatch('$(Version)', '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')) And $([MSBuild]::VersionGreaterThan('$(Version)', '2.0.1')) And '$(GITHUB_REPOSITORY)' == 'Illidan0S/UpdateCenter' And $([System.String]::Equals('$(UNSIGNED_UPDATE_APPROVED_TAG)', 'v$(Version)')) And $([System.String]::Equals('$(RELEASE_TAG)', 'v$(Version)'))))" />
     <AssemblyMetadata Include="ReleasePublisherSha256" Value="$(WINDOWS_SIGNING_CERT_SHA256)"
                       Condition="'$(WINDOWS_SIGNING_CERT_SHA256)' != ''" />
     <ProjectReference Include="Contracts\UpdateCenter.Contracts.csproj" />

@@ -30,6 +30,12 @@ internal static class AppUpdateDetectionTests
         Check(setup is { IsInstallerPackage: true, AssetName: SetupName }, "Setup must receive the matching installer.");
         var current = await service.CheckForUpdateAsync(new(90, 0, 1), false, default);
         Check(current is null, "The current release must not be offered again.");
+        handler.VersionTag = "v2.0.1";
+        handler.ReleasePage = ReleaseRoot + "tag/v2.0.1";
+        Check(await service.CheckForUpdateAsync(new(2, 0, 0), false, default) is null,
+            "The withdrawn release must not be offered when GitHub still reports its tag as latest.");
+        handler.VersionTag = Tag;
+        handler.ReleasePage = ReleaseRoot + "tag/" + Tag;
 
         handler.Assets = DefaultAssets().Append(Asset(PortableName)).ToArray();
         await RejectReleaseAsync(service, "Duplicate executable assets");
@@ -59,6 +65,9 @@ internal static class AppUpdateDetectionTests
         var service = new AppUpdateService(http);
         var vm = new MainViewModel(ScanServices.Create(), service);
         Check(!vm.HasAppUpdateNotice, "No release has been confirmed on a fresh profile.");
+        JsonStorage.SaveSettings(new AppSettings { PendingAppUpdateVersion = "2.0.1" });
+        Check(!new MainViewModel(ScanServices.Create(), service).HasAppUpdateNotice,
+            "A withdrawn release persisted by an older client must stay hidden even while offline.");
         var offered = await vm.CheckForAppUpdateAsync(manual: false);
         Check(offered is not null && vm.HasAppUpdateNotice && vm.AppUpdateNotice.Contains(Tag),
             "The background check must make the new version available in Home.");
